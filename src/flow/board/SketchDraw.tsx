@@ -117,8 +117,6 @@ export interface SketchDrawHandle {
 interface DrawProps {
   /** A screen point in board coordinates. */
   toBoard(p: Pt): Pt;
-  /** Where the canvas's flow coordinates start on the board (the live frame's origin): the preview draws at board minus this. */
-  origin: Pt;
   /** The board's sketches now (a Section's title counts them). */
   sketches(): readonly Sketch[];
   /** A box, line, arrow, pen stroke or Section was drawn. */
@@ -216,7 +214,7 @@ export const SketchDraw = forwardRef<SketchDrawHandle, DrawProps>(function Sketc
     <div
       className={`board-sketch-preview board-sketch-node is-${s.kind}`}
       aria-hidden="true"
-      style={{ left: `${s.x - props.origin.x}px`, top: `${s.y - props.origin.y}px`, width: `${s.w}px`, height: `${s.h}px` }}
+      style={{ left: `${s.x}px`, top: `${s.y}px`, width: `${s.w}px`, height: `${s.h}px` }}
     >
       <div className="board-sketch-draw">
         <SketchDrawing s={s} />

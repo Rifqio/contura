@@ -58,12 +58,12 @@ beforeAll(() => {
 });
 /** The Assistant's lock, held by the test (B3 Task 4 round 2), as shelfAdd.test.tsx holds it. */
 const lock = vi.hoisted(() => ({ on: false }));
-vi.mock("./ai/useDiagramAsk", async (load) => {
-  const real = await load<typeof import("./ai/useDiagramAsk")>();
+vi.mock("./ai/useBoardAsk", async (load) => {
+  const real = await load<typeof import("./ai/useBoardAsk")>();
   return {
     ...real,
-    useDiagramAsk: (...a: Parameters<typeof real.useDiagramAsk>) => {
-      const r = real.useDiagramAsk(...a);
+    useBoardAsk: (...a: Parameters<typeof real.useBoardAsk>) => {
+      const r = real.useBoardAsk(...a);
       return lock.on ? { ...r, locked: true } : r;
     },
   };

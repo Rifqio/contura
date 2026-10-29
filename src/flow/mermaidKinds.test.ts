@@ -26,7 +26,7 @@ const CHECKOUT = lines(
 );
 
 describe("sequenceDiagram", () => {
-  test("participants, actors, messages, replies, a loop and a note; autonumber and the activation marks are left out", () => {
+  test("participants, actors, messages, replies, a loop and a note; autonumber comes in and the activation marks are left out", () => {
     const r = mermaidToFlow(CHECKOUT, "Untitled");
     expect(r.kind).toBe("sequence");
     expect(r.flow).toBe(
@@ -36,6 +36,7 @@ describe("sequenceDiagram", () => {
         "participant Shop",
         "participant Payments",
         "note: Card data stays at the bank",
+        "autonumber",
         "Customer -> Shop: place order",
         "Shop -> Payments: charge card",
         "Payments --> Shop: approved",
@@ -46,13 +47,30 @@ describe("sequenceDiagram", () => {
       ),
     );
     expect(r.notes.map((n) => n.text)).toEqual([
-      "Line 3: autonumber is left out: Contura does not number messages.",
       "Line 8: the + activation mark is left out; use activate to start one.",
       "Line 9: the - activation mark is left out; use activate to start one.",
     ]);
     expect(r.errors).toEqual([]);
     expect(r.count).toBe("Sequence: 3 participants, 5 messages");
     clean(r.flow);
+  });
+
+  test("autonumber keeps its start, off and its place; the step is left out", () => {
+    const flow = (...l: string[]) => mermaidToFlow(lines("sequenceDiagram", "    A->>B: one", ...l), "Untitled");
+    const a = flow("    autonumber 10 5", "    B->>A: two", "    autonumber off", "    A->>B: three", "    autonumber 010", "    B->>A: four");
+    expect(a.flow).toBe(
+      lines('diagram sequence "Untitled"', "A -> B: one", "autonumber 10", "B -> A: two", "autonumber off", "A -> B: three", "autonumber 10", "B -> A: four"),
+    );
+    expect(a.notes.map((n) => n.text)).toEqual(["Line 3: the autonumber step is left out."]);
+    expect(a.errors).toEqual([]);
+    clean(a.flow);
+    const b = flow("    autonumber 7");
+    expect(b.flow).toContain("autonumber 7");
+    expect(b.notes).toEqual([]);
+    const c = flow("    autonumber 1000000");
+    expect(c.flow).toContain("autonumber\n");
+    expect(c.notes).toHaveLength(1);
+    clean(c.flow);
   });
 
   test("activate and deactivate come in; alt keeps its messages without the frame; a line it cannot read says how to write one", () => {

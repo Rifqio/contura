@@ -13,7 +13,7 @@ interface Props {
   kind: DiagramKind | null;
   /** The armed tool's id ("select" when none is). */
   armed: string;
-  /** The assistant's changes waiting for review, counted on Ask. */
+  /** The assistant's changes waiting for review, counted on Ask: the sum of the touched frames' counts. */
   pending: number;
   /** A tool was picked; `pointer` when by a click, not a key. */
   onArm(id: string, pointer?: boolean): void;

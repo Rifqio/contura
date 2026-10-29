@@ -121,9 +121,24 @@ test("board_ops_run_on_the_whole_text_through_the_service", () => {
     expect(r.stale).toBe(false);
     return r.stale ? [] : r.edits;
   };
-  expect(applyEdits(t, edits(s.edit("d", v, { op: "addFrame", kind: "flow", title: "C" }, 1)))).toBe(`${t}\ndiagram flow "C"\n`);
+  expect(applyEdits(t, edits(s.edit("d", v, { op: "appendFrames", frames: ['diagram flow "C"\n'] }, 1)))).toBe(`${t}\ndiagram flow "C"\n`);
   expect(applyEdits(t, edits(s.edit("d", v, { op: "deleteFrame", frameIndex: 0 }, 1)))).toBe('diagram state "B"\nIdle\n');
   expect(applyEdits(t, edits(s.edit("d", v, { op: "renameFrame", frameIndex: 1, title: "Bee" })))).toContain('"Bee"');
+});
+
+test("no_add_frame_op_remains", () => {
+  const s = createFlowService();
+  const t = `${A}\ndiagram state "B"\nIdle\n`;
+  const v = s.parse("d", t).version;
+  // The op is no longer a board op: it is taken for a frame edit and writes nothing (the service may refuse it whole).
+  let edits: unknown[] = [];
+  try {
+    const r = s.edit("d", v, { op: "addFrame", kind: "flow", title: "C" } as never, 1);
+    edits = r.stale ? [] : r.edits;
+  } catch {
+    edits = [];
+  }
+  expect(edits).toEqual([]);
 });
 
 test("last_good_drawings_follow_board_ops", () => {

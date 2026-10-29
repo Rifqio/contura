@@ -1,0 +1,11 @@
+{
+  "dfd": ["entity", "process", "store"],
+  "flow": ["start", "end", "step", "decision", "io", "subprocess", "document", "database"],
+  "cloud": ["service"],
+  "er": ["entity", "weak"],
+  "sequence": [],
+  "state": ["state", "choice", "fork"],
+  "class": [],
+  "mindmap": [],
+  "timeline": []
+}

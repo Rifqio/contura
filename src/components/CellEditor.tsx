@@ -1,6 +1,8 @@
 import { type KeyboardEvent, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Kbd from "./Kbd";
+import type { CellPicker } from "./cellPickers/picker";
+import TypedPicker from "./cellPickers/TypedPicker";
 
 /** Item 4: what the larger editor names above and under its text. */
 export interface LargeEditor {
@@ -31,13 +33,23 @@ interface Props {
   large?: LargeEditor;
   /** Shift+F2 in the cell: open the larger panel with what is typed so far. */
   onLarger?(value: string): void;
+  /** A calendar and time fields, or an enum's values, in a popover under the cell; the text box stays. */
+  picker?: CellPicker;
+  /** The column, for the picker's labels. */
+  pickerLabel?: string;
+  /** The enum list's NULL row sets the cell to NULL; absent when the column is not nullable. */
+  onSetNull?(): void;
 }
 
 /** The editor that opens inside a grid cell. Leaving it keeps the value. */
-export default function CellEditor({ initial, multiline, onCommit, onCancel, onSave, onInput, suggestions, large, onLarger }: Props) {
+export default function CellEditor({ initial, multiline, onCommit, onCancel, onSave, onInput, suggestions, large, onLarger, picker, pickerLabel, onSetNull }: Props) {
   const [value, setValue] = useState(initial);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  /** The picker shows only with the one-line text box, never in the larger editor. */
+  const typed = picker && !multiline && !large && !suggestions ? picker : null;
+  const [pickerOpen, setPickerOpen] = useState(true);
   /** Set once a key kept or dropped the value, so the blur that follows does nothing. */
   const done = useRef(false);
 
@@ -56,7 +68,12 @@ export default function CellEditor({ initial, multiline, onCommit, onCancel, onS
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement | HTMLInputElement>) {
     e.stopPropagation();
-    if (e.key === "Escape") {
+    if (e.key === "ArrowDown" && e.altKey && typed) {
+      // Alt+Down opens the picker, or goes into it when it is open.
+      e.preventDefault();
+      if (!pickerOpen) setPickerOpen(true);
+      else popRef.current?.querySelector<HTMLElement>("[data-picker-stop]")?.focus();
+    } else if (e.key === "Escape") {
       e.preventDefault();
       finish(onCancel);
     } else if (e.key.toLowerCase() === "n" && (e.ctrlKey || e.metaKey) && !e.altKey) {
@@ -85,6 +102,10 @@ export default function CellEditor({ initial, multiline, onCommit, onCancel, onS
     onInput?.(next);
   };
   const blur = () => !done.current && finish(() => onCommit(value, "none", true));
+  const keep = (v: string, move: "down" | "none") => {
+    change(v);
+    finish(() => onCommit(v, move));
+  };
 
   if (suggestions) {
     return (
@@ -124,13 +145,33 @@ export default function CellEditor({ initial, multiline, onCommit, onCancel, onS
       ref={areaRef}
       className={multiline ? "cell-editor cell-editor-multiline" : "cell-editor"}
       aria-label="Cell value"
+      aria-haspopup={typed ? "dialog" : undefined}
+      aria-expanded={typed ? pickerOpen : undefined}
       value={value}
       rows={multiline ? 4 : 1}
       spellCheck={false}
       onChange={(e) => change(e.target.value)}
       onKeyDown={onKeyDown}
-      onBlur={blur}
+      // Focus moving into the picker is not leaving the editor.
+      onBlur={(e) => (popRef.current?.contains(e.relatedTarget as Node | null) ? undefined : blur())}
     />
+      {typed && pickerOpen && (
+        <TypedPicker
+          picker={typed}
+          value={value}
+          label={pickerLabel ?? "the cell"}
+          anchor={areaRef}
+          popRef={popRef}
+          onChange={change}
+          onKeep={keep}
+          onSetNull={onSetNull && (() => finish(onSetNull))}
+          onBack={() => {
+            setPickerOpen(false);
+            areaRef.current?.focus();
+          }}
+          onLeave={blur}
+        />
+      )}
     </>
   );
 }

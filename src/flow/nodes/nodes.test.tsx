@@ -128,7 +128,7 @@ describe("looks", () => {
       </>,
     );
     const nodes = [...container.querySelectorAll(".fnode")];
-    expect(nodes.map((n) => n.getAttribute("aria-label"))).toEqual(["Process Fraud check, suggested by AI", "Process Checkout, suggested by AI", "Step Pack, added by AI"]);
+    expect(nodes.map((n) => n.getAttribute("aria-label"))).toEqual(["Process Fraud check, suggested by AI", "Process Checkout, removal suggested by AI", "Step Pack, added by AI"]);
     expect(nodes.map((n) => n.querySelector(".fnode-gtag")?.textContent ?? null)).toEqual(["New", null, null]);
     expect(nodes[0].classList.contains("fnode-suggested")).toBe(true);
     expect(nodes[1].classList.contains("fnode-removed")).toBe(true);

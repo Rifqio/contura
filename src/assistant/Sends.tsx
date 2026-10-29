@@ -53,6 +53,7 @@ const ICON: Record<ItemKind, IconName> = {
   tab: "layers",
   steps: "history",
   title: "edit",
+  attachment: "fileCode",
 };
 
 /**
@@ -157,14 +158,17 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
     );
   };
 
-  /** A diagram row: its lock, its reason when no row above gave it, and the file's size on the file row. */
+  /** A board (any row with a fit): its first row's size is every diagram row's together, as the file row's was. */
+  const boardBytes = preview?.items.some((x) => x.fit) ? preview.items.filter((x) => x.kind === "diagram").reduce((n, x) => n + x.bytes, 0) : null;
+  /** A diagram row: its lock, its reason when no row above gave it, the file's size on the file row, and a board frame's fit. */
   const lockedOn = (i: PreviewItem, n: number) => {
     const above = preview!.items.slice(0, n);
     const file = i.kind === "diagram" && !above.some((x) => x.kind === "diagram");
     return (
       <>
+        {i.fit && <span className="sends-size sends-fit">{i.fit}</span>}
         {i.locked && !above.some((x) => x.locked === i.locked) && <span className="sends-lock">{i.locked}</span>}
-        {file && <span className="sends-size">{sizeText(i.bytes)}</span>}
+        {file && <span className="sends-size">{sizeText(boardBytes ?? i.bytes)}</span>}
         <span className="sends-locked-on" role="img" aria-label="Locked on">
           <Icon name="lock" size={14} />
         </span>

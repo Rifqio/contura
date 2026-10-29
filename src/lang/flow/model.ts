@@ -258,8 +258,10 @@ export function tableText(n: FlowNode): string {
   return [`${own} {`, ...n.rows.map((_, i) => `  ${columnLine(n, i)}`), "}"].join("\n");
 }
 
-/** An ER column name the canvas writes: letters, digits and _ (board ER interactions). */
-export const isColumnName = (s: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
+/** An ER column name the canvas writes: letters, digits and _ (board ER interactions). The Core's diagram tool checks
+ * the same pattern (`crates/contura-core/tests/fixtures/flow/er_rules.json`). */
+export const COLUMN_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export const isColumnName = (s: string) => COLUMN_NAME.test(s);
 
 export interface FlowGroup {
   name: string;
@@ -284,10 +286,19 @@ export interface FlowDoc {
    * A sequence diagram's frames (`loop label { ... }`) and activations (`activate Name`), by the index of the
    * first and last message (link) they cover; -1 last when a frame is empty.
    */
-  frames?: { label: string; kind: string; from: number; to: number; depth: number }[];
+  frames?: { label: string; kind: string; from: number; to: number; depth: number; color?: string }[];
   activations?: { name: string; from: number; to: number }[];
+  /** A sequence's `autonumber` directives in text order; absent when there are none. */
+  autonumber?: SeqNumbering[];
   /** A timeline's sections, in order. */
   sections?: string[];
+}
+
+/** One `autonumber` directive: `from` is the index of the first message after it. */
+export interface SeqNumbering {
+  from: number;
+  start?: number;
+  off?: true;
 }
 
 /**

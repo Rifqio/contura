@@ -38,12 +38,12 @@ vi.mock("../diagram/DiagramCanvas", async (load) => {
 
 /** The Assistant's lock, held for a test (driving a real Ask is not needed to see the canvas refuse). */
 const lock = vi.hoisted(() => ({ on: false }));
-vi.mock("./ai/useDiagramAsk", async (load) => {
-  const real = await load<typeof import("./ai/useDiagramAsk")>();
+vi.mock("./ai/useBoardAsk", async (load) => {
+  const real = await load<typeof import("./ai/useBoardAsk")>();
   return {
     ...real,
-    useDiagramAsk: (...a: Parameters<typeof real.useDiagramAsk>) => {
-      const r = real.useDiagramAsk(...a);
+    useBoardAsk: (...a: Parameters<typeof real.useBoardAsk>) => {
+      const r = real.useBoardAsk(...a);
       return lock.on ? { ...r, locked: true } : r;
     },
   };

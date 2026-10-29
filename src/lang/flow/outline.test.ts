@@ -82,4 +82,41 @@ describe("flowOutline", () => {
     expect(noHeader.kind).toBeNull();
     expect(noHeader.kinds).toEqual([]);
   });
+
+  test("outline_lists_er_columns", () => {
+    const text = [
+      'diagram er "Shop"',
+      "orders {",
+      "  id int pk",
+      "  customer_id int not null",
+      '  placed_at "timestamp with time zone"',
+      "}",
+      "customers {",
+      "  id int PK",
+      "  email text unique",
+      "}",
+      "audit_log [weak]",
+      "",
+      "orders.customer_id > customers.id: placed by",
+      "",
+    ].join("\n");
+    const o = flowOutline(parseFlow(text), null, text);
+    expect(o.nodes.map((n) => [n.name, n.columns])).toEqual([
+      ["orders", ["id", "customer_id", "placed_at"]],
+      ["customers", ["id", "email"]],
+      ["audit_log", []],
+    ]);
+    // A line between columns keeps them; the ends are the tables.
+    expect(o.links).toEqual([{ from: "orders", to: "customers", label: "placed by", line: 13, fromColumn: "customer_id", toColumn: "id" }]);
+    // Other kinds have no columns at all.
+    const dfd = fixture("checkout.flow");
+    expect(flowOutline(parseFlow(dfd), null, dfd).nodes.every((n) => !("columns" in n))).toBe(true);
+  });
+});
+
+test("a_node_carries_its_table_value", () => {
+  // Task 4b: the diagram Ask lists each `table:` link with its value as written.
+  const o = flowOutline(parseFlow('diagram flow "Checkout"\nOrders [table: shop.orders]\nShip\nOrders > Ship\n'), null);
+  expect(o.nodes.find((n) => n.name === "Orders")).toMatchObject({ table: true, tableValue: "shop.orders" });
+  expect(o.nodes.find((n) => n.name === "Ship")?.tableValue).toBeUndefined();
 });

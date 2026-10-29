@@ -1,5 +1,5 @@
 // The frame bar (Decision 22; Miro's frame bar, Figma's bottom bar): the selected frame's settings at the bottom centre
-// of the canvas. Reset layout, the frame's name, its kind's settings (Direction, Look, Notation), Text size, Colour for
+// of the canvas. Reset layout, the frame's name, its kind's settings (Direction, Look, Notation, a sequence's Numbering), Text size, Colour for
 // the selected shapes, and More (Publish frame, Insert Mermaid, Tidy selection, Duplicate, Open as DBML, Delete).
 // Every control is a Tab stop; the arrows, Home and End move along the bar (WAI-ARIA toolbar), except in the name
 // field, which keeps them for its text. Keys pressed on the bar never reach the canvas.
@@ -34,6 +34,10 @@ interface Props {
   frames: number;
   /** Today's Tidy on the whole frame. */
   onReset(): void;
+  /** A sequence frame's Numbering toggle: pressed when its text numbers the messages; `why` is set while it cannot be used. */
+  numbering?: { on: boolean; why: string | null };
+  /** Writes or removes the frame's `autonumber` lines (`setNumbering`). */
+  onNumbering?(on: boolean): void;
   /** Renames the frame; resolves to why it could not, or null once renamed. */
   onRename(title: string): Promise<string | null>;
   onSetting(patch: FrameSettingPatch): void;
@@ -66,7 +70,7 @@ const TEXT_SIZES = [
 /** Why Colour is off with no shape selected (Decision 22). */
 export const COLOUR_NONE = "Select shapes to colour them";
 
-export default function FrameBar({ frame, layout, selectedShapes, frames, onReset, onRename, onSetting, onColour, onMore, onLeave }: Props) {
+export default function FrameBar({ frame, layout, selectedShapes, frames, numbering, onNumbering, onReset, onRename, onSetting, onColour, onMore, onLeave }: Props) {
   const bar = useRef<HTMLDivElement>(null);
   const [name, setName] = useState(frame.title);
   const committing = useRef(false);
@@ -147,6 +151,23 @@ export default function FrameBar({ frame, layout, selectedShapes, frames, onRese
         onBlur={() => void commit()}
       />
       <span className="frame-bar-divider" aria-hidden="true" />
+      {kind === "sequence" && numbering && (
+        <button
+          type="button"
+          className="flow-tool"
+          aria-label="Numbering"
+          aria-pressed={numbering.on}
+          title={numbering.why ?? "Number the messages (autonumber)"}
+          disabled={numbering.why !== null}
+          data-frame-bar-stop=""
+          onClick={() => onNumbering?.(!numbering.on)}
+        >
+          <Icon name="numbering" />
+          <span className="flow-hint" aria-hidden="true">
+            Numbering
+          </span>
+        </button>
+      )}
       {laidOut && <Select label="Direction" value={layout.direction} options={DIRECTIONS} onChange={(direction) => onSetting({ direction })} />}
       {kind === "dfd" && <Select label="Look" value={layout.style} options={LOOKS} onChange={(style) => onSetting({ style })} />}
       {kind === "er" && <Select label="Notation" value={layout.notation} options={NOTATIONS} onChange={(notation) => onSetting({ notation })} />}

@@ -96,6 +96,12 @@ pub enum AiEvent {
         proposal: DiagramProposal,
         input: String,
     },
+    /// A diagram Ask whose call asked a follow-up question instead of proposing changes
+    /// (cleaned, redacted, at most 300 characters), after the answer text and before `Done`.
+    /// No `Proposal` comes with it.
+    FollowUp {
+        question: String,
+    },
     #[serde(rename_all = "camelCase")]
     Done {
         usage: Option<Usage>,
@@ -546,6 +552,8 @@ pub(crate) fn request_left(result: &Result<()>, first_byte: bool, http: &[&LogLi
             | AiError::Internal
             | AiError::ToolOff
             | AiError::BadFileName
+            | AiError::AttachmentGone
+            | AiError::DiagramHeld { .. }
             // A connect failure: a failure after connecting logs an attempt.
             | AiError::Network { .. } => false,
             AiError::Timeout { phase } => phase != "connect",
@@ -1443,6 +1451,7 @@ pub async fn ask_stream(
         exact: settings
             .keep_exact_text
             .then(|| crate::ai::rails::retrieval::without_rows(&preview.exact)),
+        sources: Vec::new(),
     }));
     emit(AiEvent::Process(request_step(
         log.elapsed_ms(),

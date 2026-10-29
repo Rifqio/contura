@@ -35,13 +35,14 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 
-const canvas = vi.hoisted(() => ({ props: null as DiagramCanvasProps | null, instance: null as ReactFlowInstance | null }));
+const canvas = vi.hoisted(() => ({ props: null as DiagramCanvasProps | null, instance: null as ReactFlowInstance | null, seen: null as ((p: DiagramCanvasProps) => void) | null }));
 vi.mock("../../diagram/DiagramCanvas", async (load) => {
   const real = await load<typeof import("../../diagram/DiagramCanvas")>();
   return {
     ...real,
     default: (p: DiagramCanvasProps) => {
       canvas.props = p;
+      canvas.seen?.(p);
       return real.default({
         ...p,
         onInit: (i) => {
@@ -222,6 +223,10 @@ async function opened(s: Setup, titles = ["Checkout", "Refund", "Shipping"]) {
 /** Selects a frame by its tab and waits for the pane to show it. */
 async function pick(s: Setup, title: string) {
   fireEvent.click(await s.tab(title));
+  // The frame goes live one paint after it is drawn selected (Plan F Decision 12).
+  await act(async () => {
+    await new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+  });
   await waitFor(() => expect(s.isSelected(title)).toBe(true));
   await waitFor(() => expect(s.visible()).toContain(`"${title}"`));
 }
@@ -265,14 +270,19 @@ test("ask_works_on_the_selected_frame", async () => {
   const s = setup();
   await opened(s);
   await pick(s, "Shipping");
-  const outline = vi.spyOn(s.client, "flowOutline");
-  replies = [answer([{ index: 0, op: { add_node: { name: "Label", kind: "step" } }, status: ok, dependsOn: [] }])];
+  // The board Ask reads the whole board in one worker call (Plan D Task 10), with the selected frame as its focus.
+  const outline = vi.spyOn(s.client, "boardOutline");
+  replies = [answer([{ index: 0, op: { add_node: { name: "Label", kind: "step" } }, status: ok, dependsOn: [], frame: "Shipping" }])];
   fireEvent.click(within(s.tabEl()).getByRole("button", { name: "Ask" }));
   const box = await screen.findByRole("textbox", { name: "Describe a change" });
   fireEvent.change(box, { target: { value: "Add a label step" } });
   fireEvent.keyDown(box, { key: "Enter" });
   await waitFor(() => expect(outline).toHaveBeenCalled());
-  expect(outline.mock.calls.every((c) => c[2] === 2)).toBe(true);
+  await waitFor(() => expect(callsTo("ai_diagram_ask")).toHaveLength(1));
+  const r = callsTo("ai_diagram_ask")[0].request as DiagramAskRequest;
+  expect(r.board!.focus).toEqual(["Shipping"]);
+  expect(r.board!.selected?.frame).toBe("Shipping");
+  expect(r.outline.nodes.map((n) => n.name)).toEqual(["Pack", "Send"]);
   await screen.findByRole("region", { name: "Changes to review" });
   fireEvent.click(within(screen.getByRole("region", { name: "Changes to review" })).getByRole("button", { name: /^Accept all/ }));
   await waitFor(() => expect(s.text()).toContain("Label"));
@@ -492,8 +502,8 @@ test("the_pending_count_moves_to_ask", async () => {
   await pick(s, "Refund");
   replies = [
     answer([
-      { index: 0, op: { add_node: { name: "Wait", kind: "step" } }, status: ok, dependsOn: [] },
-      { index: 1, op: { add_node: { name: "Check", kind: "step" } }, status: ok, dependsOn: [] },
+      { index: 0, op: { add_node: { name: "Wait", kind: "step" } }, status: ok, dependsOn: [], frame: "Refund" },
+      { index: 1, op: { add_node: { name: "Check", kind: "step" } }, status: ok, dependsOn: [], frame: "Refund" },
     ]),
   ];
   fireEvent.click(within(s.tabEl()).getByRole("button", { name: "Ask" }));
@@ -514,12 +524,16 @@ test("a_frame_switch_waits_while_the_assistant_holds_the_text", async () => {
   const s = setup();
   await opened(s);
   await pick(s, "Refund");
-  replies = [answer([{ index: 0, op: { add_node: { name: "Wait", kind: "step" } }, status: ok, dependsOn: [] }])];
+  replies = [answer([{ index: 0, op: { add_node: { name: "Wait", kind: "step" } }, status: ok, dependsOn: [], frame: "Refund" }])];
   fireEvent.click(within(s.tabEl()).getByRole("button", { name: "Ask" }));
   const box = await screen.findByRole("textbox", { name: "Describe a change" });
   fireEvent.change(box, { target: { value: "Add a step" } });
   fireEvent.keyDown(box, { key: "Enter" });
   await screen.findByRole("region", { name: "Changes to review" });
+  // The proposal's glide (Plan D Task 12) fits the frame it changes; zoom out around the live frame so every frame's tab is drawn again.
+  await act(async () => {
+    await canvas.instance!.setViewport({ x: 400, y: 100, zoom: 0.25 });
+  });
   // A tab click, the pane (a reveal) and a right-click all leave Refund selected and say why.
   fireEvent.click(await s.tab("Shipping"));
   expect(await within(s.tabEl()).findByText(/The Assistant is working on this diagram/)).toBeTruthy();
@@ -535,6 +549,29 @@ test("a_frame_switch_waits_while_the_assistant_holds_the_text", async () => {
   await waitFor(() => expect(s.view().state.readOnly).toBe(false));
   await pick(s, "Shipping");
   expect(s.tabEl().querySelector(".cm-flow-band")).toBeNull();
+});
+
+test("a_header_typed_in_the_pane_switches_at_once", async () => {
+  const s = setup();
+  await opened(s);
+  await pick(s, "Refund");
+  // Every canvas render: the frames drawn selected, and whether Refund's shapes are still live.
+  const renders: { selected: string[]; refundLive: boolean }[] = [];
+  canvas.seen = (p) =>
+    renders.push({
+      selected: p.nodes.filter((n) => n.type === "boardFrame" && (n.data as { selected: boolean }).selected).map((n) => n.id),
+      refundLive: p.nodes.some((n) => n.id === "Ask"),
+    });
+  try {
+    const at = s.text().indexOf("Refund it\n") + "Refund it".length;
+    s.type(at, '\ndiagram flow "Returns"');
+    await waitFor(() => expect(renders.some((r) => r.selected.includes(boardFrameId("Returns")))).toBe(true));
+    // Typing in the pane is no canvas pick (Plan F Decision 12): the frame typed into is selected at once, never drawn
+    // selected while Refund is still live.
+    expect(renders.filter((r) => r.selected.includes(boardFrameId("Returns")) && r.refundLive)).toEqual([]);
+  } finally {
+    canvas.seen = null;
+  }
 });
 
 test("renaming_the_shown_frame_keeps_its_selection", async () => {
@@ -567,9 +604,10 @@ test("a_canvas_edit_bands_the_line_it_wrote", async () => {
 
 /** Shipping's Ask with one unclear word: the pick step, where the text is not held. */
 const UNCLEAR: ProposedChange[] = [
-  { index: 0, op: { add_node: { name: "Label", kind: "step" } }, status: ok, dependsOn: [] },
+  { index: 0, op: { add_node: { name: "Label", kind: "step" } }, status: ok, dependsOn: [], frame: "Shipping" },
   {
     index: 1,
+    frame: "Shipping",
     op: { add_flow: { from: "the box", to: "Label" } },
     status: {
       kind: "ambiguous",
@@ -596,12 +634,20 @@ test("a_switch_during_the_pick_step_is_refused", async () => {
   await waitFor(() => expect(document.querySelectorAll(".pickrow").length).toBe(2));
   // The text is free to type in during the pick, but the run is Shipping's: a switch is refused with the note.
   expect(s.view().state.readOnly).toBe(false);
+  // The proposal's glide (Plan D Task 12) fits the frame it changes; zoom out around the live frame so every frame's tab is drawn again.
+  await act(async () => {
+    await canvas.instance!.setViewport({ x: 400, y: 100, zoom: 0.25 });
+  });
   fireEvent.click(await s.tab("Checkout"));
   expect(await within(s.tabEl()).findByText(/The Assistant is working on this diagram/)).toBeTruthy();
   expect(s.isSelected("Shipping")).toBe(true);
   // Pick, then try again from the review: the proposal draws in Shipping and lands there only.
   fireEvent.click(document.querySelectorAll(".pickrow")[0]);
   const card = await screen.findByRole("region", { name: "Changes to review" });
+  // Out of the pick step the proposal glides to Shipping again: zoom out once more.
+  await act(async () => {
+    await canvas.instance!.setViewport({ x: 400, y: 100, zoom: 0.25 });
+  });
   fireEvent.click(await s.tab("Checkout"));
   expect(s.isSelected("Shipping")).toBe(true);
   await waitFor(() => expect(canvas.props!.nodes.some((n) => n.id === "Label")).toBe(true));

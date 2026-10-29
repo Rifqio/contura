@@ -6,18 +6,21 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { saveAiSettings, withTurn } from "../../api/client";
-import type { AiEvent, AiThread, AppendTurn, DiagramAskRequest, DiagramProposal, ModelList, Preview, ProposedChange } from "../../api/types";
+import type { AiEvent, AiThread, AppendTurn, DiagramAskRequest, DiagramProposal, ModelList, Preview, ProposedChange, ToolUse } from "../../api/types";
 import type { DiagramCanvasProps } from "../../diagram/DiagramCanvas";
 import { LangClient } from "../../lang/client";
 import { mockEditorDom } from "../../test/editor";
 import { callsTo, routeInvoke } from "../../test/invoke";
-import { turnViewOf } from "../../test/aiThreads";
+import { summaryOf, turnViewOf } from "../../test/aiThreads";
 import { fakeWorker } from "../../test/langWorker";
 import { mockReactFlowDom } from "../../test/reactFlow";
 import { done, failed, sent, step } from "../../test/aiStream";
 import { GROQ, modelInfo, modelList } from "../../test/settingsRoutes";
 import FlowTab from "../FlowTab";
 import { flowEntry } from "../flowRegistry";
+import type { FlowDocApi } from "../useFlowDoc";
+import { DIAGRAM_CHATS, threadsCleared } from "../../assistant/threadsCleared";
+import { type BoardAsk, THREAD_LIMIT } from "./useBoardAsk";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -34,6 +37,21 @@ vi.mock("../../diagram/DiagramCanvas", async (load) => {
     default: (p: DiagramCanvasProps) => {
       canvas.props = p;
       return real.default(p);
+    },
+  };
+});
+
+/** The doc FlowTab last gave the board Ask: a test selects frames through it. */
+const hooked = vi.hoisted(() => ({ doc: null as FlowDocApi | null, ai: null as BoardAsk | null }));
+vi.mock("./useBoardAsk", async (load) => {
+  const real = await load<typeof import("./useBoardAsk")>();
+  return {
+    ...real,
+    useBoardAsk: (...a: Parameters<typeof real.useBoardAsk>) => {
+      hooked.doc = a[1];
+      const ai = real.useBoardAsk(...a);
+      hooked.ai = ai;
+      return ai;
     },
   };
 });
@@ -111,6 +129,8 @@ let disk: string | null = null;
 let known: ModelList | null = null;
 /** What reading the AI settings fails with, when it does. */
 let settingsFail: unknown = null;
+/** What `ai_name_chat` answers: the AI's title (kept on the thread, as the Core does), or null when no call went. */
+let nameChat: (r: Record<string, unknown>) => string | null = () => null;
 const sinks: Sink[] = [];
 
 /** The Core's preview of a diagram Ask: the question, the file and the selection, locked on. */
@@ -120,7 +140,8 @@ function previewOf(r: DiagramAskRequest): Preview {
     { kind: "question", label: "Question", bytes: r.question.length, tokens: 4, locked: null, on: true },
     { kind: "diagram", label: `${r.file}.flow`, bytes: r.text.length, tokens: 100, locked: lock, on: true },
   ];
-  if (r.scope.kind === "selection") items.push({ kind: "diagram", label: `Selection, ${r.scope.names.length} shapes`, bytes: 20, tokens: 5, locked: lock, on: true });
+  const shapes = r.board?.selected.shapes.length ?? 0;
+  if (shapes > 0) items.push({ kind: "diagram", label: `Selection, ${shapes} shapes`, bytes: 20, tokens: 5, locked: lock, on: true });
   return {
     items,
     tables: { full: [], namesOnly: [], leftOut: [], reasons: [] },
@@ -146,8 +167,7 @@ function setup(opts: { text?: string; layout?: string | null; name?: string; onO
       if (failWrites) throw { kind: "io", message: "the disk is full" };
       return null;
     },
-    list_ai_threads: (a) =>
-      threads.filter((t) => t.place === a.place).map((t) => ({ id: t.id, place: t.place, title: t.title, updatedAt: t.updatedAt, messages: t.messages.length, topics: 0 })),
+    list_ai_threads: (a) => threads.filter((t) => t.place === a.place).map(summaryOf),
     get_ai_thread: (a) => {
       const t = threads.find((x) => x.id === a.threadId);
       return t ? { thread: t, topics: [], compactions: [] } : null;
@@ -164,7 +184,8 @@ function setup(opts: { text?: string; layout?: string | null; name?: string; onO
       const turn = a.turn as AppendTurn;
       const before = threads.find((x) => x.id === turn.threadId) ?? null;
       const v = turnViewOf(turn, before);
-      const t = withTurn(before, v);
+      // The Core keeps who wrote the title and its failed tries.
+      const t = { ...withTurn(before, v), titleBy: before?.titleBy, titleTries: before?.titleTries };
       threads = [...threads.filter((x) => x.id !== t.id), t];
       saved.push(t);
       return v;
@@ -191,6 +212,24 @@ function setup(opts: { text?: string; layout?: string | null; name?: string; onO
       return null;
     },
     ai_cancel_place: () => true,
+    ai_name_chat: (a) => {
+      const r = a.request as Record<string, unknown>;
+      const title = nameChat(r);
+      if (title !== null) threads = threads.map((t) => (t.id === r.threadId ? { ...t, title, titleBy: "ai" } : t));
+      return title;
+    },
+    ai_rename_thread: (a) => {
+      threads = threads.map((t) => (t.id === a.id ? { ...t, title: a.title as string, titleBy: "user" } : t));
+      return summaryOf(threads.find((t) => t.id === a.id)!);
+    },
+    delete_ai_thread: (a) => {
+      threads = threads.filter((t) => t.id !== a.id);
+      return null;
+    },
+    clear_ai_threads: (a) => {
+      threads = threads.filter((t) => t.place !== a.place);
+      return null;
+    },
     ai_record_tool_result: (a) => {
       if (failRecord) throw { kind: "io", message: "the store is locked" };
       return a.outcome;
@@ -219,6 +258,9 @@ beforeEach(() => {
   disk = null;
   known = null;
   settingsFail = null;
+  nameChat = () => null;
+  hooked.doc = null;
+  hooked.ai = null;
   failWrites = false;
   failSave = false;
   saved = [];
@@ -268,7 +310,7 @@ test("send_flushes_then_asks_with_outline", async () => {
   expect(r.text).toBe(s.text());
   expect(r.question).toBe("Add a fraud check after Checkout");
   expect(r.scope).toEqual({ kind: "whole" });
-  // No history is sent: every Ask is a new one on the current text.
+  // A new chat: no thread yet.
   expect(r.threadId ?? null).toBeNull();
   expect(typeof r.requestId).toBe("string");
   // The outline is the worker's, of the text sent.
@@ -400,7 +442,9 @@ test("review_lists_changes_and_lands_one_step", async () => {
   // The count waits on the Assistant tab; the text stays read-only and shows the changes as ghost marks.
   expect(assistantTab().querySelector(".pcount")?.textContent).toBe("4");
   expect(s.view().state.readOnly).toBe(true);
-  expect(screen.getByText("4 changes from the assistant are marked below.")).toBeTruthy();
+  // The review bar on the canvas counts them (Plan D Task 13); the strip over the text is gone.
+  expect((await screen.findByRole("toolbar", { name: "Assistant changes" })).textContent).toMatch(/^4 changes in /);
+  expect(s.container.querySelector(".flow-ebar")).toBeNull();
   expect(s.container.querySelector(".cm-flow-ghost")?.textContent).toContain("Fraud check [process, id: 1.1]");
   expect(s.container.querySelector(".cm-flow-ghost-old")?.textContent).toContain("Checkout > Orders: new order");
   // The canvas draws the proposal: the new shape with its badge, the removed line in red.
@@ -422,7 +466,7 @@ test("review_lists_changes_and_lands_one_step", async () => {
   expect(s.text()).toContain("Checkout > Fraud check: risk");
   expect(s.text()).toContain("Fraud check > Orders: cleared");
   expect(s.text()).not.toContain("Checkout > Orders: new order");
-  expect(screen.getByText("Done. I added Fraud check and 2 lines and removed 1 line, as one undo step. The new parts are ringed on the canvas for a moment.")).toBeTruthy();
+  expect(screen.getByText("Done. I added Fraud check and 2 lines and removed a line, as one undo step. The new parts are ringed on the canvas for a moment.")).toBeTruthy();
   expect(screen.getByRole("button", { name: /^Undo/ })).toBeTruthy();
   expect(screen.queryByRole("region", { name: "Changes to review" })).toBeNull();
   expect(assistantTab().querySelector(".pcount")).toBeNull();
@@ -479,7 +523,7 @@ test("auto_apply_lands_at_once", async () => {
   await waitFor(() => expect(s.text()).toContain("Fraud check [process, id: 1.1]"));
   expect(s.text()).not.toContain("Checkout > Orders: new order");
   expect(screen.queryByRole("region", { name: "Changes to review" })).toBeNull();
-  expect(await screen.findByText("Done. I added Fraud check and 2 lines and removed 1 line, as one undo step. The new parts are ringed on the canvas for a moment.")).toBeTruthy();
+  expect(await screen.findByText("Done. I added Fraud check and 2 lines and removed a line, as one undo step. The new parts are ringed on the canvas for a moment.")).toBeTruthy();
   // The new shape is ringed for a moment.
   await waitFor(() => expect(drawnNode("Fraud check")?.data.state).toBe("airing"));
   await waitFor(() => expect(callsTo("ai_record_tool_result")).toHaveLength(1));
@@ -535,15 +579,8 @@ test("one_undo_restores_the_text", async () => {
   const layout = `${JSON.stringify({ version: 1, nodes: positions, style: "modern", direction: "LR" }, null, 2)}\n`;
   const s = setup({ text: crlf, layout });
   await drawn(s);
-  // The selection is the scope.
-  act(() => canvas.props!.onSelect!(["Checkout", "Orders"]));
-  fireEvent.click(assistantTab());
-  fireEvent.click(screen.getByRole("button", { name: "Whole diagram" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: "2 selected" }));
-  expect(screen.getByRole("button", { name: "2 selected" })).toBeTruthy();
   replies = [answer(FRAUD.slice(0, 3))];
   await send("Add a fraud check after Checkout");
-  expect(asks()[0].scope).toEqual({ kind: "selection", names: ["Checkout", "Orders"] });
   await reviewing();
   fireEvent.click(within(card()).getByRole("button", { name: /^Accept all/ }));
   await waitFor(() => expect(s.text()).toContain("Fraud check"));
@@ -650,12 +687,72 @@ test("thread_reloads_with_the_card", async () => {
   expect(within(shown).getByText("Accepted 4 of 4.")).toBeTruthy();
   expect(assistantTab().querySelector(".pcount")).toBeNull();
   expect(s.view().state.readOnly).toBe(false);
-  // A new Ask sends no history and adds to the same thread.
+  // A new Ask names the thread, so the Core sends its history (Plan D Decision 9), and adds to the same thread.
   replies = [answer(null)];
   await send("And a refund step");
-  expect(asks()[0].threadId ?? null).toBeNull();
+  expect(asks()[0].threadId).toBe("t1");
   await waitFor(() => expect(last(saved)?.messages).toHaveLength(4));
   expect(last(saved)!.id).toBe("t1");
+});
+
+test("an_old_saved_proposal_reloads", async () => {
+  const record = (toolUse: ToolUse) => ({
+    sent: null,
+    usage: null,
+    millis: null,
+    stop: null,
+    mark: null,
+    error: null,
+    sqlBlocks: [],
+    notes: [],
+    thinking: null,
+    log: [],
+    steps: [],
+    actions: [],
+    context: null,
+    commandError: null,
+    toolUse,
+  });
+  // Saved before boards: no `frame` on the changes or their ops, as the store holds it.
+  const old = JSON.parse(JSON.stringify(proposal(FRAUD))) as DiagramProposal;
+  expect(JSON.stringify(old)).not.toContain('"frame"');
+  // Saved on a board: each change names its frame.
+  const onBoard: DiagramProposal = proposal(FRAUD.map((c): ProposedChange => ({ ...c, frame: "Checkout", op: { remove_node: { target: "Orders", frame: "Checkout" } } })));
+  threads = [
+    {
+      id: "t1",
+      place: "diagram:checkout",
+      title: "Add a fraud check",
+      updatedAt: 10,
+      messages: [
+        { role: "user", text: "Add a fraud check", context: [], at: 5 },
+        {
+          role: "assistant",
+          text: "I'll add a fraud check between Checkout and Orders.",
+          context: [],
+          at: 6,
+          record: record({ tool: "propose_diagram_changes", file: "checkout", input: "{}", proposal: old, outcome: { accepted: 4, rejected: 0, auto: false, at: 7 } }),
+        },
+        { role: "user", text: "Remove Orders", context: [], at: 8 },
+        {
+          role: "assistant",
+          text: "I'll remove Orders.",
+          context: [],
+          at: 9,
+          record: record({ tool: "propose_diagram_changes", file: "checkout", input: "{}", proposal: onBoard, outcome: { accepted: 0, rejected: 4, auto: false, at: 10 } }),
+        },
+      ],
+    },
+  ];
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  const cards = await screen.findAllByRole("region", { name: "Changes" });
+  expect(cards).toHaveLength(2);
+  expect(within(cards[0]).getByText("4 changes")).toBeTruthy();
+  expect(cards[0].querySelectorAll(".crow")).toHaveLength(4);
+  expect(within(cards[0]).getByText("Accepted 4 of 4.")).toBeTruthy();
+  expect(cards[1].querySelectorAll(".crow")).toHaveLength(4);
 });
 
 test("nothing_in_the_side_panel_has_hover_text", async () => {
@@ -755,28 +852,28 @@ test("auto_apply_that_cannot_land_keeps_its_note", async () => {
   expect(s.text()).not.toContain("Fraud check");
 });
 
-test("the_remove_question_keeps_the_banner_and_bands_clear", async () => {
+test("the_remove_question_hides_the_review_bar_and_bands_clear", async () => {
   const s = setup();
   await drawn(s);
   const redraw: ProposedChange[] = ["Customer", "Checkout", "Orders", "Charge card"].map((t, i) => change(i, { remove_node: { target: t } }));
   replies = [answer(redraw), answer(FRAUD)];
   await send("Start over");
   expect(await screen.findByText("Remove 4 shapes and 5 lines?")).toBeTruthy();
-  // The editor says changes wait, with Reject all only.
-  const banner = screen.getByText("4 changes from the assistant are marked below.").closest(".flow-ebar") as HTMLElement;
-  expect([...banner.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Reject all"]);
+  // The review bar hides while the question is open; the question answers for itself.
+  expect(screen.queryByRole("toolbar", { name: "Assistant changes" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(s.view().state.readOnly).toBe(false));
 
-  // Review: a rejected row makes the banner count what lands; Show in the text bands lines; Reject all clears them.
+  // Review: a rejected row makes the review bar count what lands; Show in the text bands lines; Reject clears them.
   await send("Add a fraud check after Checkout");
   await reviewing();
   fireEvent.click(within(card().querySelectorAll(".crow")[2] as HTMLElement).getByRole("button", { name: "Reject this change" }));
   fireEvent.click(within(card()).getByRole("button", { name: "Show in the text" }));
-  const bar = screen.getByText("3 changes from the assistant are marked below.").closest(".flow-ebar") as HTMLElement;
+  const bar = screen.getByRole("toolbar", { name: "Assistant changes" });
+  await waitFor(() => expect(bar.textContent).toMatch(/^3 changes in /));
   expect(within(bar).getByRole("button", { name: "Accept 3" })).toBeTruthy();
   await waitFor(() => expect(s.container.querySelectorAll(".cm-line.cm-flow-band").length).toBeGreaterThan(0));
-  fireEvent.click(within(bar).getByRole("button", { name: "Reject all" }));
+  fireEvent.click(within(bar).getByRole("button", { name: "Reject" }));
   await waitFor(() => expect(s.container.querySelectorAll(".cm-line.cm-flow-band")).toHaveLength(0));
 });
 
@@ -934,7 +1031,7 @@ test("unclear_pick_resolves_and_lands", async () => {
   await send(Q);
   fireEvent.click((await screen.findAllByRole("button", { name: /Charge card/ }))[0]);
   await waitFor(() => expect(t.text()).toContain("Charge card > Fraud check: risk"));
-  expect(screen.getByText(/^Done\. I added Fraud check and 1 line/)).toBeTruthy();
+  expect(screen.getByText(/^Done\. I added Fraud check and a line/)).toBeTruthy();
 });
 
 test("unclear_cancel_changes_nothing", async () => {
@@ -1192,6 +1289,22 @@ test("a_message_ending_in_a_full_stop_is_not_doubled", async () => {
   expect(asks()[1].question).toBe("Some changes could not be used: there is no shape called Shipping. Propose them again so they fit this diagram.");
 });
 
+test("the_selection_is_a_chip_not_a_lock", async () => {
+  const s = setup();
+  await drawn(s);
+  act(() => canvas.props!.onSelect!(["Checkout", "Orders"]));
+  fireEvent.click(assistantTab());
+  // No scope control: the selection is focus, and the assistant reads and may change the whole board.
+  expect(screen.queryByRole("button", { name: "Whole diagram" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "2 selected" })).toBeNull();
+  replies = [answer(null)];
+  await send("Add a fraud check after Checkout");
+  const r = asks()[0];
+  expect(r.scope).toEqual({ kind: "whole" });
+  expect(r.board?.selected).toEqual({ frame: "Checkout", shapes: ["Checkout", "Orders"], sketches: [] });
+  expect(r.board?.frames.map((f) => f.title)).toEqual(["Checkout"]);
+});
+
 // ----- Sends, Show log and the tool-off note (board 11.12)
 
 const previews = () => callsTo("ai_diagram_preview").map((c) => c.request as DiagramAskRequest);
@@ -1218,11 +1331,10 @@ test("diagram_sends_rows_locked_on", async () => {
   expect(await rows()).toEqual(["Question", "checkout.flow"]);
   for (const pill of sendsBox().querySelectorAll(".send-pill")) expect(pill.getAttribute("aria-disabled")).toBe("true");
   expect(within(sendsBox()).getByText("The changes are written against this text")).toBeTruthy();
-  // A selection adds its locked row.
+  // A selection adds its locked row: it goes as the board's selection, with no scope to pick.
   act(() => canvas.props!.onSelect!(["Customer", "Checkout", "Orders"]));
-  fireEvent.click(screen.getByRole("button", { name: "Whole diagram" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: "3 selected" }));
-  await waitFor(() => expect(last(previews())!.scope).toEqual({ kind: "selection", names: ["Customer", "Checkout", "Orders"] }));
+  await waitFor(() => expect(last(previews())!.board?.selected.shapes).toEqual(["Customer", "Checkout", "Orders"]));
+  expect(last(previews())!.scope).toEqual({ kind: "whole" });
   await waitFor(async () => expect(await rows()).toEqual(["Question", "checkout.flow", "Selection, 3 shapes"]));
   const panel = s.container.querySelector('section[aria-label="Side panel"]') as HTMLElement;
   expect(panel.querySelectorAll("[title]")).toHaveLength(0);
@@ -1510,4 +1622,353 @@ test("diag-910 fix round 1, I2: Mermaid pasted on the canvas while the assistant
     expect(s.container.querySelector(".flow-pane-draw .flow-strip")?.textContent).toContain("The Assistant is working on the text, so nothing was pasted. Paste again once it finishes."),
   );
   expect(s.text()).toBe(DFD);
+});
+
+// ----- Plan D Task 15: past chats per board (Decision 16, A19, A20)
+
+/** A stored board chat of one turn: its question is its title. */
+const storedChat = (id: string, q: string, updatedAt: number, a = `Answer to ${q}`): AiThread => ({
+  id,
+  place: "diagram:checkout",
+  title: q,
+  updatedAt,
+  messages: [
+    { role: "user", text: q, context: [], at: updatedAt - 1 },
+    { role: "assistant", text: a, context: [], at: updatedAt },
+  ],
+});
+const asked = (q: string) => screen.queryByText(q, { selector: ".umsg" });
+const historyDialog = () => screen.getByRole("dialog", { name: "Chat history" });
+const openHistory = () => {
+  fireEvent.click(screen.getByRole("button", { name: "Show history" }));
+  return historyDialog();
+};
+/** Sends `q` from the composer, the Assistant already open, and waits for its Ask. */
+async function sendMore(q: string) {
+  const before = asks().length;
+  fireEvent.change(box(), { target: { value: q } });
+  fireEvent.keyDown(box(), { key: "Enter" });
+  await waitFor(() => expect(asks().length).toBe(before + 1));
+}
+
+test("plus_and_ctrl_shift_n_start_a_new_chat", async () => {
+  threads = [storedChat("t1", "Add a fraud check", Date.now() - 1000)];
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  await waitFor(() => expect(asked("Add a fraud check")).not.toBeNull());
+  // `+` empties the chat; the next Ask starts a new thread (ChatGPT's and Claude's New chat).
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  expect(asked("Add a fraud check")).toBeNull();
+  expect(screen.getByRole("heading", { name: "What would you like to create?" })).toBeTruthy();
+  replies = [answer(null, "A refund step it is.")];
+  await sendMore("Add a refund step");
+  expect(asks()[0].threadId ?? null).toBeNull();
+  await screen.findByText("A refund step it is.");
+  await waitFor(() => expect(last(saved)?.messages).toHaveLength(2));
+  expect(last(saved)!.id).not.toBe("t1");
+  // Ctrl+Shift+N, the existing assistant.newChat command, does the same from the pane.
+  fireEvent.keyDown(box(), { key: "N", code: "KeyN", ctrlKey: true, shiftKey: true });
+  await waitFor(() => expect(screen.queryByText("A refund step it is.")).toBeNull());
+  // So does Ctrl+N with focus in the pane (A19: shared by region with New Connection).
+  replies = [answer(null, "Done again.")];
+  await sendMore("Add a wait");
+  await screen.findByText("Done again.");
+  box().focus();
+  fireEvent.keyDown(box(), { key: "n", code: "KeyN", ctrlKey: true });
+  await waitFor(() => expect(screen.queryByText("Done again.")).toBeNull());
+  // Never while an Ask runs: the button is off and the keys do nothing.
+  holdAsk = true;
+  await sendMore("Add a hold");
+  expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "N", code: "KeyN", ctrlKey: true, shiftKey: true });
+  expect(asked("Add a hold")).not.toBeNull();
+});
+
+test("the_clock_lists_past_chats_titled_by_their_first_question", async () => {
+  const now = Date.now();
+  threads = [
+    storedChat("t1", "Add a fraud check", now - 60_000),
+    storedChat("t2", "Rename the store", new Date(2020, 0, 5, 12).getTime()),
+    { ...storedChat("u1", "A chat of the Ask panel", now), place: "ungrouped" },
+  ];
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  await waitFor(() => expect(asked("Add a fraud check")).not.toBeNull());
+  let dialog = openHistory();
+  // The board's chats only, by day (D2's list), with no second line: a board chat has no database.
+  expect([...dialog.querySelectorAll(".history-group")].map((g) => g.textContent)).toEqual(["Today", "Older"]);
+  expect([...dialog.querySelectorAll(".history-chat-title")].map((t) => t.textContent)).toEqual(["Add a fraud check", "Rename the store"]);
+  expect(dialog.querySelectorAll(".history-chat-place")).toHaveLength(0);
+  expect(within(dialog).getByRole("button", { name: /Add a fraud check/ }).getAttribute("aria-current")).toBe("true");
+  // A past chat opens in place of this one.
+  fireEvent.click(within(dialog).getByRole("button", { name: /Rename the store/ }));
+  await waitFor(() => expect(asked("Rename the store")).not.toBeNull());
+  expect(asked("Add a fraud check")).toBeNull();
+  expect(callsTo("get_ai_thread").map((c) => c.threadId)).toContain("t2");
+  // Its next Ask goes on in it.
+  replies = [answer(null, "Renamed.")];
+  await sendMore("And the other store");
+  expect(asks()[0].threadId).toBe("t2");
+  await screen.findByText("Renamed.");
+  // A new chat is titled by its first question, cut to 40 characters; the list keeps the newest first.
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  replies = [answer(null, "Sure.")];
+  await sendMore("Add a step that checks the card before the payment goes");
+  await screen.findByText("Sure.");
+  dialog = openHistory();
+  expect([...dialog.querySelectorAll(".history-chat-title")].map((t) => t.textContent)).toEqual(["Add a step that checks the card before t…", "Rename the store", "Add a fraud check"]);
+});
+
+test("rename_delete_and_clear_in_the_clock", async () => {
+  const now = Date.now();
+  threads = [storedChat("t1", "Add a fraud check", now - 60_000), storedChat("t2", "Rename the store", now - 120_000)];
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  await waitFor(() => expect(asked("Add a fraud check")).not.toBeNull());
+  let dialog = openHistory();
+  // Rename in the row (D2's): Enter keeps it.
+  fireEvent.mouseOver(within(dialog).getByRole("button", { name: /Rename the store/ }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+  const field = within(dialog).getByRole("textbox", { name: "Chat title" });
+  fireEvent.change(field, { target: { value: "Stores" } });
+  fireEvent.keyDown(field, { key: "Enter" });
+  await waitFor(() => expect(callsTo("ai_rename_thread")).toEqual([{ id: "t2", title: "Stores" }]));
+  await waitFor(() => expect(within(historyDialog()).getByRole("button", { name: /Stores/ })).toBeTruthy());
+  // Deleting the open chat empties the pane.
+  dialog = historyDialog();
+  const fraud = within(dialog).getByRole("button", { name: /Add a fraud check/ }).closest(".history-item") as HTMLElement;
+  fireEvent.mouseOver(fraud);
+  fireEvent.click(within(fraud).getByRole("button", { name: "Delete" }));
+  fireEvent.click(within(within(dialog).getByRole("alertdialog", { name: "Delete chat" })).getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(callsTo("delete_ai_thread")).toEqual([{ id: "t1" }]));
+  await waitFor(() => expect(asked("Add a fraud check")).toBeNull());
+  // Clear all names the board.
+  fireEvent.click(within(historyDialog()).getByRole("button", { name: "Clear all chats..." }));
+  expect(within(historyDialog()).getByText("Clear the AI history of checkout.flow? Every thread in this place is removed.")).toBeTruthy();
+  fireEvent.click(within(historyDialog()).getByRole("button", { name: "Clear" }));
+  await waitFor(() => expect(callsTo("clear_ai_threads")).toEqual([{ place: "diagram:checkout" }]));
+  openHistory();
+  expect(within(historyDialog()).getByText("No chats yet")).toBeTruthy();
+});
+
+test("a_past_chat_does_not_open_while_changes_wait", async () => {
+  threads = [storedChat("t2", "Rename the store", Date.now() - 120_000)];
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  await waitFor(() => expect(asked("Rename the store")).not.toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  replies = [answer(FRAUD)];
+  await sendMore("Add a fraud check");
+  await reviewing();
+  expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
+  const dialog = openHistory();
+  fireEvent.click(within(dialog).getByRole("button", { name: /Rename the store/ }));
+  await act(async () => {});
+  expect(callsTo("get_ai_thread").filter((c) => c.threadId === "t2")).toHaveLength(1);
+  expect(card()).toBeTruthy();
+  expect(asked("Rename the store")).toBeNull();
+});
+
+test("a_board_chat_gets_an_ai_title_once", async () => {
+  nameChat = () => "Fraud check before orders";
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  replies = [answer(null, "First.")];
+  await sendMore("Add a fraud check");
+  await screen.findByText("First.");
+  // A20: once the turn is stored under the rule's title, D2's title call, with no Group and no Connection.
+  await waitFor(() => expect(callsTo("ai_name_chat")).toHaveLength(1));
+  const r = callsTo("ai_name_chat")[0].request as Record<string, unknown>;
+  expect(r).toMatchObject({ place: "diagram:checkout", groupId: null, threadId: last(saved)!.id, off: [] });
+  expect(typeof r.requestId).toBe("string");
+  openHistory();
+  await waitFor(() => expect([...historyDialog().querySelectorAll(".history-chat-title")].map((t) => t.textContent)).toEqual(["Fraud check before orders"]));
+  fireEvent.keyDown(historyDialog(), { key: "Escape" });
+  // The next turn makes no second call: the title is the AI's now.
+  replies = [answer(null, "Second.")];
+  await sendMore("And a refund step");
+  await screen.findByText("Second.");
+  await waitFor(() => expect(last(saved)?.messages).toHaveLength(4));
+  await act(async () => {});
+  expect(callsTo("ai_name_chat")).toHaveLength(1);
+});
+
+test("switching_frames_keeps_the_chat", async () => {
+  const BOARD = `${DFD}\ndiagram flow "Refund"\nAsk\nRefund it\nAsk > Refund it\n`;
+  const s = setup({ text: BOARD });
+  await drawn(s);
+  await waitFor(() => expect(hooked.doc?.parsed?.result.frames.map((f) => f.title)).toEqual(["Checkout", "Refund"]));
+  fireEvent.click(assistantTab());
+  replies = [answer(null, "Checked.")];
+  await sendMore("What does Checkout do?");
+  await screen.findByText("Checked.");
+  await waitFor(() => expect(last(saved)?.messages).toHaveLength(2));
+  const id = last(saved)!.id;
+  // Another frame selected: the same chat, and the next Ask goes on in it (Decision 16, A2).
+  act(() => hooked.doc!.select({ title: "Refund", index: 1 }));
+  await waitFor(() => expect(hooked.doc!.selected).toEqual({ title: "Refund", index: 1 }));
+  expect(asked("What does Checkout do?")).not.toBeNull();
+  expect(screen.getByText("Checked.")).toBeTruthy();
+  replies = [answer(null, "Refunded.")];
+  await sendMore("And Refund?");
+  expect(asks()[1].threadId).toBe(id);
+  await waitFor(() => expect(last(saved)?.messages).toHaveLength(4));
+  expect(last(saved)!.id).toBe(id);
+});
+
+test("a_thread_of_200_messages_draws_only_twenty_turns", async () => {
+  const messages: AiThread["messages"] = [];
+  for (let i = 0; i < 100; i++) {
+    messages.push({ role: "user", text: `Question ${i}`, context: [], at: 1000 + i * 2 });
+    messages.push({ role: "assistant", text: `Answer ${i}`, context: [], at: 1001 + i * 2 });
+  }
+  threads = [{ id: "t1", place: "diagram:checkout", title: "Question 0", updatedAt: 2000, messages }];
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  await screen.findByText("Answer 99");
+  const log = screen.getByRole("log", { name: "Assistant conversation" });
+  // SHOWN_TURNS: the newest 20 turns are drawn, the rest wait behind "Show 20 earlier".
+  expect(log.querySelectorAll(".umsg")).toHaveLength(20);
+  expect(log.querySelectorAll(".amsg")).toHaveLength(20);
+  expect(within(log).queryByText("Question 79")).toBeNull();
+  expect(within(log).getByText("Question 80")).toBeTruthy();
+  fireEvent.click(within(log).getByRole("button", { name: "Show 20 earlier" }));
+  expect(log.querySelectorAll(".umsg")).toHaveLength(40);
+  // A new chat draws nothing of it, and the earlier count starts again.
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  expect(log.querySelectorAll(".umsg")).toHaveLength(0);
+});
+
+// ----- Task 15 fix round 1: cleared means gone, and the hook's own refusals
+
+/** Settings cleared `place` in the Core (null: every place; DIAGRAM_CHATS: every board's) and told the open panes. */
+function clearedInSettings(place: string | null) {
+  threads = threads.filter((t) => !(place === null || place === t.place || (place === DIAGRAM_CHATS && t.place.startsWith("diagram:"))));
+  act(() => threadsCleared(place));
+}
+
+test("clear_all_ai_data_empties_the_board_chats_and_never_writes_them_back", async () => {
+  threads = [storedChat("t1", "Add a fraud check", Date.now() - 1000)];
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  await waitFor(() => expect(asked("Add a fraud check")).not.toBeNull());
+  // A turn whose save failed: the next Ask would save the whole chat again.
+  failSave = true;
+  replies = [answer(null, "Not kept.")];
+  await sendMore("Add a step");
+  await screen.findByText(/^Not saved:/);
+  failSave = false;
+  clearedInSettings(null);
+  // The clock is empty and the pane shows a new chat.
+  expect(asked("Add a fraud check")).toBeNull();
+  expect(screen.queryByText("Not kept.")).toBeNull();
+  expect(screen.getByRole("heading", { name: "What would you like to create?" })).toBeTruthy();
+  openHistory();
+  expect(within(historyDialog()).getByText("No chats yet")).toBeTruthy();
+  fireEvent.keyDown(historyDialog(), { key: "Escape" });
+  // The next Ask starts a new chat: the cleared one is never written back, whole or in part.
+  replies = [answer(null, "Fresh.")];
+  await sendMore("Start again");
+  expect(last(asks())!.threadId ?? null).toBeNull();
+  await screen.findByText("Fresh.");
+  await waitFor(() => expect(last(saved)?.messages).toHaveLength(2));
+  expect(last(saved)!.id).not.toBe("t1");
+  expect(callsTo("save_ai_thread")).toHaveLength(0);
+  expect(threads.map((t) => t.id)).not.toContain("t1");
+  expect(threads.flatMap((t) => t.messages.map((m) => m.text))).toEqual(["Start again", "Fresh."]);
+});
+
+test("a_settings_history_clear_clears_the_board_and_another_board_does_not", async () => {
+  threads = [storedChat("t1", "Add a fraud check", Date.now() - 1000)];
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  await waitFor(() => expect(asked("Add a fraud check")).not.toBeNull());
+  // Another board's own Clear all chats leaves this one.
+  clearedInSettings("diagram:orders");
+  expect(asked("Add a fraud check")).not.toBeNull();
+  expect(hooked.ai!.threads.map((t) => t.id)).toEqual(["t1"]);
+  // Settings' Clear AI history takes every board's chats with the place's threads.
+  clearedInSettings(DIAGRAM_CHATS);
+  expect(asked("Add a fraud check")).toBeNull();
+  expect(hooked.ai!.threads).toEqual([]);
+});
+
+test("a_clear_while_changes_wait_keeps_the_card_and_never_writes_the_chat_back", async () => {
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  replies = [answer(FRAUD)];
+  await sendMore("Add a fraud check");
+  await reviewing();
+  const id = last(saved)!.id;
+  clearedInSettings(null);
+  // The review is not taken away under the user; the clock is empty at once.
+  expect(card()).toBeTruthy();
+  expect(hooked.ai!.threads).toEqual([]);
+  // Its outcome is not recorded on the cleared chat (that would make it again).
+  fireEvent.click(screen.getByRole("button", { name: "Reject all" }));
+  await act(async () => {});
+  expect(callsTo("ai_record_tool_result")).toHaveLength(0);
+  // Nor does the next turn go into it.
+  replies = [answer(null, "New one.")];
+  await sendMore("Then a refund step");
+  await screen.findByText("New one.");
+  await waitFor(() => expect(last(saved)?.messages).toHaveLength(2));
+  expect(last(saved)!.id).not.toBe(id);
+  expect(threads.map((t) => t.id)).not.toContain(id);
+});
+
+test("the_hook_refuses_a_chat_change_while_changes_wait", async () => {
+  threads = [storedChat("t2", "Rename the store", Date.now() - 120_000)];
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  await waitFor(() => expect(asked("Rename the store")).not.toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  replies = [answer(FRAUD)];
+  await sendMore("Add a fraud check");
+  await reviewing();
+  const loads = callsTo("get_ai_thread").length;
+  // Ctrl+Shift+N in the pane, and the hook called directly (not ThreadHistory's own busy check): nothing changes.
+  fireEvent.keyDown(box(), { key: "N", code: "KeyN", ctrlKey: true, shiftKey: true });
+  await act(async () => void (await hooked.ai!.openThread("t2")));
+  act(() => hooked.ai!.newChat());
+  expect(callsTo("get_ai_thread")).toHaveLength(loads);
+  expect(card()).toBeTruthy();
+  expect(asked("Add a fraud check")).not.toBeNull();
+  expect(asked("Rename the store")).toBeNull();
+  // Once the changes are dealt with, the same calls go through.
+  fireEvent.click(screen.getByRole("button", { name: "Reject all" }));
+  await act(async () => void (await hooked.ai!.openThread("t2")));
+  await waitFor(() => expect(asked("Rename the store")).not.toBeNull());
+});
+
+test("a_board_keeps_at_most_fifty_chats", async () => {
+  const now = Date.now();
+  threads = Array.from({ length: 60 }, (_, i) => storedChat(`t${i}`, `Question ${i}`, now - 1_000_000 + i * 1000));
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  await waitFor(() => expect(hooked.ai!.threads).toHaveLength(THREAD_LIMIT));
+  expect(THREAD_LIMIT).toBe(50);
+  // The newest 50, newest first; the newest opens.
+  expect(hooked.ai!.threads[0].id).toBe("t59");
+  expect(last(hooked.ai!.threads)!.id).toBe("t10");
+  await waitFor(() => expect(asked("Question 59")).not.toBeNull());
+  // A new chat goes on top and the oldest leaves the list.
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  replies = [answer(null, "Fifty-first.")];
+  await sendMore("One more");
+  await screen.findByText("Fifty-first.");
+  await waitFor(() => expect(hooked.ai!.threads[0].title).toBe("One more"));
+  expect(hooked.ai!.threads).toHaveLength(THREAD_LIMIT);
+  expect(last(hooked.ai!.threads)!.id).toBe("t11");
 });

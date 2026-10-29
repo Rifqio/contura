@@ -172,7 +172,7 @@
   height: 15px;
   box-sizing: border-box;
   padding: 0 3px;
-  color: var(--c-ink);
+  color: var(--on-accent);
   font-size: 10px;
   font-weight: 600;
   line-height: 15px;
@@ -843,6 +843,12 @@
   stroke-width: 2;
   animation: flow-fade-in var(--motion-fast) var(--ease-enter);
 }
+/* The live frame's overlay hangs from its place on the board (Plan F Decision 11): no size, no stacking context. */
+.flow-overlay-live {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
 .flow-overlay-svg {
   position: absolute;
   top: 0;
@@ -1102,6 +1108,26 @@
   flex-direction: column;
   min-height: 0;
 }
+/* The Assistant's head (the Ask panel's, board 11.1): New chat and the clock of the board's chats at its end (Plan D
+   Decision 16). */
+.flow-assist-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-xs);
+  min-width: 0;
+  height: 32px;
+  padding: 0 var(--spacing-xs);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.flow-assist-head .icon-button {
+  flex: none;
+  width: 24px;
+  height: 24px;
+}
+.flow-assist-head .menu-root {
+  display: flex;
+}
 /* The chat keeps 30 percent of the pane (80 to 200 px) and the composer gives way above its message box: at
    1,024 x 480 an open Show exactly pushed the box below the pane and the chat shrank to 22 px (the Ask panel's
    fix, .ai-panel in app.css). */
@@ -1115,8 +1141,51 @@
   overflow-y: auto;
   scrollbar-width: thin;
 }
+/* Nothing in the chat shrinks: the chat scrolls. A card's overflow: hidden drops its automatic minimum height to 0, and
+   WebKitGTK laid the follow-up card out 2 px high (live check L1). */
+.flow-chat > * {
+  flex: none;
+}
 .flow-chat .flow-side-empty {
   padding: 8px 2px;
+}
+/* The assistant's start screen (Plan D Decision 15): ChatGPT's and FigJam AI's empty chat, a question over starting
+   points. The cards are the Shelf's (flow-shelf.css), flowing to the pane's width. */
+.ai-start {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-2xs);
+}
+.ai-start-title {
+  margin: 0;
+  color: var(--c-text);
+  font: var(--font-title);
+}
+.ai-start-kinds .flow-shelf-cards {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr));
+  border-radius: var(--rounded-md);
+}
+.ai-start-kinds .flow-shelf-cards:focus {
+  outline: none;
+}
+/* The active card is marked only while the cards have focus; otherwise none looks picked. */
+.ai-start-kinds .flow-shelf-cards:not(:focus) .flow-shelf-card.is-active:not(:hover) {
+  background: none;
+}
+.ai-start-kinds .flow-shelf-cards:focus-visible .flow-shelf-card.is-active {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.ai-start-sub {
+  margin: var(--spacing-xs) 0 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.ai-start-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
 }
 .flow-assist .umsg {
   align-self: flex-end;
@@ -1139,6 +1208,29 @@
   gap: 6px;
   align-items: baseline;
   margin: 0;
+}
+/* A name in an answer that is on the canvas: code that acts as a link (GitHub's and Cursor's code references). */
+.flow-assist .answer-part {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rounded-xs);
+  background: none;
+  color: var(--c-accent);
+  font: inherit;
+  cursor: pointer;
+}
+.flow-assist .answer-part code {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.flow-assist .answer-part:hover code {
+  background: var(--c-accent-subtle);
+}
+.flow-assist .answer-part:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 1px;
 }
 .flow-assist-none,
 .flow-assist-problem {
@@ -1199,13 +1291,13 @@
 .btn.pbtn2.pri {
   background: var(--c-accent);
   border-color: var(--c-accent);
-  color: var(--c-ink);
+  color: var(--on-accent);
   font-weight: 600;
 }
 .btn.pbtn2.dng {
   background: var(--c-danger-solid);
   border-color: var(--c-danger-solid);
-  color: var(--c-ink);
+  color: var(--on-accent);
   font-weight: 600;
 }
 .btn.pbtn2:disabled {
@@ -1292,6 +1384,34 @@
 .crow.dropped .tx {
   opacity: 0.45;
   text-decoration: line-through;
+}
+/* Plan D Decision 12: on a board the rows group by frame, each under a header band with its title, its count, Reject
+   frame and Accept frame (GitHub's review, a header per file). */
+.cgroup + .cgroup,
+.ccard-head + .cgroup {
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.cgroup-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 6px 2px 12px;
+  background: var(--c-bg-hover);
+  font-size: 12px;
+}
+.cgroup-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cgroup-acts {
+  display: flex;
+  flex: none;
+  gap: 2px;
 }
 .crow-acts {
   display: flex;
@@ -1450,18 +1570,6 @@
   align-items: center;
   gap: 6px;
 }
-.btn.scope {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 6px;
-  border: var(--border-hairline) solid var(--c-border);
-  border-radius: 4px;
-  color: var(--c-text-muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
 .flow-assist .seg {
   display: inline-flex;
   flex: none;
@@ -1504,6 +1612,82 @@
   border-color: var(--c-accent);
   box-shadow: 0 0 0 1px var(--c-accent);
 }
+/* The `/` list opens above the box, as wide as it. */
+.flow-slash-anchor {
+  position: relative;
+}
+.flow-slash-anchor > .slash-menu {
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+}
+.slash-row.slash-row-bare {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.slash-row-bare .slash-name {
+  font: var(--font-small);
+  font-weight: 500;
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.slash-row-bare.menu-item-current .slash-name {
+  color: inherit;
+}
+/* The chips above the box: Slack's and Linear's pills, the remove button inside the pill. */
+.ask-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 8px 0;
+  list-style: none;
+}
+.ask-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 2px 0 8px;
+  gap: 2px;
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-active);
+  color: var(--c-text);
+  font-size: 12px;
+}
+.ask-chip-frame {
+  background: var(--c-accent-subtle);
+}
+.ask-chip-selection {
+  color: var(--c-text-muted);
+}
+.ask-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ask-chip-x {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--rounded-sm);
+  color: var(--c-text-subtle);
+  cursor: pointer;
+}
+.ask-chip-x:hover {
+  background: var(--c-bg-hover);
+  color: var(--c-text);
+}
+.ask-chip-x:focus-visible {
+  outline: 2px solid var(--c-focus);
+}
 .cin2 {
   all: unset;
   box-sizing: border-box;
@@ -1534,7 +1718,7 @@
   height: 28px;
   border-radius: 6px;
   background: var(--c-accent);
-  color: var(--c-ink);
+  color: var(--on-accent);
 }
 .btn.sendb:disabled {
   cursor: default;
@@ -1571,7 +1755,7 @@
   padding: 0 8px 0 6px;
   border-radius: 4px;
   background: var(--c-accent);
-  color: var(--c-ink);
+  color: var(--on-accent);
   font-size: 12px;
   font-weight: 600;
   pointer-events: none;
@@ -1607,7 +1791,8 @@
   font-weight: 600;
   line-height: 18px;
 }
-.flow-canvas .fnode-airing {
+.flow-canvas .fnode-airing,
+.flow-canvas .react-flow__node.is-ai-airing > .flow-area {
   outline: 2px solid var(--c-accent);
   outline-offset: 4px;
   animation: ai-fade calc(var(--motion-base) * 15) cubic-bezier(0.4, 0, 1, 1) calc(var(--motion-base) * 5) both;
@@ -1633,9 +1818,18 @@
   .pdot,
   .flow-assist .sdot2,
   .flow-aipres .live,
-  .flow-canvas .fnode-airing {
+  .flow-canvas .fnode-airing,
+  .flow-canvas .react-flow__node.is-ai-airing > .flow-area {
     animation: none;
   }
+}
+/* The app's own reduced-motion preference zeroes the motion tokens: the fade would end at once and the ring vanish. */
+:root[data-reduced-motion] .pdot,
+:root[data-reduced-motion] .flow-assist .sdot2,
+:root[data-reduced-motion] .flow-aipres .live,
+:root[data-reduced-motion] .flow-canvas .fnode-airing,
+:root[data-reduced-motion] .flow-canvas .react-flow__node.is-ai-airing > .flow-area {
+  animation: none;
 }
 .flow-assist .step.done .sdot2 {
   background: var(--c-success-solid);
@@ -2049,4 +2243,39 @@
   color: var(--c-danger-text);
   font: var(--font-small);
   transform: translateX(-50%);
+}
+.umsg-left {
+  color: var(--c-text-subtle);
+  font-style: italic;
+}
+.ccard.followup .followup-q {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.followup-reply {
+  all: unset;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 6px 12px 8px;
+  color: var(--c-text);
+  font-size: 13px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.followup-reply::placeholder {
+  color: var(--c-text-faint);
+}
+.followup-reply:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.cin2:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }

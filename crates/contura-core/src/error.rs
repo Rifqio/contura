@@ -286,6 +286,12 @@ mod tests {
             }),
             msg(serde_json::json!({"kind":"tls","host":"api.groq.com"}))
         );
+        assert_eq!(
+            ai(AiError::DiagramHeld {
+                message: "Held.".into()
+            }),
+            msg(serde_json::json!({"kind":"diagramHeld","message":"Held."}))
+        );
     }
 
     /// A stored answer record keeps its error: every kind reads back as written.
@@ -377,6 +383,10 @@ mod tests {
             AiError::BadToolInput,
             AiError::ToolOff,
             AiError::BadFileName,
+            AiError::AttachmentGone,
+            AiError::DiagramHeld {
+                message: "The frame \"Orders\" was drawn from prod.".into(),
+            },
         ];
         for e in all {
             let v = serde_json::to_value(&e).unwrap();

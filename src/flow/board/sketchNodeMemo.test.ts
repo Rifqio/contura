@@ -1,14 +1,15 @@
-// Task 18b: a frame switch moves the sketch layer (the origin shift, Decision 21), so React Flow hands every sketch a
-// new place. A sketch draws from its data and selection alone: a new place draws nothing again, only the node moves.
+// Task 18b: a sketch draws from its data and selection alone: a new place on the board (a glide, a Section dragged
+// with its sketches) draws nothing again, only the node moves. Plan F Decision 11: a switch no longer moves the sketch
+// layer, which stays at the board's (0, 0); the place a node is handed is in board units.
 import type { NodeProps } from "@xyflow/react";
 import { expect, test } from "vitest";
-import FramePreview from "./FramePreview";
+import FramePicture from "./FramePicture";
 import { SketchNode } from "./SketchNode";
 
 const props = { id: "s", type: "sketch", data: { sketch: { id: "s" } }, selected: false, dragging: false, positionAbsoluteX: 0, positionAbsoluteY: 0, zIndex: 3000 } as unknown as NodeProps;
 type Memo = { compare: (a: NodeProps, b: NodeProps) => boolean };
 
-test("a_sketch_moved_by_the_origin_shift_draws_nothing_again", () => {
+test("a_sketch_moved_on_the_board_draws_nothing_again", () => {
   const same = (SketchNode as unknown as Memo).compare;
   expect(same(props, { ...props, positionAbsoluteX: 5200, positionAbsoluteY: -40 })).toBe(true);
   expect(same(props, { ...props, selected: true })).toBe(false);
@@ -24,8 +25,9 @@ test("an_icon_sketch_does_not_redraw_when_another_sketch_changes", () => {
   expect(same(a, { ...a, data: { sketch: { ...icon } } })).toBe(false);
 });
 
-test("a_preview_moved_by_the_origin_shift_draws_nothing_again", () => {
-  const same = (FramePreview as unknown as Memo).compare;
+test("a_picture_moved_on_the_board_draws_nothing_again", () => {
+  // Plan F Decision 7: a frame's picture draws from its data alone; a move or a switch hands it the same data.
+  const same = (FramePicture as unknown as Memo).compare;
   expect(same(props, { ...props, positionAbsoluteX: 5200 })).toBe(true);
   expect(same(props, { ...props, data: {} })).toBe(false);
 });

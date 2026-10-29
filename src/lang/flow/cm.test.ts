@@ -30,6 +30,7 @@ const ROLES = tagHighlighter([
   { tag: tags.punctuation, class: "punctuation" },
   { tag: tags.string, class: "string" },
   { tag: tags.comment, class: "comment" },
+  { tag: tags.number, class: "number" },
 ]);
 
 function roles(text: string): [string, string][] {
@@ -121,4 +122,20 @@ describe("completion options", () => {
     expect(r?.options.map((o) => o.label)).toEqual(["aws-s3", "Orders"]);
     expect(toCmCompletions({ from: 0, items: [] })).toBeNull();
   });
+});
+
+test("autonumber_is_a_keyword_only_where_the_parser_takes_it", () => {
+  const kw = (line: string, head = 'diagram sequence "A"') => roles(`${head}\n${line}\n`).some(([t, c]) => t === "autonumber" && c === "keyword");
+  for (const line of ["autonumber", "autonumber off", "autonumber 12 // x"]) expect(kw(line), line).toBe(true);
+  for (const line of ["autonumber -> B", "autonumber 010"]) expect(kw(line), line).toBe(false);
+  expect(kw("autonumber", 'diagram sequence "A"\nA -> B\n\ndiagram flow "F"')).toBe(false);
+  expect(roles('diagram sequence "A"\nautonumber 12\n').some(([t, c]) => t === "12" && c === "number")).toBe(true);
+});
+
+test("a column-0 line starting with diagram that is not a header keeps the sequence kind", () => {
+  for (const line of ["diagram cleanup", "diagram Server -> B"]) {
+    const rs = roles(`diagram sequence "A"\n${line}\nautonumber\n`);
+    expect(rs.filter(([t, c]) => t === "diagram" && c === "keyword"), line).toHaveLength(1);
+    expect(rs.some(([t, c]) => t === "autonumber" && c === "keyword"), line).toBe(true);
+  }
 });

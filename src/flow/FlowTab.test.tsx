@@ -170,7 +170,9 @@ test("opening_renders_text_and_canvas", async () => {
   }
   expect(s.container.querySelector('[aria-label="Group Payments"]')).not.toBeNull();
   const text = s.container.querySelector(".flow-pane-text") as HTMLElement;
-  expect(within(text).getByText("Data flow")).toBeTruthy();
+  // The pane title, in the Editor's panel: the Assistant's panel beside it is hidden, and its start screen has a
+  // "Data flow" card of its own (Plan D Task 18).
+  expect(within(within(text).getByRole("tabpanel")).getByText("Data flow")).toBeTruthy();
   expect(within(text).getByText("Saved")).toBeTruthy();
   expect(within(text).getByText("No problems")).toBeTruthy();
   expect(within(text).getByText("5 nodes, 5 flows")).toBeTruthy();
@@ -422,7 +424,8 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
     ["Colour", "", ""],
     ["More", "", "More"],
   ]);
-  expect(within(flow.container.querySelector(".flow-pane-text") as HTMLElement).getByText("Flowchart")).toBeTruthy();
+  // In the Editor's panel: the hidden Assistant panel's start screen has a "Flowchart" card too (Plan D Task 18).
+  expect(within(within(flow.container.querySelector(".flow-pane-text") as HTMLElement).getByRole("tabpanel")).getByText("Flowchart")).toBeTruthy();
   expect(within(flow.container.querySelector(".flow-pane-text") as HTMLElement).getByText("3 shapes, 2 lines")).toBeTruthy();
   cleanup();
 
@@ -450,7 +453,7 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
   ]);
   const cloudStrip = cloud.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
   expect(within(cloudStrip).getByRole("button", { name: "Icon credits" })).toBeTruthy();
-  expect(within(cloud.container.querySelector(".flow-pane-text") as HTMLElement).getByText("Cloud architecture")).toBeTruthy();
+  expect(within(within(cloud.container.querySelector(".flow-pane-text") as HTMLElement).getByRole("tabpanel")).getByText("Cloud architecture")).toBeTruthy();
   expect(within(cloud.container.querySelector(".flow-pane-text") as HTMLElement).getByText("2 services")).toBeTruthy();
   cloud.press("r");
   cloud.press("Enter");
@@ -942,8 +945,9 @@ test("item_19_cards_show_their_rows_and_fixed_kinds_are_laid_out_without_a_layou
   const seq = setup({ text: `${KIND_TEXTS.sequence}\n`, layout: null }, "k-seq");
   await waitFor(() => expect(seq.node("Participant App")).not.toBeNull(), { timeout: 4000 });
   // The frame and the lifelines are drawn; nothing is written to the layout file for a sequence.
-  expect(seq.container.querySelector('[aria-label="Frame loop retry"]')).not.toBeNull();
-  expect(seq.node("Participant App")!.querySelector(".fkind-lifeline")).not.toBeNull();
+  expect(seq.container.querySelector('[aria-label="Sequence frame loop retry"]')).not.toBeNull();
+  const lanes = [...seq.container.querySelectorAll(".react-flow__node")].find((e) => e.getAttribute("data-id") === "\u0000lanes");
+  expect(lanes?.querySelector('[data-part="lifeline"]')).not.toBeNull();
   // Closing the tab runs any waiting save at once, so an empty list here means none was ever due.
   seq.unmount();
   expect(seq.saves()).toEqual([]);

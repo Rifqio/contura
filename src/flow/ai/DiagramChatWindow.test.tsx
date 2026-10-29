@@ -8,7 +8,7 @@ import { routeInvoke } from "../../test/invoke";
 import { GROQ } from "../../test/settingsRoutes";
 import DiagramAssistant from "./DiagramAssistant";
 import { foldedOutcome } from "./proposal";
-import type { DiagramAsk } from "./useDiagramAsk";
+import type { BoardAsk } from "./useBoardAsk";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -41,7 +41,7 @@ const turn = (n: number, outcome: ToolOutcome | null = { accepted: 0, rejected: 
   },
 ];
 
-const fakeAi = (thread: AiThread | null): DiagramAsk =>
+const fakeAi = (thread: AiThread | null): BoardAsk =>
   ({
     place: "diagram:checkout",
     version: 1,
@@ -61,11 +61,19 @@ const fakeAi = (thread: AiThread | null): DiagramAsk =>
     removal: null,
     notSaved: null,
     clearFailure: () => {},
+    // Past chats (Task 15): none here.
+    threads: [],
+    newChat: () => {},
+    openThread: async () => {},
+    renameThread: async () => "",
+    deleteThread: async () => {},
+    clearThreads: async () => {},
+    chatError: null,
     send: async () => {},
     stop: () => {},
-  }) as unknown as DiagramAsk;
+  }) as unknown as BoardAsk;
 
-const panel = (ai: DiagramAsk) => <DiagramAssistant ai={ai} name="checkout" kind="dfd" selected={[]} mode="review" onMode={() => {}} onShowText={() => {}} onUndo={() => {}} />;
+const panel = (ai: BoardAsk) => <DiagramAssistant ai={ai} name="checkout" kind="dfd" selected={[]} mode="review" onMode={() => {}} onShowText={() => {}} onUndo={() => {}} />;
 const chatNodes = () => document.querySelector(".flow-chat")!.querySelectorAll("*").length;
 
 test("the_chat_dom_stays_bounded_across_50_asks", () => {

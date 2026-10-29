@@ -107,15 +107,15 @@ export function frameDraws(entry: FrameLayout | undefined, doc: FlowDoc): boolea
 
 /**
  * The publish input of a board as FlowTab holds it (R8): `frames` and `keys` are the pair FlowTab's `board` was built
- * from (`parsed.result.frames`, `parsed.keys`); `boxes`, `origin` and `frameIndex` come from that `board`; `live` is the
- * live frame's layout, folds and settings. Canvas boxes are converted to board units by `origin` (Decision 7).
+ * from (`parsed.result.frames`, `parsed.keys`); `boxes` and `frameIndex` come from that `board`; `live` is the
+ * live frame's layout, folds and settings. The canvas is in board units (Plan F Decision 11), so its boxes are taken
+ * as they are.
  */
 export function boardPublishInput(a: {
   frames: readonly FrameResult[];
   board: BoardLayout;
   keys: readonly string[];
   boxes: readonly FrameBox[];
-  origin: { x: number; y: number };
   frameIndex: number | null;
   live: { layout: FlowLayout; folded: ReadonlySet<string>; textScale: number; notation: ErNotation } | null;
   shapes: readonly string[];
@@ -146,7 +146,7 @@ export function boardPublishInput(a: {
     }
     const at = e?.at ?? { x: 0, y: 0 };
     const cb = boxOf.get(i);
-    const box: Box = cb ? { x: cb.x + a.origin.x, y: cb.y + a.origin.y, w: cb.w, h: cb.h } : { x: at.x, y: at.y, w: 0, h: 0 };
+    const box: Box = cb ? { x: cb.x, y: cb.y, w: cb.w, h: cb.h } : { x: at.x, y: at.y, w: 0, h: 0 };
     const out: PublishFrame = isLive
       ? { key, index: i, title: f.title, kind: doc.kind, at, box, doc, layout: a.live!.layout, textScale: a.live!.textScale, notation: a.live!.notation, folded: a.live!.folded, live: true }
       : {

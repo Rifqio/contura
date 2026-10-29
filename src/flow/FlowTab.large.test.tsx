@@ -1,5 +1,5 @@
 // A 2,000-node diagram stays responsive in the flow tab (spec 6+ section 9, the existing large.test.tsx pattern):
-// only what is visible is drawn, in fast mode, and canvas actions still answer quickly.
+// only what is visible is drawn, as real shapes, and canvas actions still answer quickly.
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
@@ -10,6 +10,7 @@ import { callsTo, routeInvoke } from "../test/invoke";
 import { mockEditorDom } from "../test/editor";
 import { fakeWorker } from "../test/langWorker";
 import { mockReactFlowDom } from "../test/reactFlow";
+import { LIVE_ANCHOR_ID, LIVE_ANCHOR_TYPE } from "./board/boardScene";
 import FlowTab from "./FlowTab";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -87,15 +88,18 @@ test("two_thousand_node_flow_tab_draws_only_what_is_visible_and_stays_responsive
     </div>,
   );
   await waitFor(() => expect(container.querySelectorAll(".react-flow__node").length).toBeGreaterThan(0), { timeout: 30000 });
-  // Every node is on the canvas's list, beside the frame's own box (Plan B Task 6); only the visible ones are in the
-  // page, drawn as name boxes.
-  const shapes = () => canvas.props!.nodes.filter((n) => n.type !== "boardFrame");
+  // Every node is on the canvas's list, beside the frame's own box (Plan B Task 6) and the zero-size live anchor the
+  // shapes hang from (Plan F Decision 11), neither a shape; only the visible ones are in the page, drawn as real shapes
+  // (Plan F Decision 1: a board is never fast and keeps its shapes at any count).
+  const shapes = () => canvas.props!.nodes.filter((n) => n.type !== "boardFrame" && n.id !== LIVE_ANCHOR_ID);
   await waitFor(() => expect(shapes().length).toBe(N), { timeout: 30000 });
-  expect(canvas.props!.nodes.length).toBe(N + 1);
-  const rendered = container.querySelectorAll(".react-flow__node:not(.react-flow__node-boardFrame)").length;
+  expect(canvas.props!.nodes.length).toBe(N + 2);
+  expect(shapes().every((n) => n.parentId === LIVE_ANCHOR_ID)).toBe(true);
+  const rendered = container.querySelectorAll(`.react-flow__node:not(.react-flow__node-boardFrame):not(.react-flow__node-${LIVE_ANCHOR_TYPE})`).length;
   expect(rendered).toBeLessThan(300);
-  expect(container.querySelector(".diagram-canvas.is-fast")).not.toBeNull();
-  expect(container.querySelectorAll(".fnode-box").length).toBe(rendered);
+  expect(container.querySelector(".diagram-canvas.is-fast")).toBeNull();
+  expect(container.querySelectorAll(".fnode-box").length).toBe(0);
+  expect(container.querySelectorAll(".fnode-dfd").length).toBe(rendered);
 
   // A move writes only the layout; an add goes through the worker and comes back as one line of text. The
   // timing budgets are the worker's gates in `npm run test:perf`: jsdom under a full parallel run is too noisy
@@ -111,6 +115,7 @@ test("two_thousand_node_flow_tab_draws_only_what_is_visible_and_stays_responsive
   await waitFor(() => expect(callsTo("write_diagram").length).toBeGreaterThan(0), { timeout: 15000 });
   // Still only the visible part is in the page.
   expect(container.querySelectorAll(".react-flow__node").length).toBeLessThan(300);
-  // The level of detail counts the live frame's shapes (2,001 after the add), never the frame's box.
-  await waitFor(() => expect(canvas.props!.detailCount).toBe(N + 1), { timeout: 15000 });
+  // The board's own level of detail (Plan F Decision 1): full at 2,001 shapes after the add.
+  await waitFor(() => expect(shapes().length).toBe(N + 1), { timeout: 15000 });
+  expect(canvas.props!.detailPolicy).toBe("board");
 });

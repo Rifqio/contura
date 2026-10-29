@@ -36,6 +36,10 @@ pub struct SqlColumn {
     pub name: String,
     pub type_name: String,
     pub pk: bool,
+    /// PostgreSQL: the labels of the column's enum type, in their sort order, for the
+    /// grid's enum picker. Empty for every other type and on the other Dialects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enum_values: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -49,4 +53,35 @@ pub struct SqlFk {
     /// The constraint's comment, where the server keeps one (PostgreSQL).
     #[serde(default)]
     pub comment: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enum_values_are_left_out_when_empty_and_default_when_missing() {
+        let plain = SqlColumn {
+            name: "id".into(),
+            type_name: "int4".into(),
+            pk: true,
+            enum_values: Vec::new(),
+        };
+        let json = serde_json::to_string(&plain).unwrap();
+        assert_eq!(json, r#"{"name":"id","typeName":"int4","pk":true}"#);
+        assert_eq!(serde_json::from_str::<SqlColumn>(&json).unwrap(), plain);
+
+        let mood = SqlColumn {
+            name: "mood".into(),
+            type_name: "mood".into(),
+            pk: false,
+            enum_values: vec!["sad".into(), "it's ok".into(), "a, b".into()],
+        };
+        let json = serde_json::to_string(&mood).unwrap();
+        assert!(
+            json.contains(r#""enumValues":["sad","it's ok","a, b"]"#),
+            "{json}"
+        );
+        assert_eq!(serde_json::from_str::<SqlColumn>(&json).unwrap(), mood);
+    }
 }

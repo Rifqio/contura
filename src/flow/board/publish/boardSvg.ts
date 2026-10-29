@@ -12,8 +12,8 @@ import { drawnColour } from "../../palette";
 import { FRAME_PAD, type Sketch, utf8Length } from "../boardLayout";
 import { FRAME_TAB_H, TAB_CHAR_W, TAB_GAP, TAB_ICON, TAB_PAD_X, TAB_PILL_H, TAB_TITLE_MAX } from "../boardScene";
 import { KIND_ICON } from "../chips";
-import { frameName } from "../FrameNode";
-import { headOf, NOTE_RX, OUTLINE, pathOf, RECT_RX, SECTION_DASH, SECTION_RX } from "../SketchNode";
+import { frameName } from "../frameName";
+import { headOf, NOTE_RX, OUTLINE, pathOf, RECT_RX, SECTION_DASH, SECTION_RX } from "../sketchGeometry";
 import { drawsUnder } from "../sketches";
 import { publishDrawn, type PublishNotes, type PublishSource } from "../../../diagram/export/source";
 import { type BoardPart, type BoardPublishInput, defaultPart, frameExtent, join, partContent, partEnabled, type PublishFrame, SECTION_TITLE_ABOVE, selectionRegion, tabWidth } from "./boardPublish";
@@ -348,7 +348,7 @@ export function* composeSteps(
     if (chrome) svg += chrome.tab;
     svg += "</g>";
     // Only a logo actually drawn names the filter (an unsafe URL draws nothing).
-    if (sceneOutlined(scene) && body.includes(filterRef)) outline();
+    if (sceneOutlined(scene, palette) && body.includes(filterRef)) outline();
     const e = sceneEdges(scene);
     for (const v of e.xs) xs.push(v + x);
     for (const v of e.ys) ys.push(v + y);

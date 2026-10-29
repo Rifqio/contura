@@ -7,7 +7,7 @@ import { setPlatformForTests } from "../../platform";
 import { callsTo } from "../../test/invoke";
 import { aiView, GROQ, modelInfo, modelList, renderWithProviders, settingsRoutes } from "../../test/settingsRoutes";
 import AboutSection from "./AboutSection";
-import { onThreadsCleared } from "../../assistant/threadsCleared";
+import { DIAGRAM_CHATS, onThreadsCleared } from "../../assistant/threadsCleared";
 import { SENDS_OPEN_KEY, saveSendsOpen } from "../../assistant/sendsFold";
 import AiSection, { AI_PAGE_ROWS, fetchedText } from "./AiSection";
 import AppearanceSection from "./AppearanceSection";
@@ -1064,13 +1064,16 @@ test("sync_select_follows_a_change_made_elsewhere_after_a_save", async () => {
 
 test("clear_ai_history_names_the_place_and_confirms", async () => {
   // A Group's own settings are open: the clear buttons stay, since they are not settings.
-  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ, groupOverride: true }), clear_ai_threads: () => undefined });
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ, groupOverride: true }), clear_ai_threads: () => undefined, ai_clear_diagram_chats: () => undefined });
   renderWithProviders(<AiSection groupId="g1" groupName="KFC" connections={[]} onConnectionSaved={() => {}} />);
+  // Boards belong to no Group: the hint and the question say every board's chats go with the place's threads.
+  expect(await screen.findByText("The stored Ask threads of KFC and every board's chats. Clear all AI data also removes every AI Context.")).toBeTruthy();
   await userEvent.click(await screen.findByRole("button", { name: "Clear AI history..." }));
-  expect(screen.getByText("Clear the AI history of KFC? Every thread in this place is removed.")).toBeTruthy();
+  expect(screen.getByText("Clear the AI history of KFC? Every thread in this place and every board's chats are removed.")).toBeTruthy();
   await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Cancel/ }));
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(callsTo("clear_ai_threads")).toHaveLength(0);
+  expect(callsTo("ai_clear_diagram_chats")).toHaveLength(0);
 
   const cleared: (string | null)[] = [];
   const off = onThreadsCleared((place) => cleared.push(place));
@@ -1078,16 +1081,38 @@ test("clear_ai_history_names_the_place_and_confirms", async () => {
   await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Clear" }));
   await waitFor(() => expect(callsTo("clear_ai_threads")).toEqual([{ place: "group:g1" }]));
   expect(screen.queryByRole("dialog")).toBeNull();
-  // An open Assistant panel of that place drops its threads.
-  await waitFor(() => expect(cleared).toEqual(["group:g1"]));
+  // The diagram chats the hint names go too (Plan D Task 15 fix round 1): boards belong to no Group, so every board's.
+  await waitFor(() => expect(callsTo("ai_clear_diagram_chats")).toHaveLength(1));
+  // An open Assistant panel of that place drops its threads, and every open board its chats.
+  await waitFor(() => expect(cleared).toEqual(["group:g1", DIAGRAM_CHATS]));
+  off();
+});
+
+test("a_failed_board_clear_still_drops_the_place_threads_and_says_why", async () => {
+  // The place's threads are gone in the Core: open panels drop them even when the boards' clear then fails.
+  settingsRoutes({
+    clear_ai_threads: () => undefined,
+    ai_clear_diagram_chats: () => {
+      throw { kind: "io", message: "the store is locked" };
+    },
+  });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  const cleared: (string | null)[] = [];
+  const off = onThreadsCleared((place) => cleared.push(place));
+  await userEvent.click(await screen.findByRole("button", { name: "Clear AI history..." }));
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Clear" }));
+  await waitFor(() => expect(callsTo("ai_clear_diagram_chats")).toHaveLength(1));
+  expect(await screen.findByRole("alert")).toBeTruthy();
+  expect(screen.getByRole("alert").textContent).toContain("the store is locked");
+  expect(cleared).toEqual(["ungrouped"]);
   off();
 });
 
 test("clear_ai_history_without_a_group_names_ungrouped", async () => {
-  settingsRoutes({ clear_ai_threads: () => undefined });
+  settingsRoutes({ clear_ai_threads: () => undefined, ai_clear_diagram_chats: () => undefined });
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
   await userEvent.click(await screen.findByRole("button", { name: "Clear AI history..." }));
-  expect(screen.getByText("Clear the AI history of Ungrouped? Every thread in this place is removed.")).toBeTruthy();
+  expect(screen.getByText("Clear the AI history of Ungrouped? Every thread in this place and every board's chats are removed.")).toBeTruthy();
   await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Clear" }));
   await waitFor(() => expect(callsTo("clear_ai_threads")).toEqual([{ place: "ungrouped" }]));
 });

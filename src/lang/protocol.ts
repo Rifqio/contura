@@ -2,7 +2,7 @@
 import type { DialectKind, SchemaModel } from "../api/types";
 import type { FlowResultWire } from "./flow/wire";
 import type { MermaidResult } from "../flow/mermaid";
-import type { FlowCompleteAnswer, FlowEditAnswer, FlowOutlineAnswer, FlowRequestOp, FlowSpansResult } from "./flow/service";
+import type { BoardOutlineAnswer, FlowCompleteAnswer, FlowEditAnswer, FlowOutlineAnswer, FlowRequestOp, FlowSpansResult } from "./flow/service";
 import type { LayoutRequest, Positions } from "../diagram/layout";
 import type { Range } from "./sql/analyze";
 import type { SqlCompletionResult } from "./sql/complete";
@@ -45,7 +45,7 @@ export type ParseResult = {
   ranges: Ranges;
 };
 
-export type { FlowBatchOp, FlowBoardOp, FlowCompleteAnswer, FlowEditAnswer, FlowOutlineAnswer, FlowRequestOp, FlowResult, FlowSpansResult, FrameResult } from "./flow/service";
+export type { BoardFrameProblem, BoardOutlineAnswer, BoardOutlineFrame, FlowBatchOp, FlowBoardOp, FlowCompleteAnswer, FlowEditAnswer, FlowOutlineAnswer, FlowRequestOp, FlowResult, FlowSpansResult, FrameResult } from "./flow/service";
 export type { FlowCompletionResult } from "./flow/complete";
 export type { FlowEditOp } from "./flow/edits";
 
@@ -92,6 +92,8 @@ export type ToWorker =
   | { type: "flowEdit"; id: number; docId: string; version: number; edit: FlowRequestOp; frameIndex?: number }
   /** The outline of frame `frameIndex` of the parse with `version`, for the diagram assistant; refused as stale when the text has changed. */
   | { type: "flowOutline"; id: number; docId: string; version: number; frameIndex?: number }
+  /** Every frame's outline and problems of the parse with `version`, for the board Ask (Plan D); refused as stale when the text has changed. */
+  | { type: "boardOutline"; id: number; docId: string; version: number }
   /** Completion at `pos` in a .flow text, in the frame holding `pos`. */
   | { type: "flowComplete"; id: number; docId: string; text: string; pos: number }
   /** Every icon name, for completion after `icon:`. */
@@ -109,6 +111,7 @@ export type FromWorker =
   | { type: "flowSpans"; ids: number[]; result: FlowSpansResult }
   | { type: "flowEdit"; ids: number[]; result: FlowEditAnswer }
   | { type: "flowOutline"; ids: number[]; result: FlowOutlineAnswer }
+  | { type: "boardOutline"; ids: number[]; result: BoardOutlineAnswer }
   | { type: "flowCompletion"; ids: number[]; result: FlowCompleteAnswer }
   | { type: "failed"; ids: number[]; message: string };
 

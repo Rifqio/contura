@@ -85,6 +85,22 @@ test("a_column_named_like_a_type_still_resolves_without_a_string", () => {
   expect(pg("SELECT day FROM sales.v_store_daily_sales WHERE day = DATE '2026-10-01'").problems.filter((p) => p.severity === "error")).toEqual([]);
 });
 
+/** MySQL's GROUP_CONCAT(... SEPARATOR ', ') takes SEPARATOR as a keyword before its string, never a column (owner, 29 Oct). */
+test.each([
+  "SELECT GROUP_CONCAT(DISTINCT status ORDER BY status SEPARATOR ', ') AS statuses FROM sales.orders",
+  "SELECT group_concat(status separator ';') FROM sales.orders",
+  "SELECT GROUP_CONCAT(status SEPARATOR '') FROM sales.orders GROUP BY store_id",
+])("group_concat_separator_is_not_a_column: %s", (sql) => {
+  expect(analyzeSql(sql, "mysql", KFC_SCHEMA).problems.filter((p) => p.severity === "error")).toEqual([]);
+});
+
+test("a_column_named_separator_is_still_checked_outside_group_concat", () => {
+  const msgs = (sql: string) => analyzeSql(sql, "mysql", KFC_SCHEMA).problems.map((p) => p.message);
+  expect(msgs("SELECT separator FROM sales.orders")).toContain("Unknown column separator.");
+  // Without a string after it, SEPARATOR inside GROUP_CONCAT is a name too.
+  expect(msgs("SELECT GROUP_CONCAT(separator) FROM sales.orders")).toContain("Unknown column separator.");
+});
+
 const slice = (text: string, r: { from: number; to: number } | null | undefined) => (r ? text.slice(r.from, r.to) : null);
 
 test("join_kinds_and_on_ranges_sit_on_each_reference", () => {

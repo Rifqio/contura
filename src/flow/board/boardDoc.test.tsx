@@ -1,6 +1,6 @@
 // Task 4: the whole .flow file is one CodeMirror document with one history, and `useFlowDoc` serves the selected
 // frame's doc, layout and ops as if it were the one diagram it knows (Decisions 8 to 12 and 21).
-import { redo, undo } from "@codemirror/commands";
+import { redo, undo, undoDepth } from "@codemirror/commands";
 import { Compartment, EditorSelection, EditorState, type Extension, StateEffect, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { act, renderHook, waitFor } from "@testing-library/react";
@@ -19,6 +19,7 @@ import { emptyPositions, parseFlowLayout, serializeFlowLayout } from "../layout"
 import { BOARD_NOTES } from "../../lang/flow/boardEdits";
 import type { FlowBoardOp } from "../../lang/flow/service";
 import { type FlowDocApi, frameEffect, goneMark, type HistoryMove, marksIn, type RunResult, useFlowDoc } from "../useFlowDoc";
+import { boardGateFields } from "../ai/boardInput";
 import { FRAME_GAP, frameBounds, LAYOUT_SAVE_MAX } from "./boardLayout";
 import { boardFrameId, createBoardScene, inFrameId } from "./boardScene";
 import { canvasEdit, frameView, showFrame, shownRange } from "./frameView";
@@ -450,9 +451,16 @@ test("rename_add_delete_and_duplicate_move_layout_with_text_in_one_undo", async 
   expect(entry(o, "Refund")?.at).toEqual({ x: 600, y: 0 });
   expect(entry(o, "Returns")).toBeUndefined();
   // Add, at a given place.
-  await op(() => o.doc().frameOp({ op: "addFrame", kind: "state", title: "Life" }, { x: 2000, y: 40 }));
+  let added: Added | undefined;
+  await op(async () => {
+    added = await o.doc().addFrames([{ text: 'diagram state "Life"\n' }], { x: 2000, y: 40 });
+  });
   expect(textOf(o)).toContain('diagram state "Life"');
-  expect(entry(o, "Life")?.at).toEqual({ x: 2000, y: 40 });
+  // Its drawn box is centred on the given place (decision 8).
+  const box = boxesOf(added!)[0];
+  expect(entry(o, "Life")?.at).toEqual({ x: box.x, y: box.y });
+  expect(box.x + box.w / 2).toBeCloseTo(2000, 6);
+  expect(box.y + box.h / 2).toBeCloseTo(40, 6);
   undoOnce(o);
   expect(textOf(o)).toBe(BOARD);
   expect(entry(o, "Life")).toBeUndefined();
@@ -795,6 +803,63 @@ test("undoing_a_setting_keeps_positions_placed_since", async () => {
   expect(entry(o, "Refund")?.nodes.Late).toEqual({ x: 40, y: 40 });
 });
 
+test("proposed_places_in_any_frame_stay_out_of_the_history_and_settle_per_frame", async () => {
+  // Plan D Task 8: a board review places proposed shapes in frames that are not selected; a decision drops the ones
+  // the text did not take, frame by frame, and never a shape the frame already had.
+  const o = await open(BOARD);
+  act(() => o.doc().select({ title: "Checkout", index: 0 }));
+  const depth = undoDepth(o.view.state);
+  act(() => o.doc().placeProposedIn("Refund", { Close: { x: 0, y: 240 }, Ask: { x: 99, y: 99 } }));
+  act(() => o.doc().placeProposedIn("Shipping", { Track: { x: 0, y: 240 } }));
+  expect(entry(o, "Refund")?.nodes.Close).toEqual({ x: 0, y: 240 });
+  // A kept place is not replaced.
+  expect(entry(o, "Refund")?.nodes.Ask).toEqual({ x: 0, y: 0 });
+  expect(entry(o, "Shipping")?.nodes.Track).toEqual({ x: 0, y: 240 });
+  // Nothing went into the history.
+  expect(undoDepth(o.view.state)).toBe(depth);
+  // Refund's change was rejected: Close goes, Ask stays; Shipping's waits.
+  act(() => o.doc().settleProposedIn("Refund", new Set(["Ask", "Refund it"])));
+  expect(entry(o, "Refund")?.nodes.Close).toBeUndefined();
+  expect(entry(o, "Refund")?.nodes.Ask).toEqual({ x: 0, y: 0 });
+  expect(entry(o, "Shipping")?.nodes.Track).toEqual({ x: 0, y: 240 });
+  // Shipping's was accepted: the text has Track, so it keeps its place.
+  act(() => o.doc().settleProposedIn("Shipping", new Set(["Pack", "Send", "Track"])));
+  expect(entry(o, "Shipping")?.nodes.Track).toEqual({ x: 0, y: 240 });
+});
+
+test("settling_the_selected_frame_settles_every_frame_with_proposed_places", async () => {
+  // Fix round 1: the single-frame settle also settles other frames' proposed places, each against its own text.
+  const o = await open(BOARD);
+  act(() => o.doc().select({ title: "Checkout", index: 0 }));
+  await settled(o);
+  act(() => o.doc().placeProposed({ Extra: { x: 0, y: 240 } }));
+  act(() => o.doc().placeProposedIn("Refund", { Close: { x: 0, y: 240 } }));
+  act(() => o.doc().settleProposed(new Set(["Cart", "Pay"])));
+  expect(entry(o, "Checkout")?.nodes.Extra).toBeUndefined();
+  expect(entry(o, "Refund")?.nodes.Close).toBeUndefined();
+  expect(entry(o, "Refund")?.nodes.Ask).toEqual({ x: 0, y: 0 });
+  expect(o.doc().proposedSize()).toBe(0);
+});
+
+test("proposed_places_of_a_deleted_or_retitled_frame_are_dropped", async () => {
+  const o = await open(BOARD);
+  act(() => o.doc().placeProposedIn("Refund", { Close: { x: 0, y: 240 } }));
+  act(() => o.doc().placeProposedIn("Shipping", { Track: { x: 0, y: 240 } }));
+  expect(o.doc().proposedSize()).toBe(2);
+  // Refund's text goes and Shipping is retitled: neither key names a frame any more.
+  const from = textOf(o).indexOf('diagram flow "Refund"');
+  const to = textOf(o).indexOf('diagram flow "Shipping"');
+  act(() => {
+    o.view.dispatch({ changes: { from, to }, userEvent: "delete" });
+  });
+  type(o, '"Shipping"', '"Shipped"');
+  await settled(o);
+  act(() => o.doc().placeProposedIn("Checkout", { Extra: { x: 0, y: 240 } }));
+  expect(o.doc().proposedSize()).toBe(1);
+  act(() => o.doc().settleProposedIn("Checkout", new Set(["Cart", "Pay"])));
+  expect(o.doc().proposedSize()).toBe(0);
+});
+
 test("moving_a_frame_block_above_another_keeps_both_entries", async () => {
   const o = await open(BOARD);
   // Refund's block moved above Checkout in one edit: the count is the same, the frames are not.
@@ -1001,8 +1066,16 @@ test("edit_sequences_never_cross_or_drop_entries", async () => {
       await settled(o);
       const n = splitFrames(textOf(o)).length;
       const r = rnd();
-      const op: FlowBoardOp =
-        r < 0.4 ? { op: "duplicateFrame", frameIndex: Math.floor(rnd() * n) } : r < 0.7 && n > 1 ? { op: "deleteFrame", frameIndex: Math.floor(rnd() * n) } : { op: "addFrame", kind: "flow", title: pick(TITLES) || "Delta" };
+      if (r >= 0.4 && !(r < 0.7 && n > 1)) {
+        // An add goes through `addFrames`, the one way a frame is added.
+        const title = pick(TITLES) || "Delta";
+        log.push(`addFrames ${JSON.stringify(title)}`);
+        await act(async () => {
+          await o.doc().addFrames([{ text: `diagram flow "${title}"\n` }], { x: 0, y: 0 });
+        });
+        return;
+      }
+      const op: FlowBoardOp = r < 0.4 ? { op: "duplicateFrame", frameIndex: Math.floor(rnd() * n) } : { op: "deleteFrame", frameIndex: Math.floor(rnd() * n) };
       log.push(`frameOp ${JSON.stringify(op)}`);
       let made: Awaited<ReturnType<FlowDocApi["frameOp"]>> = null;
       await act(async () => {
@@ -1919,4 +1992,262 @@ test("retyping_the_kind_word_keeps_the_frames_own_drawing_on_the_canvas", async 
       agrees(o);
     }
   }
+});
+
+// ----- Task 4b (A25): a frame From my database drew keeps its source in its entry, by title.
+
+const FROM_DB = { connectionId: "c1", database: "shop", schema: null };
+
+test("an_added_frame_keeps_its_source_and_a_rename_moves_it", async () => {
+  const o = await open(BOARD);
+  await settled(o);
+  let r: Added | undefined;
+  await act(async () => {
+    r = await o.doc().addFrames([{ text: SHOP[0], source: FROM_DB }, { text: SHOP[1] }], { x: 0, y: 0 });
+  });
+  expect(r && "titles" in r && r.titles).toEqual(["Orders ERD", "Checkout flow"]);
+  // The text is the frame's own; the source is in the entry only.
+  expect(textOf(o)).toBe(`${BOARD}\n${SHOP[0]}\n${SHOP[1]}`);
+  expect(entry(o, "Orders ERD")?.source).toEqual(FROM_DB);
+  expect(entry(o, "Checkout flow")?.source).toBeUndefined();
+  await settled(o);
+  await waitFor(() => expect(JSON.parse(disk.get("board")!.layout!).frames["Orders ERD"].source).toEqual(FROM_DB));
+  // A rename from the menu moves it with the entry.
+  await act(async () => {
+    await o.doc().frameOp({ op: "renameFrame", frameIndex: 3, title: "Shop ERD" });
+  });
+  expect(entry(o, "Shop ERD")?.source).toEqual(FROM_DB);
+  expect(entry(o, "Orders ERD")).toBeUndefined();
+  // So does a title typed by hand.
+  await settled(o);
+  type(o, '"Shop ERD"', '"Shop tables"');
+  await settled(o);
+  await waitFor(() => expect(entry(o, "Shop tables")?.source).toEqual(FROM_DB));
+  await waitFor(() => expect(JSON.parse(disk.get("board")!.layout!).frames["Shop tables"]?.source).toEqual(FROM_DB));
+  // Undo of the add takes the entry, source and all.
+  undoOnce(o);
+  undoOnce(o);
+  undoOnce(o);
+  expect(textOf(o)).toBe(BOARD);
+  for (const t of ["Orders ERD", "Shop ERD", "Shop tables"]) expect(entry(o, t)).toBeUndefined();
+});
+
+test("a_duplicate_keeps_the_source", async () => {
+  const o = await open(BOARD);
+  await settled(o);
+  await act(async () => {
+    await o.doc().addFrames([{ text: SHOP[0], source: FROM_DB }], { x: 0, y: 0 });
+  });
+  await settled(o);
+  let r: Awaited<ReturnType<FlowDocApi["frameOp"]>> = null;
+  await act(async () => {
+    r = await o.doc().frameOp({ op: "duplicateFrame", frameIndex: 3 });
+  });
+  expect(r).toMatchObject({ name: "Orders ERD 2" });
+  // The copy holds the same Connection's names, so it is gated the same way.
+  expect(entry(o, "Orders ERD 2")?.source).toEqual(FROM_DB);
+  expect(entry(o, "Orders ERD")?.source).toEqual(FROM_DB);
+});
+
+test("a_sourced_frame_titled_like_another_keeps_the_ask_held_after_a_reopen", async () => {
+  // Review minor 1: the From my database frame is retitled by hand to a title another frame has. The rename is
+  // refused for the entry (the title is taken), so the save keeps it under the old title; on reopen no frame owns that
+  // title. The source must still hold the Ask, never be dropped.
+  const o = await open(BOARD);
+  await settled(o);
+  await act(async () => {
+    await o.doc().addFrames([{ text: SHOP[0], source: FROM_DB }], { x: 0, y: 0 });
+  });
+  await settled(o);
+  type(o, '"Orders ERD"', '"Checkout"');
+  await settled(o);
+  await act(async () => {
+    await o.doc().flush();
+  });
+  const onDisk = disk.get("board")!;
+  expect(onDisk.text).toContain('diagram er "Checkout"');
+  unmounts.splice(0).forEach((u) => u());
+  const again = await open(onDisk.text, onDisk.layout);
+  await settled(again);
+  const fields = boardGateFields(again.doc().parsed!, again.doc().board, []);
+  expect(fields.sources?.map((s) => s.connectionId)).toContain("c1");
+  // And the next save keeps it.
+  type(again, "Ask\n", "Ask them\n");
+  await settled(again);
+  await act(async () => {
+    await again.doc().flush();
+  });
+  expect(disk.get("board")!.text).toContain("Ask them");
+  const saved = JSON.parse(disk.get("board")!.layout!) as { frames: Record<string, { source?: unknown }> };
+  expect(Object.values(saved.frames).some((e) => (e.source as { connectionId?: string } | undefined)?.connectionId === "c1")).toBe(true);
+});
+
+test("every_stray_source_stays_held_across_two_reopens", async () => {
+  // Two sourced frames, each retitled onto another frame's title: neither source may be dropped by a save.
+  const o = await open(BOARD);
+  await settled(o);
+  await act(async () => {
+    await o.doc().addFrames([{ text: SHOP[0], source: FROM_DB }], { x: 0, y: 0 });
+  });
+  await settled(o);
+  const other = 'diagram er "Ledger ERD"\nentries {\n  id int pk\n}\n';
+  await act(async () => {
+    await o.doc().addFrames([{ text: other, source: { connectionId: "c2", database: "ledger", schema: "public" } }], { x: 0, y: 0 });
+  });
+  await settled(o);
+  type(o, '"Orders ERD"', '"Checkout"');
+  await settled(o);
+  type(o, '"Ledger ERD"', '"Refund"');
+  await settled(o);
+  await act(async () => {
+    await o.doc().flush();
+  });
+  const heldIds = (x: Opened) => (boardGateFields(x.doc().parsed!, x.doc().board, []).sources ?? []).map((s) => s.connectionId).sort();
+  unmounts.splice(0).forEach((u) => u());
+  let f = disk.get("board")!;
+  const first = await open(f.text, f.layout);
+  await settled(first);
+  expect(heldIds(first)).toEqual(expect.arrayContaining(["c1", "c2"]));
+  // A save, then a reopen: both are still held.
+  type(first, "Ask\n", "Ask them\n");
+  await settled(first);
+  await act(async () => {
+    await first.doc().flush();
+  });
+  unmounts.splice(0).forEach((u) => u());
+  f = disk.get("board")!;
+  const second = await open(f.text, f.layout);
+  await settled(second);
+  expect(heldIds(second)).toEqual(expect.arrayContaining(["c1", "c2"]));
+});
+
+test("deleting_a_sourced_frame_lets_the_ask_go_and_undo_holds_it_again", async () => {
+  // A frame deleted in the app takes its source with it: nothing is left in `held`, so the board's Ask is not blocked
+  // with no way out. Undo brings the frame and its source back.
+  const ids = (x: Opened) => (boardGateFields(x.doc().parsed!, x.doc().board, []).sources ?? []).map((s) => s.connectionId);
+  const o = await open(BOARD);
+  await settled(o);
+  await act(async () => {
+    await o.doc().addFrames([{ text: SHOP[0], source: FROM_DB }], { x: 0, y: 0 });
+  });
+  await settled(o);
+  expect(ids(o)).toEqual(["c1"]);
+  await act(async () => {
+    await o.doc().frameOp({ op: "deleteFrame", frameIndex: 3 });
+  });
+  await settled(o);
+  expect(textOf(o)).toBe(BOARD);
+  expect(ids(o)).toEqual([]);
+  undoOnce(o);
+  await settled(o);
+  expect(ids(o)).toEqual(["c1"]);
+  // Deleted again and saved: the reopened board's Ask goes, and nothing is kept as held.
+  await act(async () => {
+    await o.doc().frameOp({ op: "deleteFrame", frameIndex: 3 });
+  });
+  await settled(o);
+  await act(async () => {
+    await o.doc().flush();
+  });
+  unmounts.splice(0).forEach((u) => u());
+  const f = disk.get("board")!;
+  expect(f.layout).not.toContain("c1");
+  const again = await open(f.text, f.layout);
+  await settled(again);
+  expect(ids(again)).toEqual([]);
+  expect(again.doc().board.held ?? []).toEqual([]);
+});
+
+// Plan D Task 9: a landing that adds frames is one undo entry, at the place the review previewed.
+const LANDED_TITLE = "Checkout flow";
+const LANDED_TEXT = SHOP[1];
+
+/** An edit appending `LANDED_TEXT` the way appendFrames writes it. */
+const appendEdit = (o: Opened) => ({ from: textOf(o).length, to: textOf(o).length, insert: `\n${LANDED_TEXT}` });
+
+test("land_board_is_one_undo_with_its_frames", async () => {
+  const layout = vi.spyOn(LangClient.prototype, "layout");
+  const o = await open(BOARD);
+  await settled(o);
+  const before = textOf(o);
+  const prepared = await act(() => o.doc().prepareFrames([{ text: LANDED_TEXT }], [LANDED_TITLE], { x: 400, y: 700 }));
+  const laidOut = layout.mock.calls.length;
+  let ok = false;
+  act(() => {
+    ok = o.doc().landBoard([{ from: 0, to: 0, insert: "// a\n" }, appendEdit(o)], o.doc().parsed!.result.version, prepared.entries);
+  });
+  expect(ok).toBe(true);
+  const previewed = prepared.entries[0].after;
+  const landed = () => o.doc().board.frames.get(LANDED_TITLE)!;
+  expect(landed().at).toEqual(previewed.at);
+  expect(landed().nodes).toEqual(previewed.nodes);
+  expect(landed().direction).toBe(previewed.direction);
+  const after = textOf(o);
+  expect(after).toBe(`// a\n${before}\n${LANDED_TEXT}`);
+  const depth = undoDepth(o.view.state);
+  undoOnce(o);
+  expect(textOf(o)).toBe(before);
+  expect(o.doc().board.frames.has(LANDED_TITLE)).toBe(false);
+  expect(undoDepth(o.view.state)).toBe(depth - 1);
+  act(() => void redo(o.view));
+  expect(textOf(o)).toBe(after);
+  expect(landed().at).toEqual(previewed.at);
+  expect(landed().direction).toBe(previewed.direction);
+  expect(Object.keys(previewed.nodes).length).toBeGreaterThan(0);
+  expect(landed().nodes).toEqual(previewed.nodes);
+  // No layout pass from the landing, the undo or the redo.
+  expect(layout.mock.calls.length).toBe(laidOut);
+  layout.mockRestore();
+});
+
+test("a_moved_version_lands_nothing", async () => {
+  const o = await open(BOARD);
+  await settled(o);
+  const version = o.doc().parsed!.result.version;
+  const prepared = await act(() => o.doc().prepareFrames([{ text: LANDED_TEXT }], [LANDED_TITLE], { x: 0, y: 0 }));
+  type(o, "Cart", "Basket");
+  const typed = textOf(o);
+  const depth = undoDepth(o.view.state);
+  expect(o.doc().landBoard([appendEdit(o)], version, prepared.entries)).toBe(false);
+  await settled(o);
+  expect(o.doc().landBoard([appendEdit(o)], version, prepared.entries)).toBe(false);
+  expect(textOf(o)).toBe(typed);
+  expect(o.doc().board.frames.has(LANDED_TITLE)).toBe(false);
+  expect(undoDepth(o.view.state)).toBe(depth);
+});
+
+test("prepare_frames_writes_nothing", async () => {
+  const o = await open(BOARD);
+  await settled(o);
+  const text = textOf(o);
+  const frames = new Map(o.doc().board.frames);
+  const depth = undoDepth(o.view.state);
+  const prepared = await act(() => o.doc().prepareFrames(SHOP.map((t) => ({ text: t })), SHOP_TITLES, { x: 0, y: 0 }));
+  expect(prepared.entries.map((e) => e.title)).toEqual(SHOP_TITLES);
+  expect(prepared.boxes).toHaveLength(3);
+  expect(textOf(o)).toBe(text);
+  expect(o.doc().board.frames).toEqual(frames);
+  expect(undoDepth(o.view.state)).toBe(depth);
+});
+
+test("prepare_frames_rejects_a_title_short_of_its_frames", async () => {
+  const o = await open(BOARD);
+  await settled(o);
+  await expect(o.doc().prepareFrames(SHOP.map((t) => ({ text: t })), SHOP_TITLES.slice(0, 2), { x: 0, y: 0 })).rejects.toThrow(/titles/);
+});
+
+test("a_frame_lands_where_it_was_previewed", async () => {
+  const o = await open(BOARD);
+  await settled(o);
+  const prepared = await act(() => o.doc().prepareFrames(SHOP.map((t) => ({ text: t })), SHOP_TITLES, { x: 500, y: 900 }));
+  const edits = [{ from: textOf(o).length, to: textOf(o).length, insert: `\n${SHOP.join("\n")}` }];
+  act(() => void o.doc().landBoard(edits, o.doc().parsed!.result.version, prepared.entries));
+  await settled(o);
+  SHOP_TITLES.forEach((t, i) => {
+    const e = entry(o, t)!;
+    expect(e.at).toEqual(prepared.entries[i].after.at);
+    expect(e.nodes).toEqual(prepared.entries[i].after.nodes);
+    expect(e.direction).toBe(prepared.entries[i].after.direction);
+    near(frameBounds(e, docAt(o, 3 + i), "modern"), prepared.boxes[i]);
+  });
 });

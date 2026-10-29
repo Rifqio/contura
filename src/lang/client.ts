@@ -3,6 +3,7 @@ import type { DialectKind } from "../api/types";
 import type { LayoutRequest, Positions } from "../diagram/layout";
 import type { MermaidResult } from "../flow/mermaid";
 import type {
+  BoardOutlineAnswer,
   Diagnostic,
   FlowCompleteAnswer,
   FlowEditAnswer,
@@ -205,6 +206,11 @@ export class LangClient {
   /** The outline of frame `frameIndex` of the parse with `version`, for the diagram assistant; `{ stale: true }` once the text has changed. */
   flowOutline(docId: string, version: number, frameIndex = 0): Promise<FlowOutlineAnswer> {
     return this.ask((id) => ({ type: "flowOutline", id, docId, version, frameIndex }));
+  }
+
+  /** Every frame's outline and problems of the parse with `version`, for the board Ask, in one request; `{ stale: true }` once the text has changed. */
+  boardOutline(docId: string, version: number): Promise<BoardOutlineAnswer> {
+    return this.ask((id) => ({ type: "boardOutline", id, docId, version }));
   }
 
   /** Completion at `pos` in a .flow text, worked out in the worker; `stale` asks the caller to ask once more. */

@@ -4,6 +4,8 @@ import { afterEach, expect, test, vi } from "vitest";
 import { flowScene } from "../../flow/flowScene";
 import { mixHex } from "../../lang/flow/colours";
 import { parseFlow } from "../../lang/flow/parse";
+import { seqFillAmount, seqLine, WASH } from "../../flow/seqColour";
+import tokensCss from "../../styles/tokens.css?raw";
 import { NODE_TOKENS, PALETTE_TOKENS } from "../types";
 import { exportPalette, type ExportPalette } from "./palette";
 import { sceneToSvg } from "./svg";
@@ -27,6 +29,8 @@ const BASE: ExportPalette = {
   strongBorder: "#131313",
   panel: "#141414",
   muted: "#151515",
+  faint: "#161616",
+  keyMark: "#171718",
   colours: {
     accent: { fill: "#a10000", stroke: "#a20000", text: "#030303" },
     info: { fill: "#a30000", stroke: "#a40000", text: "#030303" },
@@ -133,4 +137,40 @@ test("a_hex_group_line_and_arrowhead_publish_concrete_values", () => {
   expect(edge).toMatch(/data-marker="head"[^>]*fill="#3b82f6"/);
   expect(svg).not.toContain("color-mix");
   expect(svg).not.toContain("var(");
+});
+
+test("custom_colours_publish_the_adjusted_values", () => {
+  // Review Focus 2, in Publish: the real theme tokens, a white participant and a mid grey block.
+  style = document.createElement("style");
+  style.textContent = tokensCss;
+  document.head.appendChild(style);
+  const light = exportPalette("light");
+  const dark = exportPalette("dark");
+  const text = ['diagram sequence "Edges"', "participant Ghost [color: white]", "participant B", "opt grey [color: #808080] {", "  Ghost -> B: hi", "}"].join("\n");
+  const doc = parseFlow(text).doc!;
+  const scene = flowScene(doc, {}, "modern", new Map());
+  const ghost = (svg: string) => /<g data-node="Ghost">[^]*?<\/g>/.exec(svg)![0];
+  const attr = (svg: string, part: string, name: string) => new RegExp(`data-part="${part}"[^>]*\\s${name}="([^"]*)"`).exec(svg)![1];
+
+  // Light: white is too faint on the canvas, so its line is stepped toward the text colour.
+  const onLight = sceneToSvg(scene, light, opts);
+  const lineLight = seqLine("#ffffff", light.canvas, light.text);
+  expect(lineLight).not.toBe("#ffffff");
+  expect(attr(ghost(onLight), "lifeline", "stroke")).toBe(lineLight);
+  expect(attr(ghost(onLight), "lifehead", "stroke")).toBe(lineLight);
+  // The grey block's tab and its ink, and the opaque wash.
+  const block = /<g data-frame="0">[^]*?<\/g>/.exec(onLight)![0];
+  expect(attr(block, "tab", "fill")).toBe("#686868");
+  expect(/<text transform="rotate[^>]*fill="([^"]*)"/.exec(block)![1]).toBe("#fffbeb");
+  expect(attr(block, "wash", "fill")).toBe(mixHex(seqLine("#808080", light.canvas, light.text), light.canvas, WASH));
+
+  // Dark: white keeps its line, and its fill drops to the 0.24 tint so the name stays readable.
+  const onDark = sceneToSvg(scene, dark, opts);
+  const lineDark = seqLine("#ffffff", dark.canvas, dark.text);
+  expect(seqFillAmount(lineDark, dark.surface, dark.text)).toBe(0.24);
+  expect(attr(ghost(onDark), "lifehead", "fill")).toBe(mixHex(lineDark, dark.surface, 0.24));
+  for (const svg of [onLight, onDark]) {
+    expect(svg).not.toContain("var(");
+    expect(svg).not.toContain("color-mix");
+  }
 });

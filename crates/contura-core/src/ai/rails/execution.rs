@@ -405,6 +405,7 @@ mod tests {
                 kind: None,
                 id: None,
                 group: None,
+                frame: None,
             }]
         );
         let line = log.lines.last().unwrap();

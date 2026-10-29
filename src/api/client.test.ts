@@ -4,6 +4,7 @@ import {
   aiAskStream,
   aiCancel,
   aiClearAll,
+  aiClearDiagramChats,
   aiClearContext,
   aiContextChanged,
   aiContextStatus,
@@ -593,6 +594,8 @@ test("ai_context_commands_send_their_shapes", async () => {
   expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_clear_context", { connectionId: null });
   await aiClearAll();
   expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_clear_all", {});
+  await aiClearDiagramChats();
+  expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_clear_diagram_chats", {});
   await aiContextStatus("c1");
   expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_context_status", { connectionId: "c1" });
   await aiResync("c1", "shop", null);

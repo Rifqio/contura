@@ -248,6 +248,32 @@ describe("useCommandKeys", () => {
     expect(hidden).not.toHaveBeenCalled();
   });
 
+  test("with_focus_in_neither_a_preferred_owner_on_screen_wins_whatever_the_order", () => {
+    // Plan D Task 19: Ctrl+Shift+N with focus on the board canvas, the Ask panel and the board pane both on screen:
+    // the focused region wins, else the board pane (it says so with `preferWhenShown`), not the latest registered.
+    for (const boardFirst of [true, false]) {
+      const board = vi.fn();
+      const ask = vi.fn();
+      const boardPane = pane();
+      const askPane = pane();
+      focusIn(pane());
+      const mount = [
+        () => renderHook(() => useCommandKeys({ "tree.filter": board }, { region: { current: boardPane }, preferWhenShown: true })),
+        () => renderHook(() => useCommandKeys({ "tree.filter": ask }, { region: { current: askPane } })),
+      ];
+      const hooks = (boardFirst ? mount : [...mount].reverse()).map((m) => m());
+      filterKey();
+      expect(board, `board first: ${boardFirst}`).toHaveBeenCalledTimes(1);
+      expect(ask).not.toHaveBeenCalled();
+      // Focus in the Ask panel: it wins.
+      focusIn(askPane);
+      filterKey();
+      expect(ask).toHaveBeenCalledTimes(1);
+      expect(board).toHaveBeenCalledTimes(1);
+      for (const h of hooks) h.unmount();
+    }
+  });
+
   test("an_owner_in_a_hidden_pane_never_runs_and_the_key_is_still_kept_from_the_browser", () => {
     const hidden = vi.fn();
     const cover = pane();

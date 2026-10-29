@@ -190,6 +190,19 @@ test("diagram_assistant_keeps_its_message_box_in_view_on_a_short_window", () => 
   });
 });
 
+test("a_card_in_the_diagram_chat_keeps_its_content_height", () => {
+  // Live check L1 (WebKitGTK): the follow-up card was laid out 2 px high in the chat. The chat is a scrolling flex
+  // column, and a card's overflow: hidden drops its automatic minimum height to 0, so the card shrank to its borders
+  // and clipped the question, the reply box and the buttons. Nothing in the chat may shrink; the chat scrolls.
+  expect(ruleIn(flowTabCss, ".flow-chat")).toMatchObject({ display: "flex", "flex-direction": "column", "overflow-y": "auto" });
+  expect(ruleIn(flowTabCss, ".flow-chat > *")).toMatchObject({ flex: "none" });
+  expect(ruleIn(flowTabCss, ".ccard")).toMatchObject({ overflow: "hidden" });
+  // No height cap on the follow-up card either: it is as tall as its content.
+  const card = { ...ruleIn(flowTabCss, ".ccard"), ...ruleIn(flowTabCss, ".ccard.followup") };
+  expect(card.height).toBeUndefined();
+  expect(card["max-height"]).toBeUndefined();
+});
+
 test("visual_query_hints_drop_whole_in_a_narrow_pane", () => {
   expect(rule(".vq-hint-strip")).toMatchObject({ "flex-wrap": "wrap", height: "28px", overflow: "hidden" });
 });

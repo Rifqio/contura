@@ -477,3 +477,34 @@ test("a_late_resend_does_not_take_a_newer_version", async () => {
   expect(r2.version).toBe(r3.version);
   client.dispose();
 });
+
+test("the_board_outline_is_one_worker_request", async () => {
+  let handler: (m: ToWorker) => void = () => {};
+  const sent: string[] = [];
+  const client = new LangClient(() => {
+    const fake: WorkerLike = {
+      onmessage: null,
+      onerror: null,
+      postMessage: (m) => {
+        sent.push(m.type);
+        handler(m);
+      },
+      terminate: () => {},
+    };
+    handler = createHandler((m) => fake.onmessage?.({ data: m }), 0);
+    return fake;
+  });
+  const text = 'diagram flow "A"\nX\nY\n\ndiagram flow "B"\nP\nQ\nP > Q\n';
+  const r = await client.flow("b", text);
+  sent.length = 0;
+  const o = await client.boardOutline("b", r.version);
+  expect(sent).toEqual(["boardOutline"]);
+  if (o.stale) throw new Error("expected the board's outline");
+  expect(o.frames.map((f) => [f.title, f.outline.nodes.map((n) => [n.name, n.line])])).toEqual([
+    ["A", [["X", 2], ["Y", 3]]],
+    ["B", [["P", 6], ["Q", 7]]],
+  ]);
+  await client.flow("b", `${text}R\n`);
+  expect(await client.boardOutline("b", r.version)).toEqual({ stale: true });
+  client.dispose();
+});

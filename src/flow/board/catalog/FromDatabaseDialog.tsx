@@ -9,7 +9,9 @@ import SafetyTag from "../../../components/SafetyTag";
 import Select from "../../../components/Select";
 import Switch from "../../../components/Switch";
 import { useSchemaSource } from "../../../schema/useSchemaSource";
-import { parseFlowLayout, serializeFlowLayout } from "../../layout";
+import { frameHeaders } from "../../../lang/flow/board";
+import { parseFlowLayout } from "../../layout";
+import { type FrameSource, serializeBoardLayout } from "../boardLayout";
 import type { DatabaseAdd } from "../../FlowTab";
 import { writeFreeDiagram } from "../../writeFreeDiagram";
 import { databaseTitle, modelToErFrame } from "./fromDatabase";
@@ -25,8 +27,20 @@ interface Props {
 }
 
 /**
+ * The layout file of a new diagram From my database wrote: its one frame's entry with where it was read from (Task 4b),
+ * so the diagram Ask is gated at that Connection. Version 2, since version 1 has no place for a source.
+ */
+function newFileLayout(text: string, title: string, source: FrameSource): string {
+  const base = parseFlowLayout(null, "er");
+  const key = frameHeaders(text)[0]?.title ?? title;
+  const entry = { at: { x: 0, y: 0 }, nodes: base.nodes, style: base.style, direction: base.direction, source };
+  return serializeBoardLayout({ frames: new Map([[key, entry]]), sketches: [] }, new Set([key]), false, new Map());
+}
+
+/**
  * From my database: one schema's tables read into an ERD frame, or into a new diagram file. It only reads the
- * database. The Connection, Database and Schema pickers are the Schema Builder's start dialog's.
+ * database. The Connection, Database and Schema pickers are the Schema Builder's start dialog's. The frame records the
+ * Connection it was read from; a Connection at AI access Never gets a warning line, since an Ask about it is refused.
  */
 export default function FromDatabaseDialog({ connections, openIds, target, onBack, onClose }: Props) {
   const src = useSchemaSource(connections, openIds);
@@ -58,14 +72,15 @@ export default function FromDatabaseDialog({ connections, openIds, target, onBac
       if (!alive.current) return;
       const out = modelToErFrame(model, databaseTitle(connection.dialect, database, s));
       if ("refused" in out) return setError(out.refused);
+      const source: FrameSource = { connectionId: connection.id, database, schema: s };
       if (target.kind === "frame") {
-        const why = await target.add.run(out);
+        const why = await target.add.run(out, source);
         if (!alive.current) return;
         if (why !== null) return setError(why);
       } else {
         const taken = (await listDiagrams()).map((d) => d.name);
         if (!alive.current) return;
-        const name = await writeFreeDiagram(out.title, taken, () => out.text, serializeFlowLayout(parseFlowLayout(null, "er")));
+        const name = await writeFreeDiagram(out.title, taken, () => out.text, newFileLayout(out.text, out.title, source));
         if (!alive.current) return;
         target.onCreated(name);
         return;
@@ -119,6 +134,14 @@ export default function FromDatabaseDialog({ connections, openIds, target, onBac
                 <span className="model-label">Connection</span>
                 <Select label="Connection" value={src.connectionId} options={connectionOptions} onChange={src.setConnectionId} />
               </div>
+              {connection?.aiAccess === "never" && (
+                <div className="model-row">
+                  <span />
+                  <p className="field-hint" role="note">
+                    {`This Connection's AI access is Never. Asking the AI about ${target.kind === "frame" ? "a board with this frame" : "this diagram"} will be refused.`}
+                  </p>
+                </div>
+              )}
               {src.connectionId && src.databases === null && <p className="muted">Loading databases...</p>}
               {src.databases && (
                 <>

@@ -1,5 +1,7 @@
 //! AI assistant settings, the provider key and the chat threads.
 
+pub mod attachment;
+pub mod board;
 pub mod budget;
 pub mod compact;
 pub mod context;
@@ -348,6 +350,16 @@ pub enum AiError {
     /// The diagram's file name holds a control character: nothing is built or sent.
     #[error("the diagram's file name holds a control character")]
     BadFileName,
+    /// The diagram Ask names an attached file the Core no longer holds (sent by an Ask that
+    /// ended well, replaced by another pick, or removed): nothing is built or sent.
+    #[error("the attached file is no longer held")]
+    AttachmentGone,
+    /// A frame of the diagram was drawn from a Connection the AI may not see (AI access
+    /// Never, deleted, or another Group's provider), or a node links to a table of one:
+    /// nothing is built or sent, and the text is never cut to get around it (Task 4b).
+    /// `message` names the frame or node and the Connection, never the schema.
+    #[error("{message}")]
+    DiagramHeld { message: String },
 }
 
 /// The most `FileChanged.now_reads` keeps, in characters.
@@ -1280,6 +1292,32 @@ impl AiService {
         self.list_threads(place)
     }
 
+    /// The stored thread for a diagram Ask's history, slimmed to what `board_history` reads:
+    /// each message's text and stamp, and of its record only the tool use's proposal and
+    /// outcome and the Sent record's `sources` for the history gate (no sent text, thinking,
+    /// log, steps or tool input), so the copy the Ask keeps stays small. Never sent to the webview.
+    pub fn thread(&self, id: ThreadId) -> Result<Option<AiThread>> {
+        let thread = memory::store::thread(self.store()?.conn(), id)?;
+        Ok(thread.map(|mut t| {
+            for m in &mut t.messages {
+                m.asked_in = None;
+                m.record = m.record.take().map(|r| sent::AnswerRecord {
+                    tool_use: r.tool_use.map(|tu| sent::ToolUse {
+                        input: String::new(),
+                        ..tu
+                    }),
+                    // The history gate reads the Connections the answer drew on (Task 4b).
+                    sent: r.sent.map(|s| sent::SentRecord {
+                        sources: s.sources,
+                        ..sent::SentRecord::default()
+                    }),
+                    ..sent::AnswerRecord::default()
+                });
+            }
+            t
+        }))
+    }
+
     /// The thread with its Topics and compactions, every record trimmed.
     pub fn thread_view(&self, id: ThreadId) -> Result<Option<memory::ThreadView>> {
         let store = self.store()?;
@@ -1938,6 +1976,61 @@ impl AiService {
 
     pub fn clear_threads(&self, place: &str) -> Result<()> {
         self.store()?.clear_ai_threads(place)
+    }
+
+    /// Every board's chats (each `diagram:<name>` place), with their Topics, search rows and
+    /// tool-use rows: Settings' "Clear AI history" clears them with the place's Ask threads,
+    /// as its hint says, since boards belong to no Group.
+    pub fn clear_diagram_chats(&self) -> Result<()> {
+        let store = self.store()?;
+        for place in store.diagram_ai_places()? {
+            store.clear_ai_threads(&place)?;
+        }
+        Ok(())
+    }
+
+    /// A board's rename: the files move first, and only when that succeeds do the board's
+    /// chats follow (A14). A chat move that fails is logged, not returned: the files are
+    /// already renamed, and the command must not report a rename that happened as failed.
+    pub fn rename_board(&self, data_dir: &std::path::Path, from: &str, to: &str) -> Result<()> {
+        crate::diagrams::rename_diagram(data_dir, from, to)?;
+        let base = |n: &str| n.strip_suffix(".flow").unwrap_or(n).to_string();
+        let (from, to) = (
+            diagram::diagram_place(&base(from)),
+            diagram::diagram_place(&base(to)),
+        );
+        if let Err(e) = self.store().and_then(|s| s.move_ai_place(&from, &to)) {
+            eprintln!("ai: the chats of {from} did not follow the rename to {to}: {e}");
+        }
+        Ok(())
+    }
+
+    /// A deleted board's chats go with it, so a later board of the same name starts empty.
+    pub fn forget_board(&self, name: &str) -> Result<()> {
+        let base = name.strip_suffix(".flow").unwrap_or(name);
+        self.clear_threads(&diagram::diagram_place(base))
+    }
+
+    /// A board's delete: both files to the Recycle Bin, then its chats. It blocks while the
+    /// shell works, so the app calls it off the main thread.
+    pub fn delete_board(&self, data_dir: &std::path::Path, name: &str) -> Result<()> {
+        self.delete_board_with(data_dir, name, crate::diagrams::recycle)
+    }
+
+    /// `diagrams::delete_diagram_with`, then the board's chats; they stay when the files do.
+    /// Chats that cannot be cleared are logged, not returned: the board is gone, and the
+    /// command must not report a delete that happened as failed (as `rename_board`).
+    pub fn delete_board_with(
+        &self,
+        data_dir: &std::path::Path,
+        name: &str,
+        recycle: impl FnOnce(&[std::path::PathBuf]) -> Result<()>,
+    ) -> Result<()> {
+        crate::diagrams::delete_diagram_with(data_dir, name, recycle)?;
+        if let Err(e) = self.forget_board(name) {
+            eprintln!("ai: the chats of the deleted board {name} were not cleared: {e}");
+        }
+        Ok(())
     }
 
     /// Every thread of every place ("Clear all AI data").

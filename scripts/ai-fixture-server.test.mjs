@@ -194,3 +194,63 @@ test("oversize_body_is_413", async () => {
   const res = await fetch(`${base}/v1/chat/completions`, { method: "POST", body: "x".repeat(8 * 1024 * 1024 + 10) });
   expect(res.status).toBe(413);
 });
+
+const boardHeader = [
+  'Board: orders.flow, 3 diagrams, 0 sketch notes. Focus: "Refund".',
+  '"Checkout" (flow, 2 shapes, 1 line) [full]',
+  '"Refund" (flow, 2 shapes, 1 line) [focus]',
+  '"Archive" (flow, 1 shape, 0 lines) [left out: over the budget]',
+].join("\n");
+
+const boardBody = (model, tail = "File: orders.flow. base_hash: 7b2e91.\n\nQuestion: tidy the board") => ({
+  model,
+  stream: true,
+  messages: [
+    { role: "system", content: "sys" },
+    {
+      role: "user",
+      content: [
+        "<<contura:context id=x>>",
+        JSON.stringify({ source: "diagram", text: boardHeader }),
+        JSON.stringify({ source: "diagram", text: 'flow "Checkout"\nCart\nPay\nCart > Pay' }),
+        JSON.stringify({ source: "diagram", text: 'flow "Refund"\nPay back\nRefund\nPay back > Refund' }),
+        "<</contura:context id=x>>",
+        "",
+        tail,
+      ].join("\n"),
+    },
+  ],
+});
+
+test("fx_board_names_frames_from_the_header", async () => {
+  const base = await up();
+  const args = await diagramArgs(base, boardBody("fx-board"));
+  expect(args.file).toBe("orders");
+  expect(args.base_hash).toBe("7b2e91");
+  expect(args.ops).toEqual([
+    { add_node: { name: "Customs check", frame: "Checkout" } },
+    { add_node: { name: "Customs check", frame: "Refund" } },
+  ]);
+  // Four removals across the two frames sent with their shapes.
+  const removed = await diagramArgs(base, boardBody("fx-board-remove"));
+  expect(removed.ops).toEqual([
+    { remove_node: { target: "Cart", frame: "Checkout" } },
+    { remove_node: { target: "Pay", frame: "Checkout" } },
+    { remove_node: { target: "Pay back", frame: "Refund" } },
+    { remove_node: { target: "Refund", frame: "Refund" } },
+  ]);
+  // With no board header, fx-board still answers with no ops.
+  const plain = await diagramArgs(base, { ...diagramBody("diagram\nA\nB"), model: "fx-board" });
+  expect(plain.ops).toEqual([]);
+});
+
+test("fx_followup_asks_only_with_its_hash", async () => {
+  const base = await up();
+  const args = await diagramArgs(base, boardBody("fx-followup"));
+  expect(Object.keys(args).sort()).toEqual(["base_hash", "file", "follow_up"]);
+  expect(args.file).toBe("orders");
+  expect(args.base_hash).toBe("7b2e91");
+  expect(typeof args.follow_up.question).toBe("string");
+  expect(args.follow_up.question.length).toBeGreaterThan(0);
+  expect(args.follow_up.question.length).toBeLessThanOrEqual(300);
+});

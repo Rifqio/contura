@@ -175,6 +175,8 @@ const TWO_AT = JSON.stringify({
 async function pickFrame(s: ReturnType<typeof setup>, title: string, first = "customers") {
   // A repeated title has a tab of its own: the first is the frame's.
   fireEvent.click((await screen.findAllByRole("button", { name: `ER diagram ${title}` }))[0]);
+  // Live, not only drawn selected (Plan F Decision 12): its box holds no static shape any more.
+  await waitFor(() => expect(canvas.props!.nodes.some((n) => n.parentId === boardFrameId(title))).toBe(false));
   await waitFor(() => expect(s.card(first)).not.toBeNull());
 }
 
@@ -184,7 +186,7 @@ test("static_frames_subscribe_to_no_scroll", async () => {
   const s = setup([SHOP, SALES, SHOP].join("\n"), TWO_AT, "three");
   await waitFor(() => expect(canvas.instance).not.toBeNull());
   await pickFrame(s, "Shop");
-  // Fitted, the three frames are drawn below BOX_BELOW as previews with no card DOM: zoomed in, every card is drawn.
+  // Fitted, the static frames are pictures with no card DOM (Plan F Decision 7): zoomed in, every card is drawn.
   await act(async () => void (await canvas.instance!.setViewport({ x: 0, y: 0, zoom: 0.5 })));
   await waitFor(() => expect(s.cardOf(inFrameId("Sales", "customers"), "customers")).not.toBeNull());
   await waitFor(() => expect(s.cardOf(clashInFrameId(2, "customers"), "customers")).not.toBeNull());
@@ -315,4 +317,26 @@ test("move_and_prune_leave_no_old_entry", async () => {
   st.prune(new Set(["c"]));
   expect([st.get("b"), st.get("c")]).toEqual([0, 30]);
   expect(woke).toEqual(["b"]);
+});
+
+test("a_pinch_over_a_scrolling_card_zooms_the_board_and_leaves_its_rows", async () => {
+  // Plan F Task 8, Review Focus 2: Ctrl+wheel on the real 25-row card zooms the canvas around the pointer; the card's
+  // own scroll (native, no JS wheel handler) is cancelled by preventDefault, so its store entry stays.
+  const s = setup(LINKED, LINKED_AT);
+  await waitFor(() => expect(s.card("invoices")).not.toBeNull(), { timeout: 4000 });
+  await act(async () => void (await canvas.instance!.setViewport({ x: -700, y: 0, zoom: 1 })));
+  await waitFor(() => expect(s.card("invoices")).not.toBeNull());
+  s.scrollTo("invoices", 40);
+  await waitFor(() => expect(store().get("invoices")).toBe(40));
+  const root = s.container.querySelector(".diagram-canvas") as HTMLElement;
+  const rect = root.getBoundingClientRect();
+  const ev = new WheelEvent("wheel", { deltaY: 100, ctrlKey: true, clientX: rect.left + 300, clientY: rect.top + 200, bubbles: true, cancelable: true });
+  await act(async () => void s.body("invoices").dispatchEvent(ev));
+  const vp = canvas.instance!.getViewport();
+  expect(vp.zoom).toBeCloseTo(0.8187, 4);
+  // The flow point under the pointer (1,000 from the view at -700) stays under it.
+  expect((300 - vp.x) / vp.zoom).toBeCloseTo(1000, 2);
+  expect((200 - vp.y) / vp.zoom).toBeCloseTo(200, 2);
+  expect(ev.defaultPrevented).toBe(true);
+  expect(store().get("invoices")).toBe(40);
 });

@@ -65,13 +65,13 @@ function board(sketches: Sketch[] = []): BoardLayout {
 
 const parse = (text: string) => createFlowService().parse("board", text).frames;
 
-/** Each frame's canvas box (origin-relative), as `createBoardScene` gives them. */
-function boxes(frames: readonly FrameResult[], keys: readonly string[], b: BoardLayout, origin = { x: 0, y: 0 }): FrameBox[] {
+/** Each frame's box in board units, as `createBoardScene` gives them (Plan F Decision 11). */
+function boxes(frames: readonly FrameResult[], keys: readonly string[], b: BoardLayout): FrameBox[] {
   return frames.map((f, i) => {
     const key: string | undefined = keys[i];
     const at = (key === undefined ? undefined : b.frames.get(key)?.at) ?? { x: 0, y: 0 };
     const clash = key?.startsWith("\u0000#") ?? false;
-    return { key: clash || key === undefined ? null : key, index: i, title: f.title, kind: f.kind, x: at.x - origin.x, y: at.y - origin.y, w: 400, h: 300, problems: 0, clash };
+    return { key: clash || key === undefined ? null : key, index: i, title: f.title, kind: f.kind, x: at.x, y: at.y, w: 400, h: 300, problems: 0, clash };
   });
 }
 
@@ -81,13 +81,11 @@ function input(over: Partial<Parameters<typeof boardPublishInput>[0]> = {}): Boa
   const frames = over.frames ?? parse(TEXT);
   const keys = over.keys ?? KEYS;
   const b = over.board ?? board();
-  const origin = over.origin ?? { x: 0, y: 0 };
   return boardPublishInput({
     frames,
     board: b,
     keys,
-    boxes: over.boxes ?? boxes(frames, keys, b, origin),
-    origin,
+    boxes: over.boxes ?? boxes(frames, keys, b),
     frameIndex: over.frameIndex ?? null,
     live: over.live ?? null,
     shapes: over.shapes ?? [],
@@ -235,13 +233,13 @@ test("selection_takes_what_meets_its_region", () => {
 test("frames_are_placed_in_board_units", () => {
   const b = board();
   b.frames.set("Checkout", { ...b.frames.get("Checkout")!, at: { x: -400, y: 120 } });
-  const origin = { x: 200, y: 0 };
   const frames = parse(TEXT);
-  const bx = boxes(frames, KEYS, b, origin);
-  const i = input({ frames, board: b, boxes: bx, origin });
+  const bx = boxes(frames, KEYS, b);
+  // The canvas's boxes are board units already (Plan F Decision 11): taken as they are.
+  const i = input({ frames, board: b, boxes: bx });
   const f = i.frames.find((x) => x.title === "Checkout")!;
   expect(f.at).toEqual({ x: -400, y: 120 });
-  expect(f.box.x).toBe(bx[0].x + 200);
+  expect(f.box.x).toBe(bx[0].x);
   expect(f.box.y).toBe(bx[0].y);
   expect(f.box).toEqual({ x: -400, y: 120, w: 400, h: 300 });
 });

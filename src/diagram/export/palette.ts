@@ -26,6 +26,13 @@ export interface ExportPalette {
   panel: string;
   /** Quieter words: a board frame's tab title, a Section's title and an icon sketch's title (B4 R4). */
   muted: string;
+  /**
+   * The faint words token (`--c-text-faint`): a frame picture's soft text bars draw in it at 45 percent, as the canvas's
+   * far text does (flow-board.css, Plan F Decisions 2 and 7).
+   */
+  faint: string;
+  /** A far ER key row's mark (`--c-group-gold`, flow-board.css `--far-key`): a frame picture's far ER card draws it. */
+  keyMark: string;
   /** Step 11: the six palette colours (fill, border, words) a shape, group or line may take; uncoloured without them. */
   colours?: Record<keyof typeof PALETTE_TOKENS, { fill: string; stroke: string; text: string }>;
 }
@@ -63,6 +70,8 @@ export function exportPalette(theme: ExportTheme = "light"): ExportPalette {
       strongBorder: read("--c-border-strong"),
       panel: read("--c-bg-panel"),
       muted: read("--c-text-muted"),
+      faint: read("--c-text-faint"),
+      keyMark: read("--c-group-gold"),
       colours: Object.fromEntries(
         (Object.keys(PALETTE_TOKENS) as (keyof typeof PALETTE_TOKENS)[]).map((c) => [c, { fill: read(PALETTE_TOKENS[c].fill), stroke: read(PALETTE_TOKENS[c].stroke), text: read(PALETTE_TOKENS[c].text) }]),
       ) as NonNullable<ExportPalette["colours"]>,

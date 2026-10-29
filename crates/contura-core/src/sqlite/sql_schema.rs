@@ -51,6 +51,7 @@ pub(super) fn sql_schema(conn: &Connection, database: &str) -> Result<SqlSchema>
                         name: r.get(0)?,
                         type_name: r.get(1)?,
                         pk: r.get::<_, i64>(2)? > 0,
+                        enum_values: Vec::new(),
                     },
                     r.get::<_, i64>(2)?,
                 ))

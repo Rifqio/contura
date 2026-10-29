@@ -7,10 +7,10 @@ import { type BoardParse, type FrameParse, parseBoard, shiftEdits, shiftSpan, sp
 import { completeFlow, type FlowCompletionResult, kindItems } from "./complete";
 import type { TextEdit } from "../protocol";
 import { pasteLines } from "./clip";
-import { addFrame, appendFrames, deleteFrame, duplicateFrame, renameFrame } from "./boardEdits";
+import { appendFrames, deleteFrame, duplicateFrame, renameFrame } from "./boardEdits";
 import { applyFlowEdit, type FlowEditOp, type FlowEditResult } from "./edits";
 import { type DiagramKind, type FlowDoc, MAX_BOARD_SHAPES } from "./model";
-import { flowOutline } from "./outline";
+import { columnsOf, flowOutline } from "./outline";
 import type { FlowOutline } from "../../api/types";
 import { type FlowParse, type FlowSpan, parseFlow } from "./parse";
 import type { FlowProblem } from "./problems";
@@ -78,11 +78,10 @@ export type FlowPasteOp = { op: "paste"; text: string; under?: string; after?: s
 export type FlowInsertOp = { op: "insert"; text: string; at?: number };
 
 /**
- * A board's own edit: add, rename, duplicate or delete a frame, or append whole frames from text (the Shelf). It runs on
+ * A board's own edit: rename, duplicate or delete a frame, or append whole frames from text (the Shelf). It runs on
  * the whole text, so a request's `frameIndex` is ignored.
  */
 export type FlowBoardOp =
-  | { op: "addFrame"; kind: DiagramKind; title: string }
   | { op: "appendFrames"; frames: string[] }
   | { op: "renameFrame"; frameIndex: number; title: string }
   | { op: "deleteFrame"; frameIndex: number }
@@ -109,15 +108,20 @@ export function applyFlowBatch(text: string, parse: FlowParse, ops: readonly Flo
 }
 
 /**
- * Like `applyFlowBatch`, but each op is made from the parse of the text the steps before it left, so an op that
- * names a link by its index sees the right one. `opAt` returning null refuses the whole batch. The final text
- * comes back with the edit, so a caller that wants it need not apply the edit again.
+ * Like `applyFlowBatch`, but each op is made from the parse of the text the steps before it left (and that text), so
+ * an op that names a link by its index sees the right one. `opAt` returning null refuses the whole batch. The final
+ * text comes back with the edit, so a caller that wants it need not apply the edit again.
  */
-export function applyFlowSteps(text: string, parse: FlowParse, count: number, opAt: (parse: FlowParse, i: number) => FlowEditOp | null): FlowEditResult & { text?: string } {
+export function applyFlowSteps(
+  text: string,
+  parse: FlowParse,
+  count: number,
+  opAt: (parse: FlowParse, i: number, text: string) => FlowEditOp | null,
+): FlowEditResult & { text?: string } {
   let t = text;
   let p = parse;
   for (let i = 0; i < count; i++) {
-    const op = opAt(p, i);
+    const op = opAt(p, i, t);
     if (!op) return { edits: [] };
     const r = applyFlowEdit(t, p, op);
     // The refusing op's note says why, for the caller to show.
@@ -135,6 +139,50 @@ export function applyFlowSteps(text: string, parse: FlowParse, count: number, op
 
 /** The outline of the text of `version`, or `{ stale: true }` once the text has changed. */
 export type FlowOutlineAnswer = { stale: true } | { stale: false; outline: FlowOutline };
+
+/** A frame's problem for the board Ask: its line in the frame and its message. */
+export type BoardFrameProblem = { line: number; message: string };
+
+/**
+ * One frame of the board for the board Ask (Plan D Decision 1): its place in the text, its outline in file lines and
+ * its problems in frame lines (errors first, at most `BOARD_PROBLEMS_MAX`, each cut to `BOARD_PROBLEM_CHARS`).
+ */
+export type BoardOutlineFrame = {
+  index: number;
+  title: string;
+  kind: DiagramKind | null;
+  from: number;
+  to: number;
+  line: number;
+  outline: FlowOutline;
+  problems: BoardFrameProblem[];
+};
+
+/** Every frame's outline and problems of the text of `version`, or `{ stale: true }` once the text has changed. */
+export type BoardOutlineAnswer = { stale: true } | { stale: false; frames: BoardOutlineFrame[] };
+
+/** The most problems a frame sends with the board Ask, and the longest message (Decision 1; the Core caps them too). */
+export const BOARD_PROBLEMS_MAX = 10;
+export const BOARD_PROBLEM_CHARS = 200;
+
+/** `message` cut to BOARD_PROBLEM_CHARS characters, never inside a character. */
+function cutMessage(message: string): string {
+  // Characters (code points), as the Core counts them; the check and the cut both count them.
+  const chars = Array.from(message);
+  return chars.length <= BOARD_PROBLEM_CHARS ? message : chars.slice(0, BOARD_PROBLEM_CHARS).join("");
+}
+
+/** A frame's problems for the board Ask: errors before hints, each in text order, capped. */
+function frameProblems(problems: readonly FlowProblem[]): BoardFrameProblem[] {
+  const out: BoardFrameProblem[] = [];
+  for (const severity of ["error", "hint"] as const) {
+    for (const p of problems) {
+      if (out.length === BOARD_PROBLEMS_MAX) return out;
+      if (p.severity === severity) out.push({ line: p.line, message: cutMessage(p.message) });
+    }
+  }
+  return out;
+}
 
 /** Edits for a canvas action, or `{ stale: true }` when the text has changed since the version it was planned on. */
 export type FlowEditAnswer = { stale: true } | ({ stale: false } & FlowEditResult);
@@ -269,13 +317,6 @@ function rowSpan(parse: FlowParse, key: string): FlowSpan | null {
   return line ? { from: line.from, to: line.to } : null;
 }
 
-/** An ER table's column names, read off the parse's row spans (the parse's own resolution of the table). */
-function columnsOf(parse: FlowParse, text: string, table: string): string[] | null {
-  const kind = parse.kindOf(table);
-  if (kind !== "entity" && kind !== "weak") return null;
-  return parse.rowsOf(table).flatMap((r) => (r.column ? [text.slice(r.column.from, r.column.to)] : []));
-}
-
 const docIds = new WeakMap<FlowDoc, number>();
 let nextDocId = 1;
 /** One id per doc object for as long as it lives, so an unchanged frame's doc is the same id parse after parse. */
@@ -284,6 +325,20 @@ function idOf(doc: FlowDoc | null): number | null {
   let id = docIds.get(doc);
   if (id === undefined) docIds.set(doc, (id = nextDocId++));
   return id;
+}
+
+/** Frame `i`'s outline from the cached parse, read with its own text (ER columns), in file lines. */
+function frameOutline(c: Cached, i: number): FlowOutline {
+  const f = c.board.frames[i];
+  const o = flowOutline(f.parse, c.lasts[i], c.text.slice(f.from, f.to));
+  const by = f.line - 1;
+  if (by === 0) return o;
+  return {
+    ...o,
+    nodes: o.nodes.map((n) => ({ ...n, line: n.line + by })),
+    groups: o.groups.map((g) => ({ ...g, line: g.line + by })),
+    links: o.links.map((l) => ({ ...l, line: l.line + by })),
+  };
 }
 
 export function createFlowService() {
@@ -366,25 +421,27 @@ export function createFlowService() {
       if (!c) return { stale: true };
       const f = c.board.frames[frameIndex];
       if (!f) return { stale: false, outline: { kind: null, kinds: [], nodes: [], groups: [], links: [] } };
-      const o = flowOutline(f.parse, c.lasts[frameIndex]);
-      const by = f.line - 1;
-      if (by === 0) return { stale: false, outline: o };
-      return {
-        stale: false,
-        outline: {
-          ...o,
-          nodes: o.nodes.map((n) => ({ ...n, line: n.line + by })),
-          groups: o.groups.map((g) => ({ ...g, line: g.line + by })),
-          links: o.links.map((l) => ({ ...l, line: l.line + by })),
-        },
-      };
+      return { stale: false, outline: frameOutline(c, frameIndex) };
+    },
+
+    /**
+     * Every frame of the parse of `version` for the board Ask, in one answer: each frame's outline (read with its own
+     * text, so ER tables carry their columns) in file lines, and its problems in frame lines.
+     */
+    boardOutline(docId: string, version: number): BoardOutlineAnswer {
+      const c = current(docId, version);
+      if (!c) return { stale: true };
+      const frames = c.board.frames.map((f, i): BoardOutlineFrame => {
+        const p = f.parse;
+        return { index: f.index, title: p.title, kind: p.kind, from: f.from, to: f.to, line: f.line, outline: frameOutline(c, i), problems: frameProblems(p.problems) };
+      });
+      return { stale: false, frames };
     },
 
     /** Runs a canvas action on one frame of the text of `version`; works while that text has errors. */
     edit(docId: string, version: number, edit: FlowRequestOp, frameIndex = 0): FlowEditAnswer {
       const c = current(docId, version);
       if (!c) return { stale: true };
-      if (edit.op === "addFrame") return { stale: false, ...addFrame(c.text, c.board, edit.kind, edit.title) };
       if (edit.op === "appendFrames") return { stale: false, ...appendFrames(c.text, c.board, edit.frames) };
       if (edit.op === "renameFrame") return { stale: false, ...renameFrame(c.text, c.board, edit.frameIndex, edit.title) };
       if (edit.op === "deleteFrame") return { stale: false, ...deleteFrame(c.text, c.board, edit.frameIndex) };

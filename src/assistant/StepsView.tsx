@@ -17,10 +17,11 @@ export const STEP_LABEL: Record<StepKind, string> = {
   rows: "Rows",
   diagram: "Diagram",
   toolCheck: "Tool check",
+  boardContext: "Board context",
 };
 
 /** The first column of a row's evidence table. */
-const EVIDENCE_HEAD: Partial<Record<StepKind, string>> = { tables: "Table", rows: "Table", cleaning: "Where", outline: "Name", compact: "Call", toolCheck: "Change" };
+const EVIDENCE_HEAD: Partial<Record<StepKind, string>> = { tables: "Table", rows: "Table", cleaning: "Where", outline: "Name", compact: "Call", toolCheck: "Change", boardContext: "Diagram" };
 
 /** The Tool check row's evidence reads change, check and result (board 11.12). */
 const heads = (k: StepKind): [string, string, string] => (k === "toolCheck" ? ["Change", "Check", "Result"] : [EVIDENCE_HEAD[k] ?? "Item", "Rule", "Evidence"]);

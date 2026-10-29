@@ -18,6 +18,7 @@ import {
   parseBoardLayout,
   placeNewFrame,
   type Sketch,
+  adoptStraySources,
   serializeBoardLayout,
   utf8Length,
 } from "./boardLayout";
@@ -318,4 +319,146 @@ test("a_layout_of_1000_icon_sketches_with_long_names_stays_under_the_save_budget
   const text = serializeBoardLayout({ frames: new Map(), sketches }, new Set(), false, NO_KINDS);
   expect(utf8Length(text)).toBeLessThan(LAYOUT_SAVE_MAX);
   expect(parseBoardLayout(text, []).sketches).toHaveLength(1000);
+});
+
+// Task 4b (A25): where a frame From my database drew came from, kept in the layout file only.
+const SOURCE = { connectionId: "c1", database: "shop", schema: "public" };
+const sourced = (source: unknown): FrameLayout => ({ at: { x: 0, y: 0 }, nodes: {}, style: "modern", direction: "TB", textSize: "m", source } as FrameLayout);
+
+test("a_frame_source_round_trips_in_the_layout_file", () => {
+  const two = [...ONE, { title: "shop", kind: "er" as const }];
+  const b = parseBoardLayout(null, two);
+  b.frames.set("Checkout", { at: { x: 0, y: 0 }, nodes: {}, style: "modern", direction: "TB" });
+  b.frames.set("shop", sourced(SOURCE));
+  const text = serializeBoardLayout(b, live("Checkout", "shop"), false, NO_KINDS);
+  const out = JSON.parse(text);
+  expect(out.frames.shop.source).toEqual(SOURCE);
+  // Written after textSize, the last of the frame's settings.
+  expect(Object.keys(out.frames.shop)).toEqual(["at", "nodes", "style", "direction", "textSize", "source"]);
+  expect(out.frames.Checkout.source).toBeUndefined();
+  const back = parseBoardLayout(text, two);
+  expect(back.frames.get("shop")?.source).toEqual(SOURCE);
+  expect(back.frames.get("Checkout")?.source).toBeUndefined();
+  expect(serializeBoardLayout(back, live("Checkout", "shop"), false, NO_KINDS)).toBe(text);
+  // MySQL and SQLite have no schema.
+  const my = parseBoardLayout(JSON.stringify({ version: 2, frames: { shop: { at: { x: 0, y: 0 }, nodes: {}, source: { connectionId: "c1", database: "shop", schema: null } } }, sketches: [] }), two);
+  expect(my.frames.get("shop")?.source).toEqual({ connectionId: "c1", database: "shop", schema: null });
+});
+
+test("a_one_frame_file_with_a_source_is_version_2", () => {
+  const one = [{ title: "shop", kind: "er" as const }];
+  const b = parseBoardLayout(null, one);
+  b.frames.set("shop", { at: { x: 0, y: 0 }, nodes: {}, style: "modern", direction: "TB", source: SOURCE });
+  const text = serializeBoardLayout(b, live("shop"), false, NO_KINDS);
+  const out = JSON.parse(text);
+  expect(out.version).toBe(2);
+  expect(out.frames.shop.source).toEqual(SOURCE);
+  expect(parseBoardLayout(text, one).frames.get("shop")?.source).toEqual(SOURCE);
+});
+
+test("a_bad_source_reads_as_none", () => {
+  const two = [...ONE, { title: "shop", kind: "er" as const }];
+  for (const source of [
+    { connectionId: "", database: "shop", schema: null },
+    { connectionId: "c1", database: 7, schema: null },
+    { connectionId: "c1", database: "d".repeat(201), schema: null },
+    { connectionId: "c".repeat(201), database: "shop", schema: null },
+    { connectionId: "c1", database: "shop", schema: 3 },
+    { connectionId: "c1", database: "shop" },
+    "c1",
+    null,
+    [],
+  ]) {
+    const b = parseBoardLayout(JSON.stringify({ version: 2, frames: { shop: { at: { x: 5, y: 6 }, nodes: {}, source } }, sketches: [] }), two);
+    const e = b.frames.get("shop");
+    expect(e?.at).toEqual({ x: 5, y: 6 });
+    expect(e?.source).toBeUndefined();
+  }
+  // At the limit it still reads.
+  const ok = { connectionId: "c".repeat(200), database: "d".repeat(200), schema: "s" };
+  const b = parseBoardLayout(JSON.stringify({ version: 2, frames: { shop: { at: { x: 0, y: 0 }, nodes: {}, source: ok } }, sketches: [] }), two);
+  expect(b.frames.get("shop")?.source).toEqual(ok);
+});
+
+test("a_source_is_not_in_the_flow_text", async () => {
+  const { modelToErFrame } = await import("./catalog/fromDatabase");
+  const model = {
+    dialect: "postgres" as const,
+    tables: [{ schema: "public", name: "orders", alias: null, note: null, indexes: [], columns: [{ name: "id", typeName: "int", pk: true, increment: false, notNull: false, unique: false, default: null, note: null }] }],
+    refs: [],
+    enums: [],
+    skipped: [],
+  };
+  const frame = modelToErFrame(model, "public");
+  if ("refused" in frame) throw new Error(frame.refused);
+  // The frame's text is the language only: the Connection, database and schema are in the layout file.
+  expect(frame.text).not.toContain("c1");
+  expect(frame.text).not.toContain("connectionId");
+  const b = parseBoardLayout(null, [{ title: "public", kind: "er" }]);
+  b.frames.set("public", { at: { x: 0, y: 0 }, nodes: {}, style: "modern", direction: "TB", source: SOURCE });
+  expect(serializeBoardLayout(b, live("public"), false, NO_KINDS)).toContain('"connectionId": "c1"');
+});
+
+test("a_stray_source_goes_to_the_frames_sharing_a_title", () => {
+  // Review minor 1: an entry with a source that no frame owns, on a board where two frames share a title, is the
+  // frame retitled into the clash. Its source goes onto that title's entry: the Ask stays held, and the next save
+  // keeps it.
+  const heads = [
+    { title: "Checkout", kind: "flow" as const },
+    { title: "Checkout", kind: "er" as const },
+  ];
+  const b = parseBoardLayout(
+    JSON.stringify({
+      version: 2,
+      frames: { Checkout: { at: { x: 0, y: 0 }, nodes: {} }, "Orders ERD": { at: { x: 900, y: 0 }, nodes: {}, source: SOURCE } },
+      sketches: [],
+    }),
+    heads,
+  );
+  const out = adoptStraySources(b, heads);
+  expect(out.frames.get("Checkout")?.source).toEqual(SOURCE);
+  expect(out.frames.get("Checkout")?.at).toEqual({ x: 0, y: 0 });
+  expect(JSON.parse(serializeBoardLayout(out, live("Checkout"), false, NO_KINDS)).frames.Checkout.source).toEqual(SOURCE);
+  // A clash title with no entry gets one holding the source.
+  const bare = parseBoardLayout(JSON.stringify({ version: 2, frames: { "Orders ERD": { at: { x: 0, y: 0 }, nodes: {}, source: SOURCE } }, sketches: [] }), heads);
+  expect(adoptStraySources(bare, heads).frames.get("Checkout")?.source).toEqual(SOURCE);
+  // No clash: a stray entry is a frame deleted or a hand edit, and nothing is adopted.
+  const one = [{ title: "Checkout", kind: "flow" as const }];
+  expect(adoptStraySources(b, one)).toBe(b);
+  // A frame that owns its source keeps it; nothing stray, nothing changes.
+  const owned = parseBoardLayout(JSON.stringify({ version: 2, frames: { Checkout: { at: { x: 0, y: 0 }, nodes: {}, source: SOURCE } }, sketches: [] }), heads);
+  expect(adoptStraySources(owned, heads)).toBe(owned);
+});
+
+test("strays_past_the_shared_titles_are_kept_held", () => {
+  // Two stray sources, one shared title: the title takes the first, the second is kept on the board as held, written in
+  // the file and read back, never dropped.
+  const heads = [
+    { title: "Checkout", kind: "flow" as const },
+    { title: "Checkout", kind: "er" as const },
+  ];
+  const TWO = { connectionId: "c2", database: "ledger", schema: "public" };
+  const b = parseBoardLayout(
+    JSON.stringify({
+      version: 2,
+      frames: { Checkout: { at: { x: 0, y: 0 }, nodes: {} }, "Orders ERD": { at: { x: 0, y: 0 }, nodes: {}, source: SOURCE }, "Ledger ERD": { at: { x: 0, y: 0 }, nodes: {}, source: TWO } },
+      sketches: [],
+    }),
+    heads,
+  );
+  const out = adoptStraySources(b, heads);
+  expect(out.frames.get("Checkout")?.source).toEqual(SOURCE);
+  expect(out.held).toEqual([{ frame: "Ledger ERD", source: TWO }]);
+  const text = serializeBoardLayout(out, live("Checkout"), false, NO_KINDS);
+  const back = parseBoardLayout(text, heads);
+  expect(back.held).toEqual([{ frame: "Ledger ERD", source: TWO }]);
+  // Read again, nothing is lost or doubled.
+  expect(adoptStraySources(back, heads).held).toEqual([{ frame: "Ledger ERD", source: TWO }]);
+  // A one-frame file holding a held source is version 2.
+  const one = parseBoardLayout(null, [{ title: "A", kind: "flow" }]);
+  one.held = [{ frame: "Gone", source: TWO }];
+  expect(JSON.parse(serializeBoardLayout(one, live("A"), false, NO_KINDS)).version).toBe(2);
+  // A bad held item reads as none.
+  const bad = parseBoardLayout(JSON.stringify({ version: 2, frames: {}, sketches: [], held: [{ frame: "x", source: { connectionId: "" } }, "y", { frame: 3, source: TWO }] }), heads);
+  expect(bad.held ?? []).toEqual([]);
 });

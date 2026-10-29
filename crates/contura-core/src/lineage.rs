@@ -784,6 +784,67 @@ struct FrameScan {
     touches: HashMap<String, Touch>,
 }
 
+/// Every node with a `table:` in `text`, touched by a line or not, in text order: its frame's
+/// title (`None` when the text has one frame), its name and the value as written. A node
+/// written twice in a frame counts once, with its last value. Read line by line like
+/// `scan_flow`, with no full parse; the diagram Ask gates on it (Task 4b).
+pub fn flow_table_nodes(text: &str) -> Vec<(Option<String>, String, String)> {
+    flow_table_nodes_upto(text, usize::MAX).unwrap_or_default()
+}
+
+/// `flow_table_nodes`, but `None` as soon as more than `max` distinct nodes carry a
+/// `table:`, so a hostile file is not read to its end. Linear in the text.
+pub fn flow_table_nodes_upto(
+    text: &str,
+    max: usize,
+) -> Option<Vec<(Option<String>, String, String)>> {
+    let mut reader = BufReader::new(text.as_bytes().take(READ_MAX));
+    let mut buf = Vec::new();
+    let mut first = true;
+    let mut frames = 0;
+    let mut title = String::new();
+    let mut out: Vec<(Option<String>, String, String)> = Vec::new();
+    // The current frame's node name -> its index in `out`.
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    while let Some(fits) = read_flow_line(&mut reader, &mut buf) {
+        if !fits {
+            first = false;
+            continue;
+        }
+        let line = String::from_utf8_lossy(&buf);
+        if first && is_blank_or_comment(&line) {
+            continue;
+        }
+        if first || is_frame_header(&line) {
+            first = false;
+            frames += 1;
+            title = diagram_head(line.as_bytes()).1.unwrap_or_default();
+            seen.clear();
+            continue;
+        }
+        if let Some(Line::Node { name, attrs }) = parse_line(line.trim())
+            && let Some(table) = attrs.table
+        {
+            match seen.get(&name) {
+                Some(&i) => out[i].2 = table,
+                None => {
+                    if out.len() >= max {
+                        return None;
+                    }
+                    seen.insert(name.clone(), out.len());
+                    out.push((Some(title.clone()), name, table));
+                }
+            }
+        }
+    }
+    if frames <= 1 {
+        for l in &mut out {
+            l.0 = None;
+        }
+    }
+    Some(out)
+}
+
 /// The `table:` nodes of one `.flow` file and the arrows that meet them, frame by frame.
 pub(crate) fn scan_flow(reader: impl Read) -> FlowScan {
     let mut reader = BufReader::new(reader.take(READ_MAX));
@@ -1514,6 +1575,50 @@ mod tests {
         assert_eq!(
             pairs(&format!("{} > {}", side("A"), side("B"))).len(),
             MAX_FAN_LINKS
+        );
+    }
+
+    #[test]
+    fn table_nodes_upto_stops_at_the_cap_and_keeps_last_value() {
+        let big: String = (0..100_000)
+            .map(|i| format!("N{i} [table: t{i}]\n"))
+            .collect();
+        let start = std::time::Instant::now();
+        assert!(flow_table_nodes_upto(&big, 500).is_none());
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+        let dup = "A [table: a.x]\nA [table: a.y]\n";
+        assert_eq!(
+            flow_table_nodes_upto(dup, 1).unwrap(),
+            [(None, "A".to_string(), "a.y".to_string())]
+        );
+    }
+
+    #[test]
+    fn every_table_node_is_listed_touched_or_not() {
+        // A node no arrow touches is still a link to its table (Task 4b): the diagram Ask
+        // sends it whatever its lines are.
+        let one = "diagram flow \"Handover\"\n\
+                   Orders [table: shop.orders]\n\
+                   Plain\n\
+                   Steps {\n\
+                   \x20 Load [io, table: \"shop.stock\"]\n\
+                   }\n";
+        assert_eq!(
+            flow_table_nodes(one),
+            [
+                (None, "Orders".to_string(), "shop.orders".to_string()),
+                (None, "Load".to_string(), "shop.stock".to_string()),
+            ]
+        );
+        // On a board each names its frame, in text order.
+        let board =
+            "diagram flow \"A\"\nX [table: a.x]\n\ndiagram dfd \"B\"\nY [store, table: b.y]\n";
+        assert_eq!(
+            flow_table_nodes(board),
+            [
+                (Some("A".to_string()), "X".to_string(), "a.x".to_string()),
+                (Some("B".to_string()), "Y".to_string(), "b.y".to_string()),
+            ]
         );
     }
 }

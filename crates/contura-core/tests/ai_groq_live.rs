@@ -510,6 +510,7 @@ fn data_flow_outline() -> FlowOutline {
                 group: None,
                 line: i as u32 + 2,
                 table: false,
+                columns: None,
             })
             .collect(),
         groups: Vec::new(),
@@ -521,6 +522,8 @@ fn data_flow_outline() -> FlowOutline {
                 to: (*to).into(),
                 label: label.map(Into::into),
                 line: i as u32 + 8,
+                from_column: None,
+                to_column: None,
             })
             .collect(),
     }

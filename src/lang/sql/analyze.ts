@@ -40,6 +40,8 @@ export interface Cte {
   name: string;
   range: Range;
   block: Block | null;
+  /** The names in `WITH name (a, b) AS`, which rename the body's columns. */
+  cols?: string[];
 }
 
 export type JoinKind = "inner" | "left" | "right" | "full" | "cross" | "comma";
@@ -116,6 +118,8 @@ export interface Block {
   parent: Block | null;
   children: Block[];
   refs: TableRef[];
+  /** Names only a qualifier reaches: EXCLUDED in an upsert, MySQL's `VALUES (...) AS new` row alias. */
+  pseudo: TableRef[];
   columns: ResolvedColumn[];
   own: number[];
   depth: number;
@@ -332,6 +336,207 @@ function prepare(raw: Token[], kws: Set<string>, fns: Map<string, SqlFunction>):
 
 const TYPED_LITERAL = new Set(["DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ", "TIMETZ", "INTERVAL"]);
 
+/** Units after `INTERVAL n` (MySQL, standard SQL) and in TIMESTAMPDIFF; a column may be named DAY, so only there. */
+const INTERVAL_UNITS = new Set(
+  "MICROSECOND SECOND MINUTE HOUR DAY WEEK MONTH QUARTER YEAR SECOND_MICROSECOND MINUTE_MICROSECOND MINUTE_SECOND HOUR_MICROSECOND HOUR_SECOND HOUR_MINUTE DAY_MICROSECOND DAY_SECOND DAY_MINUTE DAY_HOUR YEAR_MONTH".split(" "),
+);
+/** Words of a window definition: OVER (...) and WINDOW w AS (...). */
+const FRAME_WORDS = new Set("PARTITION ORDER BY ROWS RANGE GROUPS BETWEEN UNBOUNDED PRECEDING FOLLOWING CURRENT ROW AND EXCLUDE TIES OTHERS NO".split(" "));
+/** What may follow SELECT before the first column. */
+const SELECT_MODIFIERS = new Set(
+  "ALL DISTINCT DISTINCTROW HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CACHE SQL_CALC_FOUND_ROWS".split(" "),
+);
+const AGAINST_WORDS = new Set("IN BOOLEAN NATURAL LANGUAGE MODE WITH QUERY EXPANSION".split(" "));
+const LOCK_WORDS = new Set("UPDATE SHARE NO KEY NOWAIT SKIP LOCKED OF".split(" "));
+const FETCH_WORDS = new Set("FIRST NEXT ROW ROWS ONLY WITH TIES PERCENT".split(" "));
+/** Keywords that end an expression, so a name after one is the item's alias: `CASE ... END total`. */
+const OPERAND_KW = new Set("END NULL TRUE FALSE CURRENT_DATE CURRENT_TIMESTAMP CURRENT_TIME LOCALTIME LOCALTIMESTAMP CURRENT_USER".split(" "));
+/** Columns every table has without listing them. */
+const IMPLICIT_COLUMNS: Record<DialectKind, Set<string>> = {
+  sqlite: new Set(["rowid", "_rowid_", "oid"]),
+  postgres: new Set(["ctid", "xmin", "xmax", "cmin", "cmax", "tableoid"]),
+  mysql: new Set(["_rowid"]),
+};
+/** Set-returning functions with one output column, named after the alias or the function. */
+const SCALAR_SRF = new Set([
+  "generate_series", "unnest", "generate_subscripts", "regexp_split_to_table", "json_array_elements", "jsonb_array_elements",
+  "json_array_elements_text", "jsonb_array_elements_text", "json_object_keys", "jsonb_object_keys",
+]);
+/** Table functions whose output columns are fixed. */
+const FUNCTION_COLUMNS: Record<DialectKind, Record<string, string[]>> = {
+  postgres: Object.fromEntries(["json_each", "jsonb_each", "json_each_text", "jsonb_each_text"].map((f) => [f, ["key", "value"]])),
+  sqlite: Object.fromEntries(["json_each", "json_tree"].map((f) => [f, ["key", "value", "type", "atom", "id", "parent", "fullkey", "path", "json", "root"]])),
+  mysql: {},
+};
+
+/**
+ * Context keywords: words a column may be named that are keywords only where they stand, such as SEPARATOR before
+ * a string inside GROUP_CONCAT, DAY after `INTERVAL n`, the type after CAST's AS, or a window frame's ROWS. Each is
+ * marked a keyword and skipped by the resolver; `hint` gets the tokens of index hints and the like, which follow a
+ * table name in FROM.
+ */
+function contextWords(T: Tk[], match: number[], d: DialectKind, skip: Set<number>, hint: Set<number>) {
+  const n = T.length;
+  const encl = new Array<number>(n).fill(-1);
+  const stack: number[] = [];
+  for (let i = 0; i < n; i++) {
+    encl[i] = stack.length ? stack[stack.length - 1] : -1;
+    if (T[i].v === "(") stack.push(i);
+    else if (T[i].v === ")") stack.pop();
+  }
+  const W = (i: number) => (T[i] && T[i].t === "w" && T[i - 1]?.v !== "." ? T[i].v.toUpperCase() : "");
+  const mark = (i: number) => {
+    const t = T[i];
+    if (!t || (t.t !== "w" && t.t !== "q")) return;
+    if (t.t === "w") t.kw = true;
+    skip.add(i);
+  };
+  const span = (a: number, b: number, asHint = false) => {
+    for (let k = a; k <= b && k < n; k++) {
+      mark(k);
+      if (asHint) hint.add(k);
+    }
+  };
+  const close = (o: number) => (match[o] > 0 ? match[o] : n - 1);
+  /** The function whose parentheses hold token i, lower case. */
+  const callOf = (i: number) => (encl[i] > 0 && T[encl[i] - 1].t === "w" ? lc(T[encl[i] - 1].v) : "");
+  const adj = (a: number, b: number) => !!T[a] && !!T[b] && T[a].e === T[b].s;
+  const str = (i: number) => T[i]?.t === "s";
+  /** The last token of the operand starting at k: a sign, then a literal, a name, a call or a parenthesised expression. */
+  const operandEnd = (k: number): number => {
+    if (T[k]?.v === "-" || T[k]?.v === "+") k++;
+    while (T[k]?.v === "@" && adj(k, k + 1)) k++;
+    const t = T[k];
+    if (!t) return -1;
+    if (t.v === "(") return close(k);
+    if (t.t === "n" || t.t === "s" || t.v === "?") return k;
+    if (t.v === "$" && T[k + 1]?.t === "n") return k + 1;
+    if (isW(t)) {
+      if (T[k + 1]?.v === "(") return close(k + 1);
+      while (T[k + 1]?.v === "." && isW(T[k + 2])) k += 2;
+      return k;
+    }
+    return -1;
+  };
+  const frame = (o: number) => {
+    for (let k = o + 1; k < close(o); k++) if (encl[k] === o && FRAME_WORDS.has(W(k))) mark(k);
+  };
+  for (let i = 0; i < n; i++) {
+    const t = T[i];
+    const u = W(i);
+    if (t.v === "(" && i > 0 && T[i - 1].t === "w") {
+      const f = lc(T[i - 1].v);
+      // TIMESTAMPDIFF(DAY, a, b), EXTRACT(YEAR FROM x): the unit is a keyword.
+      if ((f === "timestampdiff" || f === "timestampadd") && T[i + 1]?.t === "w" && T[i + 2]?.v === ",") mark(i + 1);
+      if (f === "extract" && T[i + 1]?.t === "w" && W(i + 2) === "FROM") mark(i + 1);
+      // CAST(x AS type), CONVERT(x USING charset), MySQL's CONVERT(x, type): the rest is the type.
+      if (f === "cast" || f === "try_cast" || f === "convert") {
+        const c = close(i);
+        for (let k = i + 1; k < c; k++) {
+          if (encl[k] !== i) continue;
+          const ku = W(k);
+          if ((ku === "AS" && f !== "convert") || (ku === "USING" && f === "convert") || (T[k].v === "," && f === "convert" && d === "mysql")) {
+            span(k + 1, c - 1);
+            break;
+          }
+        }
+      }
+      continue;
+    }
+    if (t.v === "::") {
+      // Multi-word types: double precision, character varying, timestamp with time zone.
+      const a = W(i + 1);
+      if (a === "DOUBLE" && W(i + 2) === "PRECISION") mark(i + 2);
+      if ((a === "CHARACTER" || a === "CHAR" || a === "BIT" || a === "NCHAR") && W(i + 2) === "VARYING") mark(i + 2);
+      if ((a === "TIMESTAMP" || a === "TIME") && (W(i + 2) === "WITH" || W(i + 2) === "WITHOUT") && W(i + 3) === "TIME" && W(i + 4) === "ZONE") span(i + 2, i + 4);
+      continue;
+    }
+    // Variables: MySQL's @x and @@session.x; SQLite's :name, @name and $name parameters.
+    if (t.t === "w" && i > 0 && adj(i - 1, i) && ((d === "mysql" && T[i - 1].v === "@") || (d === "sqlite" && ["@", ":", "$"].includes(T[i - 1].v)))) {
+      mark(i);
+      let k = i;
+      while (T[k + 1]?.v === "." && adj(k, k + 1) && T[k + 2]?.t === "w") {
+        mark(k + 2);
+        k += 2;
+      }
+      continue;
+    }
+    if (t.t !== "w") continue;
+    // Introducers and prefixed strings: _utf8mb4'x', N'x', X'1F', B'01', E'\n', U&'x'.
+    if (str(i + 1) && ((adj(i, i + 1) && /^[NXBE]$/i.test(t.v)) || (d === "mysql" && /^_[a-z0-9]+$/i.test(t.v)))) mark(i);
+    if (/^U$/i.test(t.v) && T[i + 1]?.v === "&" && adj(i, i + 1) && adj(i + 1, i + 2) && str(i + 2)) mark(i);
+    if (!u) continue;
+    if (u === "SEPARATOR" && str(i + 1) && callOf(i) === "group_concat") mark(i);
+    else if (u === "INTERVAL") {
+      // INTERVAL 1 DAY, INTERVAL '1:30' HOUR_MINUTE, INTERVAL '1' DAY TO SECOND.
+      const j = operandEnd(i + 1);
+      if (j >= 0 && INTERVAL_UNITS.has(W(j + 1))) {
+        mark(j + 1);
+        if (W(j + 2) === "TO" && INTERVAL_UNITS.has(W(j + 3))) span(j + 2, j + 3);
+      }
+    } else if (u === "COLLATE" && (T[i + 1]?.t === "w" || T[i + 1]?.t === "q")) span(i, i + 1);
+    else if (AGAINST_WORDS.has(u) && callOf(i) === "against") mark(i);
+    else if (u === "OVER" && T[i - 1]?.v === ")") {
+      mark(i);
+      if (T[i + 1]?.v === "(") frame(i + 1);
+      else if (T[i + 1]?.t === "w" || T[i + 1]?.t === "q") mark(i + 1);
+    } else if (u === "WINDOW" && isW(T[i + 1]) && W(i + 2) === "AS" && T[i + 3]?.v === "(") {
+      mark(i);
+      let k = i + 1;
+      while (isW(T[k]) && W(k + 1) === "AS" && T[k + 2]?.v === "(") {
+        span(k, k + 1);
+        frame(k + 2);
+        k = close(k + 2) + 1;
+        if (T[k]?.v !== ",") break;
+        k++;
+      }
+    } else if (u === "WITHIN" && W(i + 1) === "GROUP" && T[i + 2]?.v === "(") mark(i);
+    else if (u === "ROLLUP" && W(i - 1) === "WITH") mark(i);
+    else if (u === "GROUPING" && W(i + 1) === "SETS") span(i, i + 1);
+    else if (u === "NULLS" && (W(i + 1) === "FIRST" || W(i + 1) === "LAST")) span(i, i + 1);
+    else if (u === "FETCH" && (W(i + 1) === "FIRST" || W(i + 1) === "NEXT")) {
+      for (let k = i + 1; k < n && (FETCH_WORDS.has(W(k)) || T[k].t === "n" || T[k].v === "$" || T[k].v === "?"); k++) if (T[k].t === "w") mark(k);
+    } else if (u === "OFFSET") {
+      const j = operandEnd(i + 1);
+      if (j >= 0 && (W(j + 1) === "ROW" || W(j + 1) === "ROWS")) mark(j + 1);
+    } else if (u === "FOR" && ["UPDATE", "SHARE", "NO", "KEY"].includes(W(i + 1))) {
+      // FOR UPDATE, FOR NO KEY UPDATE OF t SKIP LOCKED, FOR SHARE NOWAIT.
+      mark(i);
+      let k = i + 1;
+      while (LOCK_WORDS.has(W(k))) {
+        const of = W(k) === "OF";
+        mark(k++);
+        if (of) for (; T[k] && !LOCK_WORDS.has(W(k)) && (isW(T[k]) || T[k].v === "," || T[k].v === "."); k++) mark(k);
+      }
+    } else if (u === "LOCK" && W(i + 1) === "IN" && W(i + 2) === "SHARE" && W(i + 3) === "MODE") span(i, i + 3);
+    else if (u === "SELECT") for (let k = i + 1; SELECT_MODIFIERS.has(W(k)); k++) mark(k);
+    else if (u === "OR" && (W(i - 1) === "INSERT" || W(i - 1) === "UPDATE")) mark(i + 1);
+    else if (u === "CONFLICT" && W(i - 1) === "ON") mark(i);
+    else if (u === "DO" && (W(i + 1) === "NOTHING" || (W(i + 1) === "UPDATE" && W(i + 2) === "SET"))) span(i, i + 1);
+    else if (u === "CONSTRAINT" && W(i - 1) === "ON" && W(i - 2) === "CONFLICT") span(i, i + 1);
+    else if (u === "AT" && W(i + 1) === "TIME" && W(i + 2) === "ZONE") span(i, i + 2);
+    else if (u === "AT" && W(i + 1) === "LOCAL") span(i, i + 1);
+    else if (u === "ESCAPE" && str(i + 1)) mark(i);
+    else if (u === "ORDINALITY" && W(i - 1) === "WITH") mark(i);
+    else if (u === "COLUMNS" && T[i + 1]?.v === "(" && callOf(i) === "json_table") span(i, close(i + 1));
+    else if ((u === "USE" || u === "FORCE" || u === "IGNORE") && (W(i + 1) === "INDEX" || W(i + 1) === "KEY")) {
+      // MySQL index hints: USE INDEX (a), FORCE KEY FOR JOIN (b), IGNORE INDEX FOR ORDER BY (c).
+      let k = i + 2;
+      if (W(k) === "FOR") {
+        k++;
+        if (W(k) === "JOIN") k++;
+        else if ((W(k) === "ORDER" || W(k) === "GROUP") && W(k + 1) === "BY") k += 2;
+      }
+      if (T[k]?.v === "(") span(i, close(k), true);
+    } else if (u === "PARTITION" && d === "mysql" && T[i + 1]?.v === "(") span(i, close(i + 1), true);
+    else if (u === "INDEXED" && W(i + 1) === "BY" && isW(T[i + 2])) span(i, i + 2, true);
+    else if (u === "INDEXED" && W(i - 1) === "NOT") {
+      hint.add(i - 1);
+      span(i, i, true);
+    }
+  }
+}
+
 let nextRefId = 0;
 
 export function analyzeSql(text: string, dialect: DialectKind, schema: SqlSchema | null): SqlAnalysis {
@@ -385,10 +590,12 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
   }
   for (const o of stack)
     prob({ from: T[o].s, to: T[o].e, severity: "error", kind: "syntax", message: "This ( is never closed.", fixes: [fix("Add the closing parenthesis", T[n - 1].e, T[n - 1].e, ")")] });
+  const hint = new Set<number>();
+  contextWords(T, match, A.dialect, skip, hint);
 
   // Blocks: the statement, plus one per parenthesised SELECT or WITH.
   const newBlock = (lo: number, hiIdx: number, open: number, close: number): Block => ({
-    open, close, lo, hi: hiIdx, parent: null, children: [], refs: [], columns: [], own: [], depth: 0, selAliases: new Set(), star: null, starQ: [], insertCols: [],
+    open, close, lo, hi: hiIdx, parent: null, children: [], refs: [], pseudo: [], columns: [], own: [], depth: 0, selAliases: new Set(), star: null, starQ: [], insertCols: [],
     select: [], clauses: [], distinct: false, orderBy: [],
   });
   const root = newBlock(0, n - 1, -1, -1);
@@ -424,13 +631,31 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
         if (!isW(nt) || isKW(nt)) break;
         skip.add(own[p]);
         p++;
+        // `WITH d (a, b) AS (...)`: the names rename the body's columns.
+        let cols: string[] | undefined;
+        if (W(p) && W(p).v === "(" && !blocks.some((b) => b.open === own[p])) {
+          const cl = match[own[p]];
+          if (cl < 0) break;
+          cols = [];
+          for (let k = own[p] + 1; k < cl; k++)
+            if (isW(T[k])) {
+              cols.push(idn(T[k]));
+              skip.add(k);
+            }
+          p = own.indexOf(cl) + 1;
+        }
         if (U(W(p)) === "AS") {
           skip.add(own[p]);
           p++;
         }
+        // PostgreSQL's AS [NOT] MATERIALIZED.
+        if (U(W(p)) === "NOT" && U(W(p + 1)) === "MATERIALIZED") {
+          skip.add(own[p]).add(own[p + 1]);
+          p += 2;
+        } else if (U(W(p)) === "MATERIALIZED") skip.add(own[p++]);
         if (!W(p) || W(p).v !== "(") break;
         const body = blocks.find((b) => b.open === own[p]) ?? null;
-        const cte: Cte = { name: idn(nt), range: { from: nt.s, to: nt.e }, block: body };
+        const cte: Cte = { name: idn(nt), range: { from: nt.s, to: nt.e }, block: body, ...(cols ? { cols } : {}) };
         S.ctes.push(cte);
         A.symbols.push({ from: nt.s, to: nt.e, kind: "cte-decl", cte });
         const cl = match[own[p]];
@@ -448,7 +673,7 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
   const findRef = (b: Block | null, q: string): TableRef | null => {
     q = lc(q);
     for (let x = b; x; x = x.parent) {
-      const r = x.refs.find((r) => r.alias && lc(r.alias) === q) ?? x.refs.find((r) => !r.alias && r.name && lc(r.name) === q);
+      const r = x.refs.find((r) => r.alias && lc(r.alias) === q) ?? x.refs.find((r) => !r.alias && r.name && lc(r.name) === q) ?? x.pseudo.find((r) => lc(r.alias ?? "") === q);
       if (r) return r;
     }
     return null;
@@ -469,7 +694,12 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
       const c = S.ctes.find((c) => lc(c.name) === lc(name));
       if (c) {
         A.symbols.push({ from: nameTok.s, to: nameTok.e, kind: "cte-ref", cte: c });
-        return { kind: "cte", schema: null, name: c.name, nameRange, cte: c, table: null, columns: (c.block?.columns ?? []).map((x) => ({ ...x, owner: c.name })) };
+        const blank = (name: string): ResolvedColumn => ({ name, typeName: "expr", owner: c.name, table: null, key: null, fk: null, def: null });
+        // A recursive CTE naming itself: its body's columns are not known yet, only its column list.
+        const self = c.block && T[c.block.open].s < nameTok.s && (c.block.close < 0 || nameTok.e <= T[c.block.close].s);
+        const body = (c.block?.columns ?? []).map((x) => ({ ...x, owner: c.name }));
+        const columns = self ? (c.cols?.map(blank) ?? null) : c.cols ? c.cols.map((nm, i) => ({ ...(body[i] ?? blank(nm)), name: nm })) : body;
+        return { kind: "cte", schema: null, name: c.name, nameRange, cte: c, table: null, columns };
       }
     }
     if (!schema) return { kind: "noSchema", schema: sch, name, nameRange, cte: null, table: null, columns: null };
@@ -500,18 +730,88 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
   function parseRefs(b: Block) {
     const own = b.own;
     const W = (p: number) => T[own[p]];
+    /** Parenthesis depth of each own token within the block: a FROM inside EXTRACT(... FROM x) is not a clause. */
+    const dep: number[] = [];
+    {
+      let d = 0;
+      for (let p = 0; p < own.length; p++) {
+        if (W(p).v === ")") d--;
+        dep.push(d);
+        if (W(p).v === "(") d++;
+      }
+    }
+    const blank = (name: string, owner: string): ResolvedColumn => ({ name, typeName: "expr", owner, table: null, key: null, fk: null, def: null });
+    /** The first name of each comma-separated item inside the parentheses at own index q, all of them skipped. */
+    const nameList = (q: number): string[] => {
+      const cl = match[own[q]];
+      const out: string[] = [];
+      let first = true;
+      let depth = 0;
+      for (let k = own[q] + 1; k < (cl < 0 ? n : cl); k++) {
+        const t = T[k];
+        if (t.v === "(") depth++;
+        else if (t.v === ")") depth--;
+        else if (depth === 0 && t.v === ",") first = true;
+        else if (isW(t)) {
+          skip.add(k);
+          if (depth === 0 && first) out.push(idn(t));
+          first = false;
+        }
+      }
+      return out;
+    };
+    /** JSON_TABLE's output columns: the first name of each COLUMNS item, NESTED PATH ones included. */
+    const jsonTableCols = (open: number, close: number): string[] => {
+      const out: string[] = [];
+      const walk = (o: number) => {
+        const c = match[o] < 0 ? n : match[o];
+        let first = true;
+        for (let k = o + 1; k < c; k++) {
+          const t = T[k];
+          if (t.v === "(") {
+            k = match[k] < 0 ? c : match[k];
+            continue;
+          }
+          if (t.v === ",") first = true;
+          else if (first && U(t) === "NESTED") {
+            first = false;
+            let j = k + 1;
+            while (j < c && !(U(T[j]) === "COLUMNS" && T[j + 1]?.v === "(")) j++;
+            if (j < c) {
+              walk(j + 1);
+              k = match[j + 1] < 0 ? c : match[j + 1];
+            }
+          } else if (first && isW(t)) {
+            out.push(idn(t));
+            first = false;
+          }
+        }
+      };
+      for (let k = open + 1; k < close; k++) if (U(T[k]) === "COLUMNS" && T[k + 1]?.v === "(") return walk(k + 1), out;
+      return out;
+    };
     function ref(q: number, target = false, join: { kind: JoinKind; natural: boolean; from: number } | null = null): number {
+      // `LATERAL (...)`, PostgreSQL's `ONLY t`.
+      while (isKW(W(q)) && (U(W(q)) === "LATERAL" || U(W(q)) === "ONLY")) skip.add(own[q++]);
       const t = W(q);
       if (!t) return q;
       let base: RefBase;
       let nameEnd: number;
+      /** A table function's name, lower case, and its parentheses. */
+      let fnCall: { name: string; open: number; close: number } | null = null;
       if (t.v === "(") {
         const child = blocks.find((c) => c.open === own[q]);
-        if (!child) return q + 1;
-        base = { kind: "subquery", schema: null, name: null, nameRange: null, cte: null, table: null, columns: child.columns };
-        const ci = child.close >= 0 ? own.indexOf(child.close) : -1;
-        nameEnd = child.close >= 0 ? T[child.close].e : T[n - 1].e;
+        const values = !child && U(W(q + 1)) === "VALUES";
+        if (!child && !values) return q + 1;
+        base = { kind: "subquery", schema: null, name: null, nameRange: null, cte: null, table: null, columns: child ? child.columns : null };
+        const cl = child ? child.close : match[own[q]];
+        const ci = cl >= 0 ? own.indexOf(cl) : -1;
+        nameEnd = cl >= 0 ? T[cl].e : T[n - 1].e;
         q = ci < 0 ? own.length : ci + 1;
+      } else if (isKW(t) && U(t) === "DUAL" && A.dialect === "mysql") {
+        // MySQL's `FROM DUAL` names no table.
+        skip.add(own[q]);
+        return q + 1;
       } else if (isW(t) && (!isKW(t) || !NOT_TABLE.has(U(t) ?? "") || ((U(t) === "ORDER" || U(t) === "GROUP") && U(W(q + 1)) !== "BY"))) {
         // `FROM order` is a mistyped table, not ORDER BY.
         t.kw = false;
@@ -530,10 +830,25 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
           skip.add(own[q]);
           q += 1;
         }
-        base = resolveTable(schemaTok, nameTok);
-        nameEnd = nameTok.e;
+        if (!target && W(q)?.v === "(") {
+          // A table function: generate_series(1, 9) AS g(n), json_each(x), JSON_TABLE(...).
+          const cl = match[own[q]];
+          fnCall = { name: lc(idn(nameTok)), open: own[q], close: cl < 0 ? n : cl };
+          base = { kind: "subquery", schema: schemaTok ? idn(schemaTok) : null, name: idn(nameTok), nameRange: { from: nameTok.s, to: nameTok.e }, cte: null, table: null, columns: null };
+          nameEnd = cl < 0 ? T[n - 1].e : T[cl].e;
+          q = cl < 0 ? own.length : own.indexOf(cl) + 1;
+        } else {
+          base = resolveTable(schemaTok, nameTok);
+          nameEnd = nameTok.e;
+        }
       } else return q;
       const r: TableRef = { ...base, id: ++nextRefId, alias: null, aliasRange: null, target, block: b, nameEnd, range: { from: t.s, to: nameEnd }, join: null, used: [] };
+      let ordinality = false;
+      if (fnCall && U(W(q)) === "WITH" && U(W(q + 1)) === "ORDINALITY") {
+        skip.add(own[q]).add(own[q + 1]);
+        q += 2;
+        ordinality = true;
+      }
       if (U(W(q)) === "AS") {
         skip.add(own[q]);
         q++;
@@ -547,6 +862,27 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
         A.symbols.push({ from: at.s, to: at.e, kind: "alias-decl", ref: r });
       }
       r.range.to = r.aliasRange?.to ?? nameEnd;
+      const owner = r.alias ?? r.name ?? "";
+      if (!target && r.alias && W(q)?.v === "(" && !blocks.some((c) => c.open === own[q])) {
+        // A column alias list: AS d(a, b), AS t(v, i), AS x(a int, b text).
+        const names = nameList(q);
+        const cl = match[own[q]];
+        q = cl < 0 ? own.length : own.indexOf(cl) + 1;
+        r.columns = r.columns ? r.columns.map((c, i) => (i < names.length ? { ...c, name: names[i], owner } : c)) : names.map((nm) => blank(nm, owner));
+        if (r.columns.length < names.length) r.columns.push(...names.slice(r.columns.length).map((nm) => blank(nm, owner)));
+      } else if (fnCall) {
+        const fixed = FUNCTION_COLUMNS[A.dialect][fnCall.name];
+        const names = fixed
+          ? fixed
+          : fnCall.name === "json_table"
+            ? jsonTableCols(fnCall.open, fnCall.close)
+            : SCALAR_SRF.has(fnCall.name)
+              ? [r.alias ?? fnCall.name, ...(ordinality ? ["ordinality"] : [])]
+              : null;
+        r.columns = names ? names.map((nm) => blank(nm, owner)) : null;
+      }
+      // Index hints, PARTITION (p0), INDEXED BY i: they follow the table, before its Join condition.
+      while (W(q) && hint.has(own[q])) q++;
       if (join) {
         let using: string[] | null = null;
         let on: Range | null = null;
@@ -580,16 +916,23 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
     let p = 0;
     /** Inside a SELECT's FROM list, where a comma after a Join's condition adds a table. */
     let inFrom = false;
+    let seenFrom = false;
     while (p < own.length) {
+      if (hint.has(own[p])) {
+        p++;
+        continue;
+      }
       const u = U(W(p));
       if (u && isKW(W(p)) && FROM_END.has(u)) inFrom = false;
-      if (u === "FROM") {
-        inFrom = own.slice(0, p).some((k) => U(T[k]) === "SELECT");
-        p = ref(p + 1, U(W(0)) === "DELETE");
+      // FROM at the block's top level, not in EXTRACT(x FROM y) or after IS DISTINCT; DELETE's USING list too.
+      if ((u === "FROM" && dep[p] === 0 && U(W(p - 1)) !== "DISTINCT") || (u === "USING" && dep[p] === 0 && U(W(0)) === "DELETE" && W(p + 1)?.v !== "(")) {
+        inFrom = u === "USING" || own.slice(0, p).some((k) => U(T[k]) === "SELECT");
+        seenFrom = true;
+        p = ref(p + 1, u === "FROM" && U(W(0)) === "DELETE");
         while (W(p) && W(p).v === ",") p = ref(p + 1, false, { kind: "comma", natural: false, from: W(p).s });
         continue;
       }
-      if (u === "JOIN") {
+      if (u === "JOIN" || (u === "STRAIGHT_JOIN" && seenFrom && isKW(W(p)) && !skip.has(own[p]))) {
         // The keyword run before JOIN: NATURAL, INNER, LEFT, RIGHT, FULL, OUTER, CROSS.
         let st = p;
         while (st > 0 && isKW(W(st - 1)) && JOIN_RUN.has(U(W(st - 1))!)) st--;
@@ -636,6 +979,29 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
       }
       p++;
     }
+    // An upsert's other row: EXCLUDED (PostgreSQL, SQLite), and MySQL's `VALUES (...) AS new [(a, b)]`.
+    const target = b.parent === null ? b.refs.find((r) => r.target && r.columns) : undefined;
+    const verb = U(W(0));
+    if (!target || (verb !== "INSERT" && verb !== "REPLACE")) return;
+    const pseudo = (alias: string, columns: ResolvedColumn[] | null) =>
+      b.pseudo.push({ ...target, id: ++nextRefId, alias, aliasRange: null, target: false, join: null, used: [], columns });
+    if (A.dialect !== "mysql" && own.some((k, p) => U(T[k]) === "CONFLICT" && U(W(p - 1)) === "ON")) pseudo("excluded", target.columns);
+    if (A.dialect !== "mysql") return;
+    const v = own.findIndex((k, p) => dep[p] === 0 && (U(T[k]) === "VALUES" || U(T[k]) === "VALUE"));
+    if (v < 0) return;
+    let q = v + 1;
+    while (W(q)) {
+      if (U(W(q)) === "ROW") q++;
+      if (W(q)?.v !== "(" || match[own[q]] < 0) break;
+      q = own.indexOf(match[own[q]]) + 1;
+      if (W(q)?.v !== ",") break;
+      q++;
+    }
+    if (U(W(q)) !== "AS" || !isW(W(q + 1))) return;
+    skip.add(own[q]).add(own[q + 1]);
+    const alias = idn(W(q + 1));
+    if (W(q + 2)?.v === "(") pseudo(alias, nameList(q + 2).map((nm) => blank(nm, alias)));
+    else pseudo(alias, target.columns);
   }
 
   function lookupCol(b: Block, qual: string | null, name: string): ResolvedColumn | null {
@@ -654,9 +1020,11 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
     b.columns = [];
     if (p < 0) return;
     p++;
-    if (U(W(p)) === "DISTINCT") {
-      b.distinct = true;
+    // DISTINCT, ALL, PostgreSQL's DISTINCT ON (...), MySQL's SQL_CALC_FOUND_ROWS and the like.
+    while (W(p) && isKW(W(p)) && SELECT_MODIFIERS.has(U(W(p))!)) {
+      if (U(W(p)) === "DISTINCT") b.distinct = true;
       p++;
+      if (U(W(p - 1)) === "DISTINCT" && U(W(p)) === "ON" && W(p + 1)?.v === "(" && match[own[p + 1]] > 0) p = own.indexOf(match[own[p + 1]]) + 1;
     }
     const items: number[][] = [];
     let cur: number[] = [];
@@ -708,7 +1076,13 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
         !isKW(tk[L - 1]) &&
         tk[L - 2].v !== "." &&
         tk[L - 2].v !== "::" &&
-        (tk[L - 2].v === ")" || tk[L - 2].t === "n" || tk[L - 2].t === "s")
+        // After the end of an expression: `count(*) n`, `o.total amount`, `CASE ... END st`.
+        (tk[L - 2].v === ")" ||
+          tk[L - 2].v === "]" ||
+          tk[L - 2].t === "n" ||
+          tk[L - 2].t === "s" ||
+          (isW(tk[L - 2]) && !isKW(tk[L - 2]) && !tk[L - 2].fn) ||
+          (isKW(tk[L - 2]) && OPERAND_KW.has(U(tk[L - 2])!)))
       ) {
         nameTok = tk[L - 1];
         name = idn(nameTok);
@@ -772,7 +1146,7 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
       const t = W(p);
       if (t.v === "(") depth++;
       else if (t.v === ")") depth--;
-      if (depth !== 0 || !isKW(t)) continue;
+      if (depth !== 0 || !isKW(t) || hint.has(own[p])) continue;
       const u = U(t)!;
       if (!CLAUSE_END.has(u) || JOIN_RUN.has(u) || u === "JOIN") continue;
       if (u === "OFFSET" && open?.keyword === "LIMIT") continue;
@@ -842,6 +1216,33 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
     const refs = chainRefs(b);
     const aliasesAll = new Set<string>();
     for (let x: Block | null = b; x; x = x.parent) x.selAliases.forEach((a) => aliasesAll.add(a));
+    const implicit = IMPLICIT_COLUMNS[A.dialect];
+    // UNION, INTERSECT and EXCEPT split the block: a name sees only its own branch's tables.
+    const cuts: number[] = [];
+    {
+      let d = 0;
+      for (const k of own) {
+        if (T[k].v === "(") d++;
+        else if (T[k].v === ")") d--;
+        else if (d === 0 && isKW(T[k]) && ["UNION", "INTERSECT", "EXCEPT"].includes(U(T[k])!)) cuts.push(T[k].s);
+      }
+    }
+    const branch = (pos: number) => cuts.filter((c) => c < pos).length;
+    /** Output columns a bare name in ORDER BY (and MySQL's or SQLite's GROUP BY and HAVING) may mean. */
+    const byOutput = (pos: number, nm: string) =>
+      b.columns.some((c) => lc(c.name) === nm) &&
+      b.clauses.some((c) => c.range.from <= pos && pos <= c.range.to && (c.keyword === "ORDER BY" || (A.dialect !== "postgres" && (c.keyword === "GROUP BY" || c.keyword === "HAVING"))));
+    /** Whether every ref in `list` holds `nm` as one column merged by JOIN ... USING or NATURAL JOIN. */
+    const merged = (list: TableRef[], nm: string) => {
+      const has = (r: TableRef) => !!r.columns?.some((c) => lc(c.name) === nm);
+      const joined = new Set<TableRef>();
+      for (const r of list) {
+        if (!r.join) continue;
+        const left = r.block.refs.slice(0, r.block.refs.indexOf(r)).filter(has);
+        if (r.join.using?.some((u) => lc(u) === nm) || (r.join.natural && left.length)) [r, ...left].forEach((x) => joined.add(x));
+      }
+      return list.every((r) => joined.has(r));
+    };
     for (let p = 0; p < own.length; p++) {
       const k = own[p];
       const t = T[k];
@@ -853,6 +1254,14 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
       const prev = W(p - 1);
       const next = W(p + 1);
       if (prev && (prev.v === "." || prev.v === "::")) continue;
+      // A call of a function the Dialect's list does not hold: IF(...), percentile_cont(...), my_fn(...).
+      if (next && next.v === "(") continue;
+      if (next && next.v === "." && isW(W(p + 2)) && W(p + 3)?.v === "(") {
+        // A schema-qualified call: pg_catalog.now(), util.my_fn(x).
+        skip.add(own[p + 2]);
+        p += 1;
+        continue;
+      }
       if (next && next.v === ".") {
         const ct = W(p + 2);
         S.uses.add(lc(idn(t)));
@@ -870,7 +1279,8 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
             if (c) {
               A.symbols.push({ from: ct.s, to: ct.e, kind: "column", column: c, ref: r });
               use(b, t.s, ct.e, r, c.name);
-            } else {
+            } else if (r.kind === "table" && implicit.has(lc(idn(ct)))) use(b, t.s, ct.e, r, idn(ct));
+            else {
               const sug = closest(idn(ct), r.columns.map((c) => c.name));
               prob({
                 from: ct.s,
@@ -891,15 +1301,18 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
       const nm = lc(idn(t));
       if (aliasesAll.has(nm)) continue;
       if (S.ctes.some((c) => lc(c.name) === nm) || refs.some((r) => r.alias && lc(r.alias) === nm)) continue;
-      const cands = refs.filter((r) => r.columns?.some((c) => lc(c.name) === nm));
+      const seen = refs.filter((r) => r.block !== b || branch(r.range.from) === branch(t.s));
+      const cands = seen.filter((r) => r.columns?.some((c) => lc(c.name) === nm));
       const inner = cands.filter((r) => b.refs.includes(r));
-      const list = inner.length ? inner : cands;
+      let list = inner.length ? inner : cands;
+      if (list.length > 1 && merged(list, nm)) list = [list[0]];
       if (list.length === 1) {
         const c = list[0].columns!.find((c) => lc(c.name) === nm)!;
         A.symbols.push({ from: t.s, to: t.e, kind: "column", column: c, ref: list[0] });
         use(b, t.s, t.e, list[0], c.name);
         continue;
       }
+      if (byOutput(t.s, nm)) continue;
       if (list.length > 1) {
         prob({
           from: t.s,
@@ -914,14 +1327,19 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
         });
         continue;
       }
-      if (refs.length && refs.every((r) => r.columns)) {
-        const all = [...new Set(refs.flatMap((r) => r.columns!.map((c) => c.name)))];
+      // MySQL's `AS new (a, b)` row alias names its columns for the ON DUPLICATE KEY UPDATE list.
+      let pseudo = false;
+      for (let x: Block | null = b; x; x = x.parent) pseudo ||= x.pseudo.some((r) => r.alias !== "excluded" && r.columns?.some((c) => lc(c.name) === nm));
+      if (pseudo) continue;
+      if (implicit.has(nm) && seen.some((r) => r.kind === "table")) continue;
+      if (seen.length && seen.every((r) => r.columns)) {
+        const all = [...new Set(seen.flatMap((r) => r.columns!.map((c) => c.name)))];
         const sug = closest(nm, all);
         prob({
           from: t.s,
           to: t.e,
           severity: "error",
-          kind: refs.some((r) => r.kind === "table") ? "schema" : "query",
+          kind: seen.some((r) => r.kind === "table") ? "schema" : "query",
           message: `Unknown column ${idn(t)}.${sug ? ` Did you mean ${sug}?` : ""}`,
           fixes: sug ? [fix(`Change to ${sug}`, t.s, t.e, sug)] : [],
         });
@@ -1031,7 +1449,7 @@ export function refAt(A: SqlAnalysis, pos: number, qual: string): TableRef | nul
   if (!S) return null;
   const q = lc(qual);
   for (let x: Block | null = blockAt(S, pos); x; x = x.parent) {
-    const r = x.refs.find((r) => r.alias && lc(r.alias) === q) ?? x.refs.find((r) => !r.alias && r.name && lc(r.name) === q);
+    const r = x.refs.find((r) => r.alias && lc(r.alias) === q) ?? x.refs.find((r) => !r.alias && r.name && lc(r.name) === q) ?? x.pseudo.find((r) => lc(r.alias ?? "") === q);
     if (r) return r;
   }
   return null;

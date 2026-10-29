@@ -2,14 +2,15 @@
 // size, the group areas, and the lines routed as the canvas routes them. A sequence, mind map or timeline is placed
 // from its text as the canvas places it, with its frames, activations, sections and axis (publish-parity).
 // Cloud icons come from the pack as images and go into the scene as data: image URLs, unchanged (ruling P9).
-import type { Scene, SceneArea, SceneEdge, SceneNode, SceneRow } from "../diagram/export/scene";
+import type { Scene, SceneArea, SceneEdge, SceneFrame, SceneNode, SceneRow } from "../diagram/export/scene";
 import type { Positions } from "../diagram/layout";
 import { routeOrthogonal, routeRows } from "../diagram/route";
 import { axisKey } from "./layout";
 import type { DrawnKind } from "../diagram/types";
 import { type DiagramKind, type FlowArrow, type FlowDoc, type FlowGroup, type FlowNode, shownName } from "../lang/flow/model";
 import { drawnKind, familyOf, groupBoxes, nodeSize } from "./flowNodes";
-import { erCardH, erColumnRow, erRowY, fixedLayout, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { erCardH, erColumnRow, erFits, erRowY, fixedLayoutSteps } from "./kindLayout";
+import type { SeqMessage } from "./seqGeometry";
 import type { ExportTheme } from "../diagram/export/palette";
 import { iconOutline, loadIcon } from "./icons";
 import { linkBox } from "./interactions/geometry";
@@ -101,10 +102,14 @@ function eachGroup(groups: FlowGroup[], visit: (g: FlowGroup) => void) {
   }
 }
 
-/** Every icon name the diagram's services and groups ask for, once each. */
+/** Every icon name the diagram's services, sequence participants and groups ask for, once each. */
 export function sceneIconNames(doc: FlowDoc): string[] {
   const names = new Set<string>();
-  for (const n of doc.nodes) if (drawnKind(n.kind) === "service" && n.attrs.icon) names.add(n.attrs.icon);
+  for (const n of doc.nodes) {
+    if (!n.attrs.icon) continue;
+    const kind = drawnKind(n.kind, doc.kind, n.name);
+    if (kind === "service" || kind === "participant" || kind === "actor") names.add(n.attrs.icon);
+  }
   eachGroup(doc.groups, (g) => {
     if (g.icon) names.add(g.icon);
   });
@@ -152,6 +157,14 @@ export async function loadSceneIcons(names: string[], theme: ExportTheme): Promi
   return out;
 }
 
+/** Scene options: the frame's text size and notation, and for a frame picture its row cap and resized shapes. */
+export interface FlowSceneOptions {
+  textScale?: number;
+  notation?: ErNotation;
+  rowCap?: number;
+  sizes?: Readonly<Record<string, { w: number; h: number }>>;
+}
+
 /** The scene of `doc` at `positions`; a node without a place is left out, as the canvas leaves it out. */
 export function flowScene(
   doc: FlowDoc,
@@ -160,40 +173,81 @@ export function flowScene(
   icons: ReadonlyMap<string, SceneIcon>,
   axes?: Readonly<Record<string, "v" | "h">>,
   folded?: ReadonlySet<string>,
+  opts?: FlowSceneOptions,
+): Scene {
+  const steps = flowSceneSteps(doc, given, look, icons, axes, folded, opts);
+  for (;;) {
+    const r = steps.next();
+    if (r.done) return r.value;
+  }
+}
+
+/** Shapes or lines placed between two yields of `flowSceneSteps`. */
+const SCENE_STEP = 64;
+
+/**
+ * `flowScene` in steps: it yields after every SCENE_STEP shapes and lines, so a frame picture of a big diagram can be
+ * built across time slices (Plan F Decision 7). Drained, it is `flowScene`.
+ */
+export function* flowSceneSteps(
+  doc: FlowDoc,
+  given: Positions,
+  look: NodeLook,
+  icons: ReadonlyMap<string, SceneIcon>,
+  axes?: Readonly<Record<string, "v" | "h">>,
+  folded?: ReadonlySet<string>,
   /**
    * The frame's text size as a label scale (`TEXT_SCALE`), as the canvas sizes its nodes and labels; an ER frame's
-   * notation, as the canvas ends its lines (flowNodes `markers`).
+   * notation, as the canvas ends its lines (flowNodes `markers`). With `rowCap` (a frame picture, Plan F Decision 7) an
+   * ER card is cut at that many rows as the canvas cuts it: as tall as its first `rowCap` rows, a line to a later row
+   * ending on the card's edge; without it every row is drawn (Publish). With `sizes` (a frame picture) a shape resized
+   * on the canvas takes its kept size, an ER card at most its `rowCap` rows tall, as `buildFlowGraph` sizes it.
    */
-  opts?: { textScale?: number; notation?: ErNotation },
-): Scene {
+  opts?: FlowSceneOptions,
+): Generator<void, Scene> {
   const scale = opts?.textScale ?? 1;
+  const cap = opts?.rowCap ?? Infinity;
   const placed = new Map<string, { x: number; y: number; w: number; h: number }>();
   const types = new Map<string, string>();
   const nodes: SceneNode[] = [];
   // A sequence, mind map or timeline is placed from its text, as the canvas places it.
   // A folded topic's subtopics are left out, as the canvas leaves them out (M3).
-  const fixed = fixedLayout(doc, (n) => nodeSize(drawnKind(n.kind, doc.kind, n.name), look, shownName(n), n.attrs.id, n, scale), folded?.size ? { folded } : {});
+  // A big sequence is laid out in steps too (Plan E Task 9: about 5 ms in all at the sequence limit).
+  const fixed = yield* fixedLayoutSteps(doc, (n) => nodeSize(drawnKind(n.kind, doc.kind, n.name), look, shownName(n), n.attrs.id, n, scale), { ...(folded?.size ? { folded } : {}), textScale: scale });
   const positions = fixed ? fixed.positions : given;
-  // A participant's activation bars run from the top of its first message row to the bottom of its last (fixedGraph).
+  if (fixed) yield;
+  // A sequence is drawn from the one drawing the canvas draws (Plan E Decision 15): each participant's lane and bars,
+  // each message's path, chip and number, each block's box, tab and caption.
+  const seq = fixed?.seq;
+  const lanes = new Map(seq?.lanes.map((l) => [l.name, l]));
   const bars = new Map<string, { top: number; height: number }[]>();
-  const rowY = (i: number) => fixed?.rows?.[i] ?? SEQ_HEAD + (i + 0.5) * SEQ_ROW;
-  for (const a of doc.kind === "sequence" ? (doc.activations ?? []) : []) {
-    const top = rowY(a.from) - SEQ_ROW / 2 + 6;
-    bars.set(a.name, [...(bars.get(a.name) ?? []), { top, height: Math.max(SEQ_ROW - 12, rowY(Math.max(a.from, a.to)) + SEQ_ROW / 2 - 6 - top) }]);
-  }
+  for (const b of seq?.bars ?? []) (bars.get(b.name) ?? bars.set(b.name, []).get(b.name)!).push({ top: b.y, height: b.h });
+  const drawn: (SeqMessage | undefined)[] = [];
+  for (const m of seq?.messages ?? []) drawn[m.index] = m;
+  let step = 0;
   for (const n of doc.nodes) {
+    if (++step % SCENE_STEP === 0) yield;
     if (!own(positions, n.name)) continue;
     const kind = drawnKind(n.kind, doc.kind, n.name);
     const p = positions[n.name];
-    const sized = fixed?.sizes.get(n.name) ?? nodeSize(kind, look, shownName(n), n.attrs.id, n, scale);
+    // A shape resized on the canvas (not in a fixed kind, which places itself); an ER card never past its row cap.
+    const kept = !fixed && opts?.sizes && own(opts.sizes, n.name) ? opts.sizes[n.name] : null;
+    const sized = kept ?? fixed?.sizes.get(n.name) ?? nodeSize(kind, look, shownName(n), n.attrs.id, n, scale);
     // An ER card publishes every row (B4 A10): as tall as all its rows at the frame's text size (`erCardH`, the card's
-    // own geometry), never the canvas's 20-row window or its scroll.
-    const size = CARD_KINDS.has(kind) ? { w: sized.w, h: erCardH((n.rows ?? []).length, scale) } : sized;
+    // own geometry), never the canvas's 20-row window or its scroll. A picture cuts it at `rowCap`, and a resized one
+    // shows the rows its height holds.
+    const rowsShown = (n.rows ?? []).length;
+    const size = CARD_KINDS.has(kind)
+      ? kept
+        ? { w: kept.w, h: Math.min(kept.h, erCardH(cap === Infinity ? rowsShown : cap, scale)) }
+        : { w: sized.w, h: erCardH(Math.min(rowsShown, cap), scale) }
+      : sized;
+    const rowsDrawn = kept && CARD_KINDS.has(kind) ? Math.min(rowsShown, cap, erFits(size.h, scale)) : Math.min(rowsShown, cap);
     placed.set(n.name, { x: p.x, y: p.y, ...size });
     types.set(n.name, familyOf(kind));
     if (CARD_KINDS.has(kind)) {
       // As the canvas draws it: the words it shows, its colour, and a weak table dashed.
-      const card: SceneNode = { id: n.name, kind: "table", x: p.x, y: p.y, w: size.w, h: size.h, title: shownName(n), rows: cardRows(n) };
+      const card: SceneNode = { id: n.name, kind: "table", x: p.x, y: p.y, w: size.w, h: size.h, title: shownName(n), rows: rowsDrawn < rowsShown ? cardRows(n).slice(0, rowsDrawn) : cardRows(n) };
       const colour = drawnColour(n.attrs.color);
       if (colour) card.color = colour;
       if (kind === "erWeak") card.dashed = true;
@@ -205,8 +259,20 @@ export function flowScene(
     const colour = n.kind === "note" ? undefined : drawnColour(n.attrs.color);
     if (colour) node.color = colour;
     if (kind === "topic") node.depth = n.depth ?? 1;
-    const active = bars.get(n.name);
-    if (active) node.bars = active;
+    const lane = lanes.get(n.name);
+    if (lane) {
+      // A participant: its lane from the head box down to the foot box, its bars, its icon as a service's.
+      node.foot = lane.bottom - p.y;
+      const active = bars.get(n.name);
+      if (active) node.bars = active.map((b) => ({ top: b.top - p.y, height: b.height }));
+      const name = n.attrs.icon;
+      if (name) {
+        node.iconName = name;
+        const icon = icons.get(name);
+        if (icon !== undefined) node.icon = icon.url;
+        if (icon?.outline) node.iconOutline = true;
+      }
+    }
     if (n.attrs.id !== undefined) node.tag = n.attrs.id;
     if (n.attrs.table !== undefined) {
       node.sub = n.attrs.table;
@@ -252,21 +318,31 @@ export function flowScene(
   // A line to or from a group ends on its area, as on the canvas (fix round 2, L1).
   const areaBox = new Map(areas.map((a) => [a.name, { x: a.x, y: a.y, w: a.w, h: a.h }] as const));
   const centre = (b: { x: number; w: number }) => b.x + b.w / 2;
-  doc.links.forEach((l, i) => {
+  for (let i = 0; i < doc.links.length; i++) {
+    if (i > 0 && i % SCENE_STEP === 0) yield;
+    const l = doc.links[i];
     const a = placed.get(l.from) ?? areaBox.get(l.from);
     const b = placed.get(l.to) ?? areaBox.get(l.to);
-    if (!a || !b) return;
+    if (!a || !b) continue;
     if (doc.kind === "sequence") {
-      // A message along its row, lifeline to lifeline (SeqEdge); a reply dashed with an open head.
-      const y = a.y + (fixed?.rows?.[i] ?? SEQ_HEAD + (i + 0.5) * SEQ_ROW);
-      const x1 = centre(a);
-      const points = l.from === l.to ? [{ x: x1, y: y - 8 }, { x: x1 + 40, y: y - 8 }, { x: x1 + 40, y: y + 8 }, { x: x1, y: y + 8 }] : [{ x: x1, y }, { x: centre(b), y }];
-      const reply = l.arrow === "-->";
-      const edge: SceneEdge = { id: `edge:${i}`, kind: "message", points, marks: { end: reply ? "open" : "arrow" } };
-      if (reply) edge.line = "dashed";
-      if (l.label) edge.label = l.label;
+      // A message as SeqEdge draws it: the drawing's path, a reply dashed with an open head, its label on its chip and
+      // its number on the sender's lifeline.
+      const m = drawn[i];
+      if (!m) continue;
+      const edge: SceneEdge = { id: `edge:${i}`, kind: "message", points: m.points, path: m.d, marks: { end: m.reply ? "open" : "arrow" } };
+      if (m.reply) edge.line = "dashed";
+      if (m.label) {
+        edge.label = m.label.text;
+        edge.labelW = m.label.w;
+        edge.chip = m.label.chip;
+        edge.chipBg = m.label.bg;
+      }
+      if (m.number) {
+        const { n, x, y, w, who, colour } = m.number;
+        edge.number = colour ? { n, x, y, w, color: colour, who } : { n, x, y, w, who };
+      }
       edges.push(edge);
-      return;
+      continue;
     }
     if (l.tree) {
       // A mind map branch: from the side of the parent that faces the child, a curve with no head (MindEdge).
@@ -279,7 +355,7 @@ export function flowScene(
           { x: right ? b.x : b.x + b.w, y: b.y + b.h / 2 },
         ],
       });
-      return;
+      continue;
     }
     const ab = linkBox(types.get(l.from), a);
     const bb = linkBox(types.get(l.to), b);
@@ -300,10 +376,17 @@ export function flowScene(
     const colour = drawnColour(l.color);
     if (colour) edge.color = colour;
     edges.push(edge);
-  });
+  }
   const scene: Scene = { nodes, edges, areas };
   if (scale !== 1) scene.textScale = scale;
-  if (fixed?.frames?.length) scene.frames = fixed.frames.map((f) => ({ label: f.label, depth: f.depth, ...f.box }));
+  // Blocks in text order, so a message's `chipBg` is its block's index here.
+  if (seq?.blocks.length)
+    scene.frames = seq.blocks.map((b) => {
+      const f: SceneFrame = { label: doc.frames?.[b.index]?.label ?? b.kind, depth: b.depth, ...b.box, kind: b.kind, caption: b.caption, word: b.word, wordW: b.wordW, tab: b.tab };
+      if (b.colour) f.color = b.colour;
+      if (b.captionBox) f.captionBox = b.captionBox;
+      return f;
+    });
   if (fixed?.sections?.length) scene.sections = fixed.sections.map((sec) => ({ name: sec.name, ...sec.box }));
   if (fixed?.axis) {
     const ticks = doc.nodes.flatMap((n) => {

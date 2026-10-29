@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
@@ -269,4 +269,70 @@ test("a_name_taken_since_the_list_was_read_takes_the_next_free_one_once", async 
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith("shop 3"));
   expect(callsTo("write_diagram").map((w) => w.name)).toEqual(["shop 2", "shop 3"]);
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+// Task 4b (A25): the frame records the Connection it was drawn from; a Never Connection warns.
+
+test("a_frame_drawn_from_a_connection_records_its_source", async () => {
+  routes();
+  const run = vi.fn(async (_f: ErFromModel, _s: unknown) => null);
+  setup(frameTarget(run));
+  await choose(/ledger/);
+  await screen.findByRole("combobox", { name: "Schema" });
+  await choose(/billing/, "Schema");
+  await screen.findByText("1 table");
+  await userEvent.click(screen.getByRole("button", { name: /Read the database/ }));
+  await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+  expect(run.mock.calls[0][1]).toEqual({ connectionId: "c2", database: "shop", schema: "billing" });
+  // MySQL has no schema.
+  run.mockClear();
+  cleanup();
+  setup(frameTarget(run));
+  await choose(/kfc/);
+  await screen.findByText("1 table");
+  await userEvent.click(screen.getByRole("button", { name: /Read the database/ }));
+  await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+  expect(run.mock.calls[0][1]).toEqual({ connectionId: "c1", database: "shop", schema: null });
+});
+
+test("a_new_file_records_its_source", async () => {
+  routes();
+  setup({ kind: "file", onCreated: vi.fn() });
+  await choose(/kfc/);
+  await screen.findByText("1 table");
+  await userEvent.click(screen.getByRole("button", { name: /Read the database/ }));
+  await waitFor(() => expect(callsTo("write_diagram")).toHaveLength(1));
+  const [w] = callsTo("write_diagram");
+  const layout = JSON.parse(String(w.layout));
+  expect(layout.version).toBe(2);
+  expect(Object.keys(layout.frames)).toEqual(["shop"]);
+  expect(layout.frames.shop.source).toEqual({ connectionId: "c1", database: "shop", schema: null });
+  // The text names no Connection.
+  expect(String(w.text)).not.toContain("c1");
+});
+
+const NEVER_NOTE = "This Connection's AI access is Never. Asking the AI about a board with this frame will be refused.";
+
+test("a_never_connection_shows_the_warning", async () => {
+  routes();
+  const never: ConnectionConfig = { ...kfc, aiAccess: "never" };
+  setup(frameTarget(), [never, pg, closed]);
+  expect(screen.queryByRole("note")).toBeNull();
+  await choose(/kfc/);
+  const note = await screen.findByRole("note");
+  expect(note.textContent).toBe(NEVER_NOTE);
+  await screen.findByText("1 table");
+  // Drawing is not AI: the read stays open.
+  expect((screen.getByRole("button", { name: /Read the database/ }) as HTMLButtonElement).disabled).toBe(false);
+  // A Connection at Schema shows no note.
+  await choose(/ledger/);
+  await waitFor(() => expect(screen.queryByRole("note")).toBeNull());
+});
+
+test("the_warning_for_a_new_file_says_diagram", async () => {
+  routes();
+  const never: ConnectionConfig = { ...kfc, aiAccess: "never" };
+  setup({ kind: "file", onCreated: vi.fn() }, [never, pg, closed]);
+  await choose(/kfc/);
+  expect((await screen.findByRole("note")).textContent).toBe("This Connection's AI access is Never. Asking the AI about this diagram will be refused.");
 });

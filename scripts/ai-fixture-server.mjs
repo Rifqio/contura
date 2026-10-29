@@ -54,18 +54,94 @@ export function readDiagramRequest(body) {
   return out;
 }
 
-function diagramChunks(body) {
-  const d = readDiagramRequest(body);
-  const ops = [{ add_node: { name: "Customs check", kind: "process" } }];
-  if (d.firstNode) ops.push({ add_flow: { from: d.firstNode, to: "Customs check" } });
-  const input = JSON.stringify({ file: d.file, base_hash: d.base_hash, ops });
+/** The framed items of a request's last user message, in order. */
+function framedItems(body) {
+  const user = [...(body?.messages ?? [])].reverse().find((m) => m?.role === "user");
+  const out = [];
+  for (const line of contentText(user).split("\n")) {
+    try {
+      const item = JSON.parse(line);
+      if (typeof item?.source === "string" && typeof item.text === "string") out.push(item);
+    } catch {
+      // Not an item line.
+    }
+  }
+  return out;
+}
+
+/**
+ * The frames of a board request: each title from the header item ("Board: ..." then one `"<title>" (...) [fit]` line
+ * per frame), with the shapes of its own item when one was sent (frames left out send none).
+ */
+export function readBoardRequest(body) {
+  const items = framedItems(body).filter((i) => i.source === "diagram");
+  const at = items.findIndex((i) => i.text.startsWith("Board: "));
+  if (at < 0) return [];
+  const frames = [];
+  for (const line of items[at].text.split("\n").slice(1)) {
+    const m = /^"(.*)" \(.*\) \[(.+)\]$/.exec(line);
+    if (m) frames.push({ title: m[1], sent: !m[2].startsWith("left out"), shapes: [] });
+  }
+  const bodies = items.slice(at + 1);
+  for (const f of frames.filter((x) => x.sent)) {
+    const text = bodies.shift()?.text ?? "";
+    f.shapes = text.startsWith("shapes: ")
+      ? text.slice(8).split(", ")
+      : text
+          .split("\n")
+          .slice(1)
+          .map((l) => l.trim().replace(/\s*\{$/, ""))
+          .filter((t) => t && !t.includes(">") && !t.startsWith("//") && !t.startsWith("#"));
+  }
+  return frames;
+}
+
+/** One tool call with `args`, after a line of answer text. */
+function toolChunks(lead, args) {
+  const input = JSON.stringify(args);
   return [
-    chunk({ content: "I'll add a customs check." }),
+    chunk({ content: lead }),
     chunk({ tool_calls: [{ index: 0, id: "call_fx1", type: "function", function: { name: "propose_diagram_changes", arguments: "" } }] }),
     ...input.match(/.{1,40}/g).map((part) => chunk({ tool_calls: [{ index: 0, function: { arguments: part } }] })),
     chunk({}, "tool_calls"),
     chunk({}, null, { choices: [], usage: usage(2100, 120, 0) }),
   ];
+}
+
+function diagramChunks(body) {
+  const d = readDiagramRequest(body);
+  const ops = [{ add_node: { name: "Customs check", kind: "process" } }];
+  if (d.firstNode) ops.push({ add_flow: { from: d.firstNode, to: "Customs check" } });
+  return toolChunks("I'll add a customs check.", { file: d.file, base_hash: d.base_hash, ops });
+}
+
+/** fx-board: a node in each of the first two frames the header names. */
+function boardChunks(body) {
+  const d = readDiagramRequest(body);
+  const ops = readBoardRequest(body)
+    .slice(0, 2)
+    .map((f) => ({ add_node: { name: "Customs check", frame: f.title } }));
+  return toolChunks("I'll add a customs check to two diagrams.", { file: d.file, base_hash: d.base_hash, ops });
+}
+
+/** fx-board-remove: four shapes removed, two from each of the first two frames sent with their shapes. */
+function boardRemoveChunks(body) {
+  const d = readDiagramRequest(body);
+  const ops = readBoardRequest(body)
+    .filter((f) => f.shapes.length > 0)
+    .slice(0, 2)
+    .flatMap((f) => f.shapes.slice(0, 2).map((target) => ({ remove_node: { target, frame: f.title } })));
+  return toolChunks("I'll remove four shapes.", { file: d.file, base_hash: d.base_hash, ops });
+}
+
+/** fx-followup: only a follow-up question, with the file and hash it was sent. */
+function followUpChunks(body) {
+  const d = readDiagramRequest(body);
+  return toolChunks("One question first.", {
+    file: d.file,
+    base_hash: d.base_hash,
+    follow_up: { question: "Which diagram should the customs check go in?" },
+  });
 }
 
 const usage = (prompt, completion = 48, cached = 0) => ({
@@ -117,7 +193,14 @@ export const SCENARIOS = {
   // 64 KB of text in 50 ms chunks, about 30s.
   "fx-long": { kind: "long", bytes: 64 * 1024, every: 50, pieces: 640 },
   "fx-compact": stream(answerChunks(SQL_ANSWER, { promptTokens: Math.floor(COMPACT_WINDOW * 0.9), cached: 0 })),
-  "fx-diagram": { kind: "diagram" },
+  // A one-frame board (or a lone diagram): a node, and a line from its first shape.
+  "fx-diagram": { kind: "diagram", chunks: diagramChunks },
+  // A board of two or more frames: one call adding a node in each of the first two frames.
+  "fx-board": { kind: "diagram", chunks: boardChunks },
+  // A board: one call removing 4 shapes across two frames (more than 3, so it asks first).
+  "fx-board-remove": { kind: "diagram", chunks: boardRemoveChunks },
+  // A board: one call asking a follow-up question and proposing nothing.
+  "fx-followup": { kind: "diagram", chunks: followUpChunks },
   // Answers like fx-answer; its chat title requests fail with 500.
   "fx-title-fail": stream(answerChunks(SQL_ANSWER)),
 };
@@ -166,7 +249,7 @@ function play(scenario, res, timers, body) {
   if (scenario.kind === "stream") {
     res.end(scenario.body);
   } else if (scenario.kind === "diagram") {
-    res.end(sse(diagramChunks(body)));
+    res.end(sse(scenario.chunks(body)));
   } else if (scenario.kind === "stall") {
     res.flushHeaders();
     const t = setTimeout(() => {

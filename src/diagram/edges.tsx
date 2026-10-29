@@ -1,6 +1,7 @@
 // The engine's edges: the markers, the orthogonal edge (8 px corners) with its badge slot, and the straight edge of fast mode.
-import { BaseEdge, type Edge, EdgeLabelRenderer, type EdgeProps, getSmoothStepPath, getStraightPath } from "@xyflow/react";
+import { BaseEdge, type Edge, type EdgeProps, getSmoothStepPath, getStraightPath } from "@xyflow/react";
 import type { ReactNode } from "react";
+import { EdgeLabel } from "./canvasLayers";
 import { PALETTE_TOKENS } from "./types";
 
 /** Many side of a Foreign Key: a crow's foot with a bar (Schema Builder). */
@@ -114,14 +115,14 @@ export default EdgeMarkers;
  */
 export function JoinBadge({ x, y, children, className }: { x: number; y: number; children: ReactNode; className?: string }) {
   return (
-    <EdgeLabelRenderer>
+    <EdgeLabel>
       <div
         className={className ? `edge-badge nodrag nopan ${className}` : "edge-badge nodrag nopan"}
         style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }}
       >
         {children}
       </div>
-    </EdgeLabelRenderer>
+    </EdgeLabel>
   );
 }
 

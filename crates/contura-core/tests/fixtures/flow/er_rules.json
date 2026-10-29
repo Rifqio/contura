@@ -1,0 +1,5 @@
+{
+  "flags": ["pk", "not null", "unique"],
+  "name": "^[A-Za-z_][A-Za-z0-9_]*$",
+  "kinds": ["dfd", "flow", "cloud", "er", "sequence", "state", "class", "mindmap", "timeline"]
+}

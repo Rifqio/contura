@@ -1,7 +1,7 @@
 // The code pane's cursor stays inside the shown frame (the folded-range convention of VS Code and CodeMirror): after
 // a frame switch, and after an undo or redo that leaves it in hidden text, it is put back into the shown block, so the
 // status line counts from 1 and typing edits only the shown frame.
-import { EditorSelection } from "@codemirror/state";
+import { EditorSelection, EditorState, StateEffect } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactFlowInstance } from "@xyflow/react";
@@ -15,7 +15,7 @@ import { mockReactFlowDom } from "../../test/reactFlow";
 import { flowEntry } from "../flowRegistry";
 import FlowTab from "../FlowTab";
 import { SINGLE_TEMPLATES } from "./catalog/templates";
-import { shownRange } from "./frameView";
+import { frameView, shownRange, showFrame } from "./frameView";
 import type Shelf from "./shelf/Shelf";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -210,5 +210,79 @@ test("a_frame_switch_puts_the_cursor_inside_the_new_frame", async () => {
   expectInside(s);
   const shown = shownRange(s.view().state)!;
   expect(s.view().state.doc.lineAt(s.view().state.selection.main.head).number).toBeGreaterThanOrEqual(shown.line);
+  expectTypingStaysInside(s);
+});
+
+// ---- Plan F Task 11: the clamp
+
+/** Every transaction the view applies from now on, as the editor's update listeners see them. */
+function watchTransactions(s: Setup) {
+  const seen: { scrollIntoView: boolean }[] = [];
+  act(() =>
+    s.view().dispatch({
+      effects: StateEffect.appendConfig.of(
+        EditorView.updateListener.of((u) => {
+          for (const tr of u.transactions) seen.push({ scrollIntoView: tr.scrollIntoView });
+        }),
+      ),
+    }),
+  );
+  seen.length = 0;
+  return seen;
+}
+
+test("a_clamped_selection_scrolls_into_view", async () => {
+  const s = setup();
+  await opened(s);
+  await pick(s, "Billing");
+  await settle();
+  const shown = shownRange(s.view().state)!;
+  const seen = watchTransactions(s);
+  // A pointer or key move out of the shown block (here, to the document's start) stops at its edge, and the edge is
+  // brought into view as a cursor that moved there is.
+  act(() => s.view().dispatch({ selection: EditorSelection.cursor(0), userEvent: "select.pointer" }));
+  expect(s.view().state.selection.main.head).toBe(shown.from);
+  expect(seen.some((t) => t.scrollIntoView)).toBe(true);
+});
+
+test("a_multi_range_selection_is_clamped_range_by_range", () => {
+  // The pane allows one range today; the clamp is range by range for any state that holds several (a Select all in a
+  // later editor setup, Alt+Click cursors), so this runs on a bare state with the same extension.
+  const parent = document.body.appendChild(document.createElement("div"));
+  const text = "diagram flow \"A\"\nA\n\ndiagram flow \"B\"\nB\nC\n\ndiagram flow \"C\"\nZ\n";
+  const view = new EditorView({ parent, state: EditorState.create({ doc: text, extensions: [EditorState.allowMultipleSelections.of(true), frameView(() => {})] }) });
+  const from = text.indexOf('diagram flow "B"');
+  const to = text.indexOf("\n\ndiagram flow \"C\"");
+  view.dispatch({ effects: showFrame.of({ from, to, line: 4 }) });
+  const inside = from + 3;
+  view.dispatch({
+    selection: EditorSelection.create([EditorSelection.cursor(0), EditorSelection.cursor(inside), EditorSelection.range(inside + 2, text.length)], 1),
+    userEvent: "select.pointer",
+  });
+  const ranges = view.state.selection.ranges.map((r) => [r.anchor, r.head]);
+  expect(ranges).toEqual([
+    [from, from],
+    [inside, inside],
+    [inside + 2, to],
+  ]);
+  view.destroy();
+  parent.remove();
+});
+
+test("undo_in_the_shown_frame_keeps_the_selection_inside_it", async () => {
+  const s = setup();
+  await opened(s);
+  await pick(s, "Checkout");
+  await settle();
+  const shown = shownRange(s.view().state)!;
+  const head = s.view().state.doc.toString().indexOf("Pay\n") + 3;
+  act(() => s.view().dispatch({ changes: { from: head, insert: "x" }, selection: EditorSelection.cursor(head + 1), userEvent: "input.type" }));
+  // The cursor moved on to the frame's start, then Ctrl+Z.
+  act(() => s.view().dispatch({ selection: EditorSelection.cursor(shown.from), userEvent: "select.pointer" }));
+  fireEvent.keyDown(s.canvasEl(), { key: "z", ctrlKey: true });
+  await settle();
+  expect(s.view().state.doc.toString()).toBe(BOARD);
+  expect(s.visible()).toContain('"Checkout"');
+  expectInside(s);
   expectTypingStaysInside(s);
 });

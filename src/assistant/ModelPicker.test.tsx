@@ -1,11 +1,16 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
+import { aiModels } from "../api/client";
+import { routeInvoke } from "../test/invoke";
+import { useKnownModels } from "./useKnownModels";
 import type { ModelInfo } from "../api/types";
 import { modelInfo, modelList } from "../test/settingsRoutes";
 import ContextMeter, { formatTokens } from "./ContextMeter";
 import ModelPicker from "./ModelPicker";
 import appCss from "../styles/app.css?raw";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 const sonnet = modelInfo({
   id: "claude-sonnet-5-5",
@@ -233,4 +238,28 @@ test("meter_tone_uses_the_unrounded_share", () => {
   // 74.96% shows as 75.0 but is not amber yet; 89.96% is amber, not red.
   expect(fill(749_600)).toBe("meter-fill");
   expect(fill(899_600)).toBe("meter-fill warn");
+});
+
+test("fetch_again_refreshes_the_model_chips", async () => {
+  // What the Core knows: the built-in models, then the provider's listing once Settings fetched it.
+  let known = modelList([sonnet]);
+  routeInvoke({
+    ai_known_models: () => known,
+    ai_models: () => {
+      known = modelList([sonnet, opus]);
+      return known;
+    },
+  });
+  function Panel() {
+    const [list] = useKnownModels(null);
+    return list ? <ModelPicker list={list} onPick={() => {}} /> : null;
+  }
+  const user = userEvent.setup();
+  render(<Panel />);
+  await user.click(await screen.findByRole("button", { name: /^Model:/ }));
+  expect(screen.getAllByRole("option")).toHaveLength(1);
+  // Settings "Fetch again" resolves while the picker stays mounted.
+  await aiModels(null);
+  expect(await screen.findByRole("option", { name: /Opus 5\.5/ })).toBeTruthy();
+  expect(screen.getAllByRole("option")).toHaveLength(2);
 });

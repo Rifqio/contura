@@ -139,8 +139,8 @@ test("choice_is_remembered", async () => {
   flowTab({ ...DEFAULT_UI_PREFS, flowSidePanel: { hidden: true, tab: "assistant" } });
   await waitFor(() => expect(tab("Assistant").getAttribute("aria-selected")).toBe("true"));
   expect(screen.queryByRole("navigation", { name: "Side panel, hidden" })).toBeNull();
-  expect(screen.getByText("Ask for a change to orders")).toBeTruthy();
-  expect(screen.getByText("The assistant edits the text and the drawing together. While it works, the text is read-only.")).toBeTruthy();
+  // An empty chat opens on the start screen (Plan D Task 18).
+  expect(await screen.findByRole("heading", { name: "What would you like to create?" })).toBeTruthy();
 });
 
 test("a_stored_choice_without_the_field_keeps_the_default", async () => {

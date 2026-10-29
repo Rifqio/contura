@@ -21,7 +21,7 @@ function headingOf(line: string): { level: 1 | 2 | 3; text: string } | null {
   if (!m || m[2] === "") return null;
   return { level: m[1].length as 1 | 2 | 3, text: m[2] };
 }
-const INLINE = /`([^`\n]+)`|\*\*([^*\n]+?)\*\*/g;
+export const INLINE = /`([^`\n]+)`|\*\*([^*\n]+?)\*\*/g;
 
 /**
  * Characters the parsers have read since the page loaded: `parseAnswer` counts its whole text, the streaming parser

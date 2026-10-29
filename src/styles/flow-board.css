@@ -48,6 +48,13 @@
   position: absolute;
   left: 0;
   bottom: 100%;
+  /*
+    Plan F Decision 5 (Figma and Miro keep frame names at a constant size): below 100 percent the strip counter-scales by
+    1 / zoom from where it meets the frame, so its title stays readable and its height on screen stays 30 px. At 100
+    percent and above it is drawn as it is. --rz-zoom is the canvas zoom, set on the strip itself (zoomVar.ts).
+  */
+  scale: max(1, calc(1 / var(--rz-zoom, 1)));
+  transform-origin: left bottom;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -57,6 +64,17 @@
   white-space: nowrap;
   pointer-events: auto;
   cursor: grab;
+}
+/*
+  The strip never runs into the next frame's tab (coordinator ruling on F1): its room, in board units, is from its left
+  edge to the nearest tab in its row, never less than the frame's width (--board-tab-room, FrameNode, set only when a
+  tab is in the way, with has-room). Below 100 percent the strip keeps its screen size, so its CSS room is that times
+  the zoom. A strip with room to spare has no max-width: one that follows the zoom laid every strip out again on every
+  zoom frame (Task 9 fix 2). Short of room FrameNode drops the kind word first, then the name ends in an ellipsis
+  (Figma's frame label shows the frame's name); it hides AI Chat, then Code Editor, only when even they do not fit.
+*/
+.board-frame-tab.has-room {
+  max-width: calc(var(--board-tab-room) * min(var(--rz-zoom, 1), 1) * 1px);
 }
 .board-frame-tab:active {
   cursor: grabbing;
@@ -80,6 +98,20 @@
 }
 .board-frame-pane {
   cursor: pointer;
+  flex: none;
+}
+/*
+  The title's spacing rides on its parts, not the flex gap, so a part left out or cut leaves no gap behind: the kind word
+  keeps the icon's gap as its margin (and takes it when it goes), and the name's gap is a spacer inside it.
+*/
+.board-frame-title {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  gap: 0;
+}
+.board-frame-title > * {
+  flex: none;
 }
 .board-frame-title:hover,
 .board-frame-pane:hover {
@@ -97,14 +129,30 @@
   background: var(--c-accent-subtle);
   color: var(--c-text);
 }
+/*
+  FrameNode leaves the kind word out of a strip short of room, so the name is what is cut. Should the estimate run short,
+  the kind word still gives way before the name.
+*/
 .board-frame-kind {
   color: var(--c-text-subtle);
+  margin-left: 6px;
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .board-frame-name {
   font: var(--font-body-strong);
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.board-frame-name::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
 }
 .board-frame-pane[aria-pressed="true"] {
   border-color: var(--c-accent);
@@ -124,6 +172,7 @@
 .board-frame-problems {
   all: unset;
   box-sizing: border-box;
+  flex: none;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -246,6 +295,29 @@
   font: var(--font-micro);
   line-height: 16px;
   text-align: center;
+}
+/*
+  The review bar (Plan D Decision 11): floats above the top right of the frames a proposal changes, placed by
+  ReviewBar.tsx in the canvas's own pixels, over the frames and under the board toolbar.
+*/
+.board-review {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 12px;
+  /* Its edge is 3:1 on the canvas, as a frame tab's is, in the strong border token. */
+  border: var(--border-hairline) solid var(--c-border-strong);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-surface);
+  box-shadow: var(--shadow-menu);
+  color: var(--c-text);
+  font: var(--font-small);
+  white-space: nowrap;
+}
+.board-review-text {
+  margin-right: 6px;
 }
 .board-add:hover .flow-hint,
 .board-add:focus-visible .flow-hint,
@@ -562,30 +634,163 @@
   background: var(--c-warning-subtle);
 }
 
+/* The sketch layer's pictures when far (Task 9 fix 2) take no pointer events: a press there is the canvas's. */
+.react-flow__node.board-sketch-picture,
+.react-flow__node.board-sketch-picture * {
+  pointer-events: none !important;
+}
 /*
-  A static frame below BOX_BELOW (Task 18b): one svg of boxes and straight lines. Areas and shapes in the canvas's own
-  group and step-card tokens (the pair a step, a table and a document draw in); strokes stay one screen pixel at any zoom.
+  A static frame drawn as one picture of itself (Plan F Decision 7): an <img> of its bitmap's PNG (Task 9 fixes 2 and 3),
+  or of its SVG until that is in, laid over the frame's box at the size its shapes stand in. The picture's colours are
+  the theme's tokens, read when it is built; it takes no pointer events, so a click picks the frame as its box does.
 */
-.board-preview {
+.board-picture-img,
+.board-sketch-picture-img {
   display: block;
-  overflow: visible;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
 }
-.board-preview path {
-  vector-effect: non-scaling-stroke;
+
+/*
+  Far text (Plan F Decisions 2 and 4; Figma and Miro draw far text as grey bars). The canvas wrapper's data-far lists
+  the text sizes too small to read at this zoom; every shape and line label carries its frame's size as board-ts-*.
+  Far text keeps its layout and its words (a screen reader still reads them): the words go transparent and each run's
+  own box takes the faint text token at 45 percent, so each line of a label becomes one bar of its width. The change is
+  immediate, with no transition (ADR 0019: wheel zoom is never animated; the hysteresis keeps it from flickering).
+  The texts: shape names and ids, kind rows and words, group names, line labels and sequence messages.
+*/
+[data-far~="s"] .board-ts-s :is(.fnode-name, .fnode-id, .fkind-col, .fkind-type, .fkind-stereotype, .fkind-note, .fkind-date, .fkind-dated-word, .fkind-section-name, .flow-area-name),
+[data-far~="s"] .board-ts-s.flow-chip,
+[data-far~="s"] .board-ts-s.fkind-msg,
+[data-far~="m"] .board-ts-m :is(.fnode-name, .fnode-id, .fkind-col, .fkind-type, .fkind-stereotype, .fkind-note, .fkind-date, .fkind-dated-word, .fkind-section-name, .flow-area-name),
+[data-far~="m"] .board-ts-m.flow-chip,
+[data-far~="m"] .board-ts-m.fkind-msg,
+[data-far~="l"] .board-ts-l :is(.fnode-name, .fnode-id, .fkind-col, .fkind-type, .fkind-stereotype, .fkind-note, .fkind-date, .fkind-dated-word, .fkind-section-name, .flow-area-name),
+[data-far~="l"] .board-ts-l.flow-chip,
+[data-far~="l"] .board-ts-l.fkind-msg {
+  color: transparent;
+  background: color-mix(in srgb, var(--c-text-faint) 45%, transparent);
+  border-radius: 2px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
-.board-preview-area {
-  fill: color-mix(in srgb, var(--c-group-teal-tint) 70%, transparent);
-  stroke: var(--c-group-teal);
-  stroke-width: 1;
-  stroke-dasharray: 4 3;
+/*
+  An ER card's rows when its text is far (Decision 3): the bars are the backgrounds of one block (kindNodes ErBars sets
+  each layer's size and place), in the faint token at 45 percent, and a key row's mark in the key's own colour.
+*/
+.fkind-er-bars {
+  --far-bar: color-mix(in srgb, var(--c-text-faint) 45%, transparent);
+  --far-key: var(--c-group-gold);
+  background-repeat: no-repeat;
 }
-.board-preview-line {
-  fill: none;
-  stroke: var(--c-text-subtle);
-  stroke-width: 1;
+.fkind-er-body.is-far {
+  position: relative;
 }
-.board-preview-shape {
-  fill: var(--c-node-table-fill);
-  stroke: var(--c-node-table-stroke);
-  stroke-width: 1;
+/*
+  A far ER card keeps its header icon (Decision 3) with no <svg> root and no element: the header's ::before, masked by
+  the same table icon (Icon.tsx's path at 14 px), in the colour the icon takes (flow-canvas.css .fkind-head .icon).
+*/
+.fkind-head.is-far::before {
+  content: "";
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background-color: var(--fnode-stroke);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 5h16v14H4zM4 10h16M4 15h16M10 10v9'/%3E%3C/svg%3E") center / 14px 14px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 5h16v14H4zM4 10h16M4 15h16M10 10v9'/%3E%3C/svg%3E") center / 14px 14px no-repeat;
+}
+/*
+  Forced colours (Windows High Contrast) drop background images that are not url() and force background colours: the
+  far bars, the key mark and the masked icon take system colours instead of vanishing.
+*/
+@media (forced-colors: active) {
+  .fkind-er-bars {
+    forced-color-adjust: none;
+    --far-bar: GrayText;
+    --far-key: CanvasText;
+  }
+  .fkind-head.is-far::before {
+    forced-color-adjust: none;
+    background-color: CanvasText;
+  }
+}
+/* Each row's ports, where the row would be: the handles place themselves on its sides (flow-tab.css .fkind-port). */
+.fkind-er-farport {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+.fkind-er-farport .fkind-port {
+  top: 50%;
+  pointer-events: auto;
+}
+
+/*
+  Plan D Task 8: the assistant's waiting changes drawn on every frame they touch (Decision 11). Theme tokens only, so
+  both themes draw them. A changed shape, line or column takes a soft accent tint and no motion; new and removed rows
+  take the success and danger tints the shapes use (flow-tab.css `.fnode-suggested`, `.fnode-removed`).
+*/
+.flow-canvas .fnode-changed {
+  border-color: var(--c-accent);
+  background: color-mix(in srgb, var(--c-accent) 10%, var(--c-bg-canvas));
+  /* A ring as well as the colour, so the mark never rests on colour alone. */
+  box-shadow: 0 0 0 2px var(--c-accent);
+}
+/* Solid and heavier, where new and removed lines are dashed: a cue that is not colour alone. */
+.flow-canvas .react-flow__edge.is-ai-changed .react-flow__edge-path {
+  stroke: var(--c-accent);
+  stroke-width: 3;
+  stroke-dasharray: none;
+}
+/* A renamed group: a solid accent border where a group's is dashed, over a soft accent tint. */
+.flow-canvas .react-flow__node.is-ai-changed > .flow-area {
+  border-style: solid;
+  border-color: var(--c-accent);
+  background: color-mix(in srgb, var(--c-accent) 10%, transparent);
+}
+.fkind-er-row.is-ai-suggested {
+  background: var(--c-success-subtle);
+  box-shadow: inset 2px 0 0 var(--c-success-solid);
+}
+.fkind-er-row.is-ai-removed {
+  background: var(--c-danger-subtle);
+  box-shadow: inset 2px 0 0 var(--c-danger-solid);
+}
+.fkind-er-row.is-ai-removed .fkind-col,
+.fkind-er-row.is-ai-removed .fkind-type {
+  text-decoration: line-through;
+}
+/* The changed shapes' tint over the card: on the accent-subtle fill the type's colour fell to 3.9:1 in the light theme. */
+.fkind-er-row.is-ai-changed {
+  background: color-mix(in srgb, var(--c-accent) 10%, var(--c-bg-surface));
+  box-shadow: inset 2px 0 0 var(--c-accent);
+}
+/* Not colour alone: a changed row's name is underlined dotted, a removed one's struck through. */
+.fkind-er-row.is-ai-changed .fkind-col {
+  text-decoration: underline dotted;
+}
+.fkind-er-row.is-ai-airing {
+  box-shadow: inset 2px 0 0 var(--c-accent);
+}
+/* A frame the proposal adds: a dashed accent box, its tab marked "New", until the change is decided. */
+.board-frame.is-new .board-frame-body {
+  border-style: dashed;
+  border-color: var(--c-accent);
+}
+.board-frame.is-new .board-frame-title {
+  border-style: dashed;
+  border-color: var(--c-accent);
+}
+.board-frame-new {
+  padding: 0 6px;
+  border-radius: var(--rounded-full);
+  background: var(--c-accent);
+  color: var(--c-gmk-ink);
+  font: var(--font-small);
+  font-weight: 600;
+  line-height: 16px;
 }

@@ -9,11 +9,11 @@ type Point = { x: number; y: number };
 export const ICON_NODE_KINDS: ReadonlySet<DiagramKind> = new Set(["flow", "dfd", "state", "cloud", "mindmap"]);
 
 /**
- * The frame on top at board point `p`: each canvas box read as `box + origin` (R1, M1). The live frame (keyed
- * `liveKey`) first, else the later frame in text order, as B1's overlap rule picks; sketches never count.
+ * The frame on top at board point `p` (R1, M1; the canvas's boxes are in board units, Plan F Decision 11). The live
+ * frame (keyed `liveKey`) first, else the later frame in text order, as B1's overlap rule picks; sketches never count.
  */
-export function frameAtPoint(boxes: readonly FrameBox[], origin: Point, p: Point, liveKey: string | null): FrameBox | null {
-  const inside = (b: FrameBox) => p.x >= b.x + origin.x && p.x <= b.x + origin.x + b.w && p.y >= b.y + origin.y && p.y <= b.y + origin.y + b.h;
+export function frameAtPoint(boxes: readonly FrameBox[], p: Point, liveKey: string | null): FrameBox | null {
+  const inside = (b: FrameBox) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
   let hit: FrameBox | null = null;
   for (const b of boxes) {
     if (!inside(b)) continue;

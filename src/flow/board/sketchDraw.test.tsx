@@ -17,7 +17,7 @@ import { patientFile } from "../../test/load";
 import { mockReactFlowDom } from "../../test/reactFlow";
 import FlowTab from "../FlowTab";
 import type { Sketch } from "./boardLayout";
-import { boardFrameId } from "./boardScene";
+import { boardFrameId, SKETCH_PICTURE_TYPE } from "./boardScene";
 import { SketchBar } from "./SketchDraw";
 import { SKETCH_CLIP, sketchNodeId, TOO_MANY_SKETCHES } from "./sketches";
 
@@ -118,8 +118,12 @@ function setup(initial = BOARD, layout: string | null = layoutWith()) {
   const shapesIn = (key: string): Box[] => {
     const f = boxOf(key);
     return nodes()
-      .filter((n) => n.type !== "boardFrame" && n.type !== "sketch")
-      .map((n) => (n.parentId ? { x: f.x + n.position.x, y: f.y + n.position.y, w: n.initialWidth ?? 0, h: n.initialHeight ?? 0 } : { x: n.position.x, y: n.position.y, w: n.initialWidth ?? 0, h: n.initialHeight ?? 0 }));
+      .filter((n) => n.type !== "boardFrame" && n.type !== "sketch" && n.type !== "liveAnchor")
+      // On the board: a child's place is its parent's plus its own (a static frame's box, the live anchor).
+      .map((n) => {
+        const at = n.parentId ? (inst().getInternalNode(n.id)?.internals.positionAbsolute ?? { x: f.x + n.position.x, y: f.y + n.position.y }) : n.position;
+        return { x: at.x, y: at.y, w: n.initialWidth ?? 0, h: n.initialHeight ?? 0 };
+      });
   };
   const screenAt = (p: Pt) => inst().flowToScreenPosition(p);
   /** A press at flow `from` through `path`, let go at the last point (a click when there is none), as a browser sends it. */
@@ -142,6 +146,15 @@ type Setup = ReturnType<typeof setup>;
 async function opened(titles = ["Checkout", "Refund", "Shipping"]) {
   for (const t of titles) await screen.findByRole("button", { name: new RegExp(` ${t}$`) });
   await waitFor(() => expect(canvas.instance).not.toBeNull());
+}
+
+/** Zoomed in to 100 percent and settled there: the sketches are nodes (far out the layer is pictured, Task 9 fix 2). */
+async function readable(s: Setup) {
+  await act(async () => {
+    await s.inst().setViewport({ x: 0, y: 0, zoom: 1 });
+  });
+  await waitFor(() => expect(s.canvasEl().dataset.far ?? "").not.toContain("m"));
+  await waitFor(() => expect(s.nodes().some((n) => n.type === SKETCH_PICTURE_TYPE)).toBe(false));
 }
 
 async function pick(s: Setup, label: string, title: string, first: string) {
@@ -418,6 +431,7 @@ test("a_full_board_refuses_the_next_sketch_with_its_note", async () => {
   const many = Array.from({ length: 1_000 }, (_, i) => ({ id: `s${i + 1}`, kind: "rect", x: 3_000 + (i % 40) * 30, y: 3_000 + Math.floor(i / 40) * 30, w: 20, h: 20 }));
   const s = setup(BOARD, layoutWith(many));
   await opened();
+  await readable(s);
   await waitFor(() => expect(s.sketches()).toHaveLength(1_000));
   s.press("r");
   s.drawAt(OUT, { x: OUT.x + 200, y: OUT.y + 100 });
@@ -637,6 +651,7 @@ test("a_cut_pastes_back_in_place_and_a_full_board_refuses_a_paste", async () => 
   const many = Array.from({ length: 1_000 }, (_, i) => ({ id: `s${i + 1}`, kind: "rect", x: 3_000 + (i % 40) * 30, y: 3_000 + Math.floor(i / 40) * 30, w: 20, h: 20 }));
   const full = setup(BOARD, layoutWith(many));
   await opened();
+  await readable(full);
   await waitFor(() => expect(full.sketches()).toHaveLength(1_000));
   fireEvent.paste(full.canvasEl(), { clipboardData: { getData: () => clip } });
   expect(await screen.findByText(TOO_MANY_SKETCHES)).toBeTruthy();

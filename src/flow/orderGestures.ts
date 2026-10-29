@@ -4,8 +4,9 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { FlowDoc } from "../lang/flow/model";
 import type { Box } from "./interactions/geometry";
-import { SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { FRAME_TAB, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
 import { slotHeights } from "./orderDrag";
+import { FRAME_LEFT, ROW_LINE, TAB_STEP, TAB_W } from "./seqGeometry";
 
 const boxOfNode = (n: Node): Box => ({ x: n.position.x, y: n.position.y, w: n.initialWidth ?? 0, h: n.initialHeight ?? 0 });
 
@@ -52,7 +53,10 @@ export function seqGeometryOf(d: FlowDoc | null, g: { nodes: Node[]; edges: Edge
   const frames = (d?.frames ?? []).map((f, index) => {
     const box = byId.get(`\u0000frame:${index}`);
     const tab = byId.get(`\u0000frameTab:${index}`);
-    return { index, label: f.label, kind: f.kind, from: f.from, to: f.to, box: box ? boxOfNode(box) : null, tab: tab ? boxOfNode(tab) : null };
+    const at = box ? boxOfNode(box) : null;
+    // Plan E Decision 13: the side tab down the block's left edge; `tab` is the caption (or the side tab's top).
+    const side = at ? { x: at.x, y: at.y, w: TAB_W, h: at.h } : null;
+    return { index, label: f.label, kind: f.kind, from: f.from, to: f.to, box: at, tab: tab ? boxOfNode(tab) : null, side };
   });
   const slots = slotHeights(
     rows,
@@ -60,6 +64,39 @@ export function seqGeometryOf(d: FlowDoc | null, g: { nodes: Node[]; edges: Edge
   );
   const last = parts[parts.length - 1];
   return { parts, rows, frames, slots, left: parts.length ? parts[0].box.x : 0, right: last ? last.box.x + last.box.w : 0, top, bottom: last ? last.box.y + last.box.h : 0 };
+}
+
+/**
+ * Where a new loop around messages `from` to `to` will have its caption once written (Plan E Task 6), so its label
+ * field opens there: `addLoop` wraps the blocks that open on its first message and end inside it, and goes inside
+ * those that hold the whole range. The layout's own rules (Decisions 13, 14): the box's left edge `FRAME_LEFT` and a
+ * `TAB_STEP` per level of blocks inside it left of the leftmost lifeline, the caption `TAB_W + 4` in; the row's band
+ * gains one tab, after the tabs of the blocks around it.
+ */
+export function newLoopCaption(d: FlowDoc, geo: ReturnType<typeof seqGeometryOf>, from: number, to: number): { x: number; y: number } | null {
+  const row = geo.rows[from];
+  if (row === undefined) return null;
+  const cx = new Map(geo.parts.map((p) => [p.name, p.cx] as const));
+  let lo = Infinity;
+  for (let i = from; i <= to; i++) {
+    const l = d.links[i];
+    if (!l) continue;
+    lo = Math.min(lo, cx.get(l.from) ?? Infinity, cx.get(l.to) ?? Infinity);
+  }
+  if (lo === Infinity) return null;
+  const frames = d.frames ?? [];
+  const full = (f: { from: number; to: number }) => f.to >= f.from;
+  const atRow = frames.filter((f) => f.from === from).length;
+  const around = frames.filter((f) => full(f) && f.from === from && f.to >= to).length;
+  const inside = frames.filter((f) => !(f.from === from && f.to === to) && f.from >= from && (full(f) ? f.to <= to : f.from <= to));
+  const levels = inside.length ? Math.max(...inside.map((f) => f.depth)) - Math.min(...inside.map((f) => f.depth)) + 1 : 0;
+  const top = row - ROW_LINE - atRow * FRAME_TAB + around * FRAME_TAB + 2;
+  return { x: lo - FRAME_LEFT - TAB_STEP * levels + TAB_W + 4, y: top };
+}
+
+/** Whether a press at height `y` is on a participant's head box or its foot box, not on its lifeline between them. */
+export function onParticipantBox(box: Box, y: number): boolean {
+  return y <= box.y + SEQ_HEAD || y >= box.y + box.h - SEQ_HEAD;
 }
 
 /** A frame by its kind word: a loop is "loop", the others "opt frame", "alt frame" (fix round 1, M9). */

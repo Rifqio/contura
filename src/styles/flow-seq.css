@@ -1,0 +1,260 @@
+/*
+  Plan E: the sequence look. Colours come from seqColour.ts's seqColourVars on each node: a preset (or no colour)
+  sets --seq-col to its stroke token; a custom colour sets its adjusted values per theme (--seq-col-light,
+  --seq-amt-light, --seq-tab-light, --seq-ink-light and the -dark ones), picked here under the theme selectors
+  tokens.css uses. The fill is --seq-amt of --seq-col over --c-bg-surface; a block's tab is --seq-tab in --seq-ink.
+*/
+
+:root .fkind-seq,
+.theme-light .fkind-seq {
+  --seq-col: var(--seq-col-light, var(--c-text-subtle));
+  --seq-amt: var(--seq-amt-light, 34%);
+  --seq-tab: var(--seq-tab-light, var(--seq-col));
+  --seq-ink: var(--seq-ink-light, var(--c-bg-surface));
+}
+
+:root[data-theme="dark"] .fkind-seq,
+.theme-dark .fkind-seq {
+  --seq-col: var(--seq-col-dark, var(--c-text-subtle));
+  --seq-amt: var(--seq-amt-dark, 34%);
+  --seq-tab: var(--seq-tab-dark, var(--seq-col));
+  --seq-ink: var(--seq-ink-dark, var(--c-bg-surface));
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .fkind-seq {
+    --seq-col: var(--seq-col-dark, var(--c-text-subtle));
+    --seq-amt: var(--seq-amt-dark, 34%);
+    --seq-tab: var(--seq-tab-dark, var(--seq-col));
+    --seq-ink: var(--seq-ink-dark, var(--c-bg-surface));
+  }
+}
+
+/* An export probe (.theme-light) inside a dark window draws light: as specific as the dark rules, and after them. */
+:root .theme-light .fkind-seq {
+  --seq-col: var(--seq-col-light, var(--c-text-subtle));
+  --seq-amt: var(--seq-amt-light, 34%);
+  --seq-tab: var(--seq-tab-light, var(--seq-col));
+  --seq-ink: var(--seq-ink-light, var(--c-bg-surface));
+}
+
+/*
+  Task 5: a participant's head and foot boxes (Decisions 4 and 6), 40 px tall with a 7 px corner, filled with
+  --seq-amt of its colour over the surface and outlined in it; the icon (18 px) and its words in the text colour,
+  centred. The foot sits at the bottom of the same node, under its lane.
+*/
+.fkind-seq .fkind-lifehead {
+  height: 40px;
+  gap: 6px;
+  border: 1.5px solid var(--seq-col);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--seq-col) var(--seq-amt), var(--c-bg-surface));
+  color: var(--c-text);
+}
+.fkind-seq .fkind-lifehead .fnode-name {
+  font-size: calc(13px * var(--text-scale, 1));
+  font-weight: 600;
+}
+.fkind-seq .fkind-foot {
+  margin-top: auto;
+}
+.fkind-seq .fkind-lifehead > .icon,
+.fkind-seq-icon,
+.fkind-seq-slot {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+.fkind-seq .fkind-lifehead > .icon {
+  color: var(--c-text);
+}
+.fkind-seq-icon {
+  object-fit: contain;
+}
+/* An icon the pack lacks, or that failed: the dashed cube tile, as a cloud service shows. */
+.fkind-seq-icon.is-unknown {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--rounded-xs);
+  background-color: var(--c-bg-surface);
+  color: var(--c-text-subtle);
+}
+
+/* The lanes node (Decision 15): every lifeline, solid at 1.5 px, and every activation bar, under the messages. */
+.react-flow__node-seqLanes,
+.fkind-lanes {
+  pointer-events: none;
+}
+.fkind-lanes {
+  display: block;
+  overflow: visible;
+}
+.fkind-lanes [data-part="lifeline"] {
+  fill: none;
+  stroke: var(--seq-col);
+  stroke-width: 1.5;
+}
+.fkind-lanes [data-part="activation"] {
+  fill: color-mix(in srgb, var(--seq-col) var(--seq-amt), var(--c-bg-surface));
+  stroke: var(--seq-col);
+  stroke-width: 1;
+}
+
+/*
+  Task 6: messages and blocks (Decisions 7, 10, 13). A block's wash is 7 percent of its line colour over the canvas
+  (seqColour.ts WASH), opaque, so a label chip inside a block takes it and still hides the lifelines under its words.
+*/
+.fkind-seq {
+  --seq-wash: color-mix(in srgb, var(--seq-col) 7%, var(--c-bg-canvas));
+}
+
+/* A message's label on its chip, centred on the line's gap, in the colour under it (--seq-chip: canvas or wash). */
+.fkind-seq-chip {
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--seq-chip);
+  color: var(--c-text);
+  line-height: 18px;
+  text-align: center;
+}
+
+/* A number on the sender's lifeline: a circle (a pill past two digits) on the surface, outlined in its line colour. */
+.fkind-seq-num rect {
+  fill: var(--c-bg-surface);
+  stroke: var(--seq-col);
+  stroke-width: 1.5;
+}
+.fkind-seq-num text {
+  fill: var(--c-text);
+  font-family: var(--font-small-family);
+  font-weight: 600;
+}
+
+/* A block: the wash, a 1.5 px outline in its line colour, radius 6; the side tab down its left edge. */
+.fkind-seq-block {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1.5px solid var(--seq-col);
+  border-radius: 6px;
+  background: var(--seq-wash);
+}
+.fkind-seq-tab {
+  position: absolute;
+  top: -1.5px;
+  bottom: -1.5px;
+  left: -1.5px;
+  border-radius: 6px 0 0 6px;
+  background: var(--seq-tab);
+  color: var(--seq-ink);
+}
+.fkind-seq-tab > .icon {
+  position: absolute;
+  top: 5px;
+  left: 3px;
+}
+/* The kind word, a quarter turn counter-clockwise, under the glyph and centred on the tab. */
+.fkind-seq-word {
+  position: absolute;
+  top: 31px;
+  left: 50%;
+  transform: translateX(-50%) rotate(180deg);
+  writing-mode: vertical-rl;
+  font-family: var(--font-small-family);
+  font-size: calc(11px * var(--text-scale, 1));
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* A block's caption: its label text on a chip of its wash, over the lifelines; the press target for the block. */
+.fkind-seq-caption {
+  display: block;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: var(--seq-wash);
+  color: var(--c-text-subtle);
+  font-family: var(--font-small-family);
+  font-size: calc(12px * var(--text-scale, 1));
+  line-height: 18px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.fkind-seq-caption[data-empty] {
+  background: none;
+}
+
+/*
+  Far text (Plan F Decisions 2 and 4), the same selectors as flow-board.css's for the sequence's own words: the kind
+  word and the caption become bars, the digits go. A chip keeps its own colour under its bar, so a lifeline still never
+  shows through a message's label.
+*/
+[data-far~="s"] .board-ts-s :is(.fkind-seq-word, .fkind-seq-caption-text),
+[data-far~="m"] .board-ts-m :is(.fkind-seq-word, .fkind-seq-caption-text),
+[data-far~="l"] .board-ts-l :is(.fkind-seq-word, .fkind-seq-caption-text) {
+  color: transparent;
+  background: color-mix(in srgb, var(--c-text-faint) 45%, transparent);
+  border-radius: 2px;
+}
+[data-far~="s"] .board-ts-s.fkind-seq-num text,
+[data-far~="m"] .board-ts-m.fkind-seq-num text,
+[data-far~="l"] .board-ts-l.fkind-seq-num text {
+  fill: transparent;
+}
+[data-far~="s"] .board-ts-s.fkind-msg.fkind-seq-chip,
+[data-far~="m"] .board-ts-m.fkind-msg.fkind-seq-chip,
+[data-far~="l"] .board-ts-l.fkind-msg.fkind-seq-chip {
+  background: linear-gradient(color-mix(in srgb, var(--c-text-faint) 45%, transparent), color-mix(in srgb, var(--c-text-faint) 45%, transparent)) content-box, var(--seq-chip);
+}
+
+/*
+  Plan D's review marks (flow-tab.css, flow-board.css) on what a message draws apart from its line: new dashed in
+  success, removed dashed in danger and faded, changed in accent with a ring. A participant under review marks its
+  boxes; its node, as tall as its lane, keeps no border and no fill of its own, so the lanes and lines stay in view.
+*/
+.fkind-seq-chip.is-ai-add {
+  outline: 1px dashed var(--c-success-solid);
+}
+/* A removed message's chip stays opaque, so no lifeline shows through it; only its words fade. */
+.fkind-seq-chip.is-ai-del {
+  outline: 1px dashed var(--c-danger-solid);
+  color: color-mix(in srgb, var(--c-text) 85%, transparent);
+}
+.fkind-seq-chip.is-ai-changed {
+  outline: 2px solid var(--c-accent);
+}
+.fkind-seq-num.is-ai-add rect {
+  stroke: var(--c-success-solid);
+  stroke-dasharray: 3 2;
+}
+.fkind-seq-num.is-ai-changed rect {
+  stroke: var(--c-accent);
+  stroke-width: 2;
+}
+.flow-canvas .fnode-participant:is(.fnode-suggested, .fnode-removed, .fnode-changed),
+.flow-canvas .fnode-actor:is(.fnode-suggested, .fnode-removed, .fnode-changed) {
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+.fnode-suggested .fkind-lifehead {
+  border-style: dashed;
+  border-color: var(--c-success-solid);
+}
+.fnode-removed .fkind-lifehead {
+  border-style: dashed;
+  border-color: var(--c-danger-solid);
+}
+.fnode-changed .fkind-lifehead {
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 2px var(--c-accent);
+}

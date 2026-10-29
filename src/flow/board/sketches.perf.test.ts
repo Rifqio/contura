@@ -47,7 +47,7 @@ test("a_board_with_1000_sketches_builds_its_layer_under_20ms", () => {
   expect(after.nodes.find((n) => n.id === sketchNodeId("s500"))?.position).toEqual({ x: (499 % 40) * 300 + 40, y: Math.floor(499 / 40) * 300 });
 });
 
-test("an_origin_shift_rebuilds_no_sketch_node", () => {
+test("a_switch_rebuilds_no_sketch_node", () => {
   const r = createFlowService().parse("board", board());
   const frames = r.frames.slice(0, 5);
   const b = bigLayout(fullSketches());
@@ -62,8 +62,9 @@ test("an_origin_shift_rebuilds_no_sketch_node", () => {
     same++;
   }
   expect(same).toBe(MAX_SKETCHES);
-  // The layer alone moves, to -origin.
-  expect(c.nodes.find((n) => n.id === SKETCH_LAYER_ID)?.position).toEqual({ x: -3 * 5200, y: 0 });
+  // Nor the layer: it stays at the board's (0, 0) (Plan F Decision 11).
+  expect(c.nodes.find((n) => n.id === SKETCH_LAYER_ID)).toBe(a.nodes.find((n) => n.id === SKETCH_LAYER_ID));
+  expect(c.nodes.find((n) => n.id === SKETCH_LAYER_ID)?.position).toEqual({ x: 0, y: 0 });
 });
 
 test("undo_history_of_sketch_moves_holds_changes_not_copies", () => {

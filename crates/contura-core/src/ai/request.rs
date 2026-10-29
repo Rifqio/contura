@@ -49,6 +49,9 @@ pub enum ItemKind {
     /// The chat title call after the first answer (Decision 5). Never an `Item` of the main
     /// Ask; switched off through `off`, no title call is made.
     Title,
+    /// A text file the user attached to a diagram Ask (Plan D, Decision 15), read by the Core
+    /// from a path its own dialog returned. Not database data: only a diagram Ask sends it.
+    Attachment,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]

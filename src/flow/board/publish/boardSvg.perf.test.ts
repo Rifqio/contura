@@ -44,6 +44,8 @@ const PALETTE: ExportPalette = {
   strongBorder: "#8c959f",
   panel: "#f6f8fa",
   muted: "#3d444d",
+  faint: "#818b98",
+  keyMark: "#9a6700",
   colours: {
     accent: { fill: "#ddf4ff", stroke: "#0969da", text: "#1f2328" },
     info: { fill: "#ddf4ff", stroke: "#0969da", text: "#1f2328" },

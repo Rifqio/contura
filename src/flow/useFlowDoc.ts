@@ -13,11 +13,11 @@ import { errorText, readDiagram, writeDiagram, writeDiagramLayout } from "../api
 import type { Positions } from "../diagram/layout";
 import type { LangClient } from "../lang/client";
 import { frameHeaders } from "../lang/flow/board";
-import { type DiagramKind, FIXED_KINDS, type FlowDoc } from "../lang/flow/model";
+import { type DiagramKind, FIXED_KINDS, type FlowDoc, type FlowGroup } from "../lang/flow/model";
 import { type FlowSpan, parseFlow } from "../lang/flow/parse";
 import type { FlowBoardOp, FlowEditAnswer, FrameResult } from "../lang/flow/service";
 import type { FlowRequestOp, FlowResult, TextEdit } from "../lang/protocol";
-import { type BoardLayout, type ClashLayout, type FrameLayout, frameBounds, frameLayoutView, LAYOUT_SAVE_MAX, parseBoardLayout, placeNewFrame, serializeBoardLayout, TEXT_SCALE, utf8Length } from "./board/boardLayout";
+import { adoptStraySources, type BoardLayout, type ClashLayout, type FrameLayout, type FrameSource, frameBounds, frameLayoutView, LAYOUT_SAVE_MAX, parseBoardLayout, placeNewFrame, serializeBoardLayout, TEXT_SCALE, utf8Length } from "./board/boardLayout";
 import { canvasEdit, showFrame, shownRange } from "./board/frameView";
 import { placeFrames } from "./board/shelf/place";
 import { applySketches, freeSketchIds, invertSketchChanges, type SketchChange } from "./board/sketches";
@@ -211,6 +211,8 @@ export interface FlowDocApi {
   selection(): FrameSelection | null;
   /** `frameId` as it is now, for an action to take at its start (`RunOptions.frame`). */
   frameIdNow(): number;
+  /** A canvas write (`run`, `frameOp`, `addFrames`) or the parse it plans on (`current`) is under way. */
+  busy(): boolean;
   save: SaveState;
   /** The editor's extensions for this document: the history, the layout entries and the change listener. */
   extensions: Extension[];
@@ -257,6 +259,15 @@ export interface FlowDocApi {
   placeProposed(positions: Positions): void;
   /** The waiting changes are decided and `names` is what the text defines now: positions of proposed shapes it lacks go. */
   settleProposed(names: ReadonlySet<string> | ReadonlyMap<string, unknown>): void;
+  /**
+   * Plan D Task 8: `placeProposed` for the frame keyed `key` (any frame a board review touches), outside the history:
+   * the positions it had none for are kept until `settleProposedIn` for that key.
+   */
+  placeProposedIn(key: string, positions: Positions): void;
+  /** `settleProposed` for the frame keyed `key`: positions of its proposed shapes that `names` lacks go, outside the history. */
+  settleProposedIn(key: string, names: ReadonlySet<string> | ReadonlyMap<string, unknown>): void;
+  /** How many frames hold proposed places, for the memory tests. */
+  proposedSize(): number;
   /** The selected frame's look, as an undo entry. */
   setStyle(style: NodeLook): void;
   /** The selected frame's direction, as an undo entry. */
@@ -279,6 +290,13 @@ export interface FlowDocApi {
    * "" when nothing could be written for no reason to show (the tab closed, the text kept changing). Never selects.
    */
   addFrames(frames: readonly NewFrame[], centre: Point): Promise<{ titles: string[]; boxes: Rect[] } | { refused: string }>;
+  /**
+   * `measureNewFrames` for a landing (Plan D Task 9): each frame laid out and measured and placed in one row on
+   * `centre`, its entry under the title `appendFrames` will write for it (`titles[i]` for `frames[i]`). Writes nothing.
+   * A review's `proposedAt` and the entries `landBoard` takes must come from the same call, so a frame lands where it
+   * was previewed.
+   */
+  prepareFrames(frames: readonly NewFrame[], titles: readonly string[], centre: Point): Promise<LandedFrames>;
   /** Moves a frame's origin, as one undo entry. */
   moveFrame(key: string, at: { x: number; y: number }): void;
   /**
@@ -299,6 +317,12 @@ export interface FlowDocApi {
    * one undo entry. False, with nothing changed, when the editor no longer holds that version's text.
    */
   land(edits: TextEdit[], version: number): boolean;
+  /**
+   * `land` for a landing that adds frames: the same transaction also writes `adds`' entries (from `prepareFrames`), so
+   * one undo takes back the edits and the frames and a redo gives both back without a layout pass. False, with nothing
+   * changed, when the editor no longer holds that version's text.
+   */
+  landBoard(edits: TextEdit[], version: number, adds: readonly NewEntry[]): boolean;
   /**
    * Reads the file again and puts its text in the editor, as what the tab holds and what is on disk (the assistant's
    * "Ask again on the current text"). False, with nothing changed, when it could not be read.
@@ -344,7 +368,13 @@ export function frameHeadsOf(doc: Text, text?: string): Head[] {
 
 /** The key of a frame whose title an earlier frame has: drawn faded, never live, and no entry is written (Decision 9). */
 const dupKey = (index: number) => `\u0000#${index}`;
-const isDup = (key: string) => key.startsWith("\u0000#");
+/** A layout key held for a frame whose title another frame has. */
+export const isDup = (key: string) => key.startsWith("\u0000#");
+
+/** Every group name in `groups`, at any depth. */
+function groupNames(groups: readonly FlowGroup[]): string[] {
+  return groups.flatMap((g) => [g.name, ...groupNames(g.groups)]);
+}
 
 /** Keys from titles: the first frame with a title owns it. */
 function keysFromTitles(heads: readonly Head[]): string[] {
@@ -365,7 +395,7 @@ function frameIndexOf(sel: FrameSelection | null, titles: readonly string[]): nu
 }
 
 const isBoardOp = (op: FlowRequestOp): op is FlowBoardOp =>
-  op.op === "addFrame" || op.op === "appendFrames" || op.op === "renameFrame" || op.op === "deleteFrame" || op.op === "duplicateFrame";
+  op.op === "appendFrames" || op.op === "renameFrame" || op.op === "deleteFrame" || op.op === "duplicateFrame";
 
 /** A parse as the worker posted it, with each frame's drawn doc. */
 interface Raw {
@@ -441,6 +471,8 @@ export type Rect = { x: number; y: number; w: number; h: number };
 export interface NewFrame {
   text: string;
   direction?: FlowDirection;
+  /** The Connection From my database drew it from (Task 4b): kept on its entry, never in the text. */
+  source?: FrameSource;
 }
 
 /**
@@ -460,6 +492,7 @@ export async function measureNewFrames(
     const kind = doc?.kind ?? frameHeaders(f.text)[0]?.kind ?? null;
     let entry = newEntry(kind, { x: 0, y: 0 });
     if (f.direction) entry.direction = f.direction;
+    if (f.source) entry.source = { ...f.source };
     if (doc && !FIXED_KINDS.has(doc.kind) && doc.nodes.length > 0) entry = { ...entry, nodes: Object.assign(emptyPositions(), await layout(doc, entry)) };
     made.push({ entry, box: frameBounds(entry, doc, entry.style) });
   }
@@ -470,6 +503,12 @@ export async function measureNewFrames(
   const entries = made.map(({ entry, box }, i) => ({ ...entry, at: { x: slots[i].x - (box.x - entry.at.x), y: slots[i].y - (box.y - entry.at.y) } }));
   const boxes = made.map(({ box }, i) => ({ x: slots[i].x, y: slots[i].y, w: box.w, h: box.h }));
   return { entries, boxes };
+}
+
+/** What `prepareFrames` answers: the entries a landing writes and the boxes (board coordinates) they were placed on. */
+export interface LandedFrames {
+  entries: NewEntry[];
+  boxes: Rect[];
 }
 
 /** `e` with only the positions, sizes and axes of what `doc` has (an empty group keeps its place, diag-910 I5). */
@@ -1482,7 +1521,8 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
         headsRef.current = heads;
         headsText.current = text;
         setKeys(keysFromTitles(heads));
-        setBoard(parseBoardLayout(files.layout, heads));
+        // A sourced frame retitled into a clash keeps holding the diagram Ask (Task 4b review minor 1).
+        setBoard(adoptStraySources(parseBoardLayout(files.layout, heads), heads));
         lastSaved.current = files.layout;
         // A board with one frame opens with it selected; one with more opens with none (Decision 2).
         select(heads.length === 1 ? { title: heads[0].title, index: 0 } : null);
@@ -1772,12 +1812,12 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
         }
         const b = boardRef.current;
         const ks = keysRef.current;
-        if (op.op === "addFrame" || op.op === "duplicateFrame") {
+        if (op.op === "duplicateFrame") {
           const adds: NewEntry[] = [];
           if (answer.name !== undefined) {
             const place = at ?? placeNewFrame(frameBoxes());
-            const src = op.op === "duplicateFrame" ? b.frames.get(ks[op.frameIndex] ?? "") : undefined;
-            const kind = op.op === "addFrame" ? op.kind : (headsRef.current[op.frameIndex]?.kind ?? null);
+            const src = b.frames.get(ks[op.frameIndex] ?? "");
+            const kind = headsRef.current[op.frameIndex]?.kind ?? null;
             adds.push({ title: answer.name, after: src ? { ...cloneEntry(src), at: { ...place } } : newEntry(kind, { ...place }) });
           }
           view.dispatch(frameAddSpec(view.state, answer.edits, adds, b));
@@ -1832,6 +1872,15 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
       return landed ?? { refused: "" };
     },
     [client, docId, layoutNodes, planBoard],
+  );
+
+  const prepareFrames = useCallback(
+    async (frames: readonly NewFrame[], titles: readonly string[], centre: Point): Promise<LandedFrames> => {
+      if (titles.length < frames.length) throw new Error(`prepareFrames: ${titles.length} titles for ${frames.length} frames`);
+      const { entries, boxes } = await measureNewFrames(frames, centre, layoutNodes);
+      return { entries: entries.map((after, i) => ({ title: titles[i], after })), boxes };
+    },
+    [layoutNodes],
   );
 
   const current = useCallback(async (): Promise<Parsed | null> => {
@@ -1946,27 +1995,65 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     [selFrame, resolveKey, placeIn, editEntry],
   );
 
-  /** Names placed only for the review overlay, until its changes are decided (memory: a rejected shape kept its place). */
-  const proposed = useRef(new Set<string>());
+  /**
+   * Names placed only for the review overlay, by frame key, until its changes are decided (memory: a rejected shape
+   * kept its place).
+   */
+  const proposed = useRef(new Map<string, Set<string>>());
+  /** Drops the sets of frames deleted or retitled since they were placed: no frame has their key any more. */
+  const pruneProposed = useCallback(() => {
+    const keys = keysRef.current;
+    for (const k of proposed.current.keys()) if (!keys.includes(k)) proposed.current.delete(k);
+  }, []);
+  const placeProposedIn = useCallback(
+    (key: string, positions: Positions) => {
+      if (isDup(key)) return;
+      pruneProposed();
+      const nodes = boardRef.current.frames.get(key)?.nodes;
+      let mine = proposed.current.get(key);
+      for (const n of Object.keys(positions)) {
+        if (nodes && own(nodes, n)) continue;
+        if (!mine) proposed.current.set(key, (mine = new Set()));
+        mine.add(n);
+      }
+      placeIn(key, positions);
+    },
+    [placeIn, pruneProposed],
+  );
+  const settleProposedIn = useCallback(
+    (key: string, names: ReadonlySet<string> | ReadonlyMap<string, unknown>) => {
+      const mine = proposed.current.get(key);
+      proposed.current.delete(key);
+      pruneProposed();
+      const e = boardRef.current.frames.get(key);
+      const nodes = e && mine ? withoutProposed(e.nodes, mine, names) : null;
+      if (e && nodes && nodes !== e.nodes) setEntry(key, { ...e, nodes });
+    },
+    [setEntry, pruneProposed],
+  );
+  const proposedSize = useCallback(() => proposed.current.size, []);
   const placeProposed = useCallback(
     (positions: Positions) => {
       const frame = selFrame();
-      if (!frame) return;
-      const nodes = boardRef.current.frames.get(frame.key)?.nodes;
-      for (const n of Object.keys(positions)) if (!nodes || !own(nodes, n)) proposed.current.add(n);
-      placeIn(frame.key, positions);
+      if (frame) placeProposedIn(frame.key, positions);
     },
-    [selFrame, placeIn],
+    [selFrame, placeProposedIn],
   );
   const settleProposed = useCallback(
     (names: ReadonlySet<string> | ReadonlyMap<string, unknown>) => {
       const frame = selFrame();
-      const e = frame && boardRef.current.frames.get(frame.key);
-      const nodes = e ? withoutProposed(e.nodes, proposed.current, names) : null;
+      if (frame) settleProposedIn(frame.key, names);
+      // Every other frame with proposed places settles against what its own text defines now (its last parse), so no
+      // frame keeps a rejected shape's place.
+      const cur = parsedRef.current;
+      for (const key of [...proposed.current.keys()]) {
+        const i = cur ? cur.keys.indexOf(key) : -1;
+        const doc = i >= 0 ? cur!.drawns[i] : null;
+        if (doc) settleProposedIn(key, new Set([...doc.nodes.map((n) => n.name), ...groupNames(doc.groups)]));
+      }
       proposed.current.clear();
-      if (frame && e && nodes && nodes !== e.nodes) setEntry(frame.key, { ...e, nodes });
     },
-    [selFrame, setEntry],
+    [selFrame, settleProposedIn],
   );
 
   const setFrameSetting = useCallback(
@@ -2065,16 +2152,32 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     [client, docId, indexIn],
   );
 
+  /** The view when it still holds the text of parse `version` and `edits` is not empty: what a landing may write on. */
+  const landable = useCallback((edits: readonly TextEdit[], version: number): EditorView | null => {
+    const view = viewRef.current;
+    const cur = parsedRef.current;
+    if (!view || !cur || !alive.current || edits.length === 0) return null;
+    return cur.result.version === version && cur.text === view.state.doc.toString() ? view : null;
+  }, []);
+
   const land = useCallback(
     (edits: TextEdit[], version: number) => {
-      const view = viewRef.current;
-      const cur = parsedRef.current;
-      if (!view || !cur || !alive.current || edits.length === 0) return false;
-      if (cur.result.version !== version || cur.text !== view.state.doc.toString()) return false;
+      const view = landable(edits, version);
+      if (!view) return false;
       dispatchEdits(view, edits);
       return true;
     },
-    [dispatchEdits],
+    [dispatchEdits, landable],
+  );
+
+  const landBoard = useCallback(
+    (edits: TextEdit[], version: number, adds: readonly NewEntry[]) => {
+      const view = landable(edits, version);
+      if (!view) return false;
+      view.dispatch(frameAddSpec(view.state, edits, adds, boardRef.current));
+      return true;
+    },
+    [landable],
   );
 
   const reload = useCallback(async (): Promise<boolean> => {
@@ -2130,6 +2233,24 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   const selKind = selIndex === null ? null : (headsRef.current[selIndex]?.kind ?? null);
   const layout = useMemo(() => frameLayoutView(board, selKey ?? "\u0000none", selKind), [board, selKey, selKind]);
 
+  // Writes in flight, so a key replayed after a frame switch waits for the one before it (Plan F Decision 12).
+  const inFlight = useRef(0);
+  const track = useCallback(<T>(p: Promise<T>): Promise<T> => {
+    inFlight.current++;
+    const done = () => {
+      inFlight.current--;
+    };
+    p.then(done, done);
+    return p;
+  }, []);
+  const runTracked = useCallback((op: FlowRequestOp, opts?: RunOptions) => track(run(op, opts)), [run, track]);
+  const currentTracked = useCallback(() => track(current()), [current, track]);
+  const frameOpTracked = useCallback(
+    (op: FlowBoardOp, at?: { x: number; y: number }, onRefused?: (why: string) => void) => track(frameOp(op, at, onRefused)),
+    [frameOp, track],
+  );
+  const addFramesTracked = useCallback((frames: readonly NewFrame[], centre: Point) => track(addFrames(frames, centre)), [addFrames, track]);
+
   return {
     docId,
     initialText,
@@ -2144,12 +2265,13 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     select,
     selection: () => selRef.current,
     frameIdNow: () => frameIdRef.current,
+    busy: () => inFlight.current > 0,
     save,
     extensions,
     attach,
     view: () => viewRef.current,
-    run,
-    current,
+    run: runTracked,
+    current: currentTracked,
     spans,
     plan,
     onHistoryMove,
@@ -2160,13 +2282,16 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     placeIn,
     placeProposed,
     settleProposed,
+    placeProposedIn,
+    settleProposedIn,
+    proposedSize,
     setStyle,
     resize,
     unsize,
     setDirection,
     dropAxes,
-    frameOp,
-    addFrames,
+    frameOp: frameOpTracked,
+    addFrames: addFramesTracked,
     moveFrame,
     setFrameSetting,
     linesOf,
@@ -2174,6 +2299,8 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     flush,
     hold,
     land,
+    landBoard,
+    prepareFrames,
     reload,
   };
 }

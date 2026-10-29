@@ -2726,3 +2726,456 @@ fn the_cap_keeps_the_last_work_and_a_retry_drops_it() {
         );
     }
 }
+
+// Task 5: a board's chats follow its rename.
+
+/// A board chat of `place` with one proposal turn, stamped as a board turn (no Connection).
+fn board_chat(place: &str, title: &str, file: &str, updated_at: i64) -> AiThread {
+    use contura_core::ai::diagram::DiagramProposal;
+    use contura_core::ai::sent::ToolUse;
+    let board_msg = |role, text: &str, at| {
+        let mut m = msg(role, text, at, 1);
+        m.connection_id = None;
+        m.database = None;
+        m.kinds = Vec::new();
+        m
+    };
+    let mut answer = board_msg(AiRole::Assistant, "Added Pack order.", updated_at + 1);
+    answer.record = Some(AnswerRecord {
+        tool_use: Some(ToolUse {
+            tool: "propose_diagram_changes".into(),
+            file: file.into(),
+            input: "{}".into(),
+            proposal: DiagramProposal {
+                file: file.into(),
+                base_hash: "h".into(),
+                changes: Vec::new(),
+            },
+            outcome: None,
+        }),
+        ..AnswerRecord::default()
+    });
+    let mut t = thread(
+        place,
+        title,
+        vec![
+            board_msg(AiRole::User, "Add a Pack order step", updated_at),
+            answer,
+            board_msg(AiRole::User, "And a Ship step", updated_at + 2),
+            board_msg(AiRole::Assistant, "Done.", updated_at + 3),
+        ],
+    );
+    t.updated_at = updated_at;
+    t
+}
+
+fn rows(db: &rusqlite::Connection, sql: &str, place: &str) -> i64 {
+    db.query_row(sql, [place], |r| r.get(0)).unwrap()
+}
+
+#[test]
+fn renaming_a_board_moves_its_chats() {
+    let f = fx();
+    let store = AppStore::open(&f.dir.path().join("app.sqlite")).unwrap();
+    let a = board_chat("diagram:orders", "Pack order", "orders", 100);
+    let b = board_chat("diagram:orders", "Ship it", "orders", 200);
+    let other = board_chat("diagram:refunds", "Refund", "refunds", 300);
+    for t in [&a, &b, &other] {
+        store.save_ai_thread(t).unwrap();
+    }
+    assert_eq!(
+        store
+            .move_ai_place("diagram:orders", "diagram:sales")
+            .unwrap(),
+        2
+    );
+    let db = f.db();
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_threads WHERE place = ?1",
+            "diagram:sales"
+        ),
+        2
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_threads WHERE place = ?1",
+            "diagram:orders"
+        ),
+        0
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_threads WHERE json_extract(json, '$.place') = ?1",
+            "diagram:sales"
+        ),
+        2
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_topic WHERE place = ?1",
+            "diagram:sales"
+        ),
+        2
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_topic WHERE place = ?1",
+            "diagram:orders"
+        ),
+        0
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_topic_fts WHERE place = ?1",
+            "diagram:sales"
+        ),
+        2
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_topic_fts WHERE place = ?1",
+            "diagram:orders"
+        ),
+        0
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_tool_use WHERE target = ?1",
+            "sales.flow"
+        ),
+        2
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_tool_use WHERE target = ?1",
+            "orders.flow"
+        ),
+        0
+    );
+    // Search by the new place finds the moved chats' Topics.
+    let found = search_place(&db, "diagram:sales", &["Pack".to_string()], 10).unwrap();
+    assert_eq!(found.len(), 2);
+    // Titles, messages and the saved record (its file stays as history) are intact.
+    let moved = store.get_ai_thread(a.id).unwrap().unwrap();
+    assert_eq!(moved.place, "diagram:sales");
+    assert_eq!(moved.title, "Pack order");
+    assert_eq!(moved.messages, a.messages);
+    assert_eq!(
+        moved.messages[1]
+            .record
+            .as_ref()
+            .unwrap()
+            .tool_use
+            .as_ref()
+            .unwrap()
+            .file,
+        "orders"
+    );
+    // The other board's chat did not move.
+    assert_eq!(
+        store.get_ai_thread(other.id).unwrap().unwrap().place,
+        "diagram:refunds"
+    );
+    assert_eq!(
+        store
+            .move_ai_place("diagram:orders", "diagram:sales")
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn renamed_chats_keep_their_history_on_the_next_ask() {
+    use contura_core::ai::board::board_history;
+    let f = fx();
+    let store = AppStore::open(&f.dir.path().join("app.sqlite")).unwrap();
+    let t = board_chat("diagram:orders", "Pack order", "orders", 100);
+    store.save_ai_thread(&t).unwrap();
+    assert!(board_history(&t, "sales").is_none());
+    store
+        .move_ai_place("diagram:orders", "diagram:sales")
+        .unwrap();
+    let moved = store.get_ai_thread(t.id).unwrap().unwrap();
+    let history = board_history(&moved, "sales").expect("the moved chat has history");
+    assert!(history.contains("Add a Pack order step"));
+    assert!(history.contains("And a Ship step"));
+    assert!(board_history(&moved, "orders").is_none());
+}
+
+#[test]
+fn a_failed_file_rename_moves_nothing() {
+    use contura_core::diagrams::write_diagram;
+    let f = fx();
+    let data = tempfile::tempdir().unwrap();
+    write_diagram(data.path(), "orders", "flow\n", "{}", false).unwrap();
+    write_diagram(data.path(), "sales", "flow\n", "{}", false).unwrap();
+    let t = board_chat("diagram:orders", "Pack order", "orders", 100);
+    f.svc.save_thread(&t).unwrap();
+    // `sales` is taken: the files stay and so do the chats.
+    assert!(f.svc.rename_board(data.path(), "orders", "sales").is_err());
+    // A board that is not there fails too.
+    assert!(f.svc.rename_board(data.path(), "ghost", "other").is_err());
+    let db = f.db();
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_threads WHERE place = ?1",
+            "diagram:orders"
+        ),
+        1
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_threads WHERE place = ?1",
+            "diagram:sales"
+        ),
+        0
+    );
+    // A rename that succeeds moves them.
+    f.svc
+        .rename_board(data.path(), "orders", "invoices")
+        .unwrap();
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_threads WHERE place = ?1",
+            "diagram:invoices"
+        ),
+        1
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_threads WHERE place = ?1",
+            "diagram:orders"
+        ),
+        0
+    );
+}
+
+#[test]
+fn moving_onto_a_place_with_chats_keeps_the_newest_fifty() {
+    use contura_core::store::THREAD_LIMIT;
+    let f = fx();
+    let store = AppStore::open(&f.dir.path().join("app.sqlite")).unwrap();
+    let mut old = Vec::new();
+    for i in 0..THREAD_LIMIT {
+        let t = board_chat("diagram:sales", "Old", "sales", 1000 + i);
+        store.save_ai_thread(&t).unwrap();
+        old.push(t.id);
+    }
+    let mut moving = Vec::new();
+    for i in 0..3 {
+        let t = board_chat("diagram:orders", "New", "orders", 5000 + i * 10);
+        store.save_ai_thread(&t).unwrap();
+        moving.push(t.id);
+    }
+    assert_eq!(
+        store
+            .move_ai_place("diagram:orders", "diagram:sales")
+            .unwrap(),
+        3
+    );
+    let kept = store.list_ai_threads("diagram:sales").unwrap();
+    assert_eq!(kept.len() as i64, THREAD_LIMIT);
+    for id in &moving {
+        assert!(kept.iter().any(|t| t.id == *id));
+    }
+    // The three oldest went with their Topics and tool-use rows.
+    let db = f.db();
+    for id in &old[..3] {
+        assert!(store.get_ai_thread(*id).unwrap().is_none());
+        for table in ["ai_topic", "ai_topic_fts", "ai_tool_use"] {
+            let n: i64 = db
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE thread_id = ?1"),
+                    [id.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 0, "{table}");
+        }
+    }
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_threads WHERE place = ?1",
+            "diagram:orders"
+        ),
+        0
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_tool_use WHERE target = ?1",
+            "orders.flow"
+        ),
+        0
+    );
+}
+
+#[test]
+fn a_resave_of_a_moved_chat_keeps_its_tool_use_names() {
+    let f = fx();
+    let store = AppStore::open(&f.dir.path().join("app.sqlite")).unwrap();
+    let t = board_chat("diagram:orders", "Pack order", "orders", 100);
+    store.save_ai_thread(&t).unwrap();
+    store
+        .move_ai_place("diagram:orders", "diagram:sales")
+        .unwrap();
+    let mut moved = store.get_ai_thread(t.id).unwrap().unwrap();
+    moved.updated_at += 1;
+    store.save_ai_thread(&moved).unwrap();
+    let db = f.db();
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_tool_use WHERE target = ?1",
+            "sales.flow"
+        ),
+        1
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_tool_use WHERE target = ?1",
+            "orders.flow"
+        ),
+        0
+    );
+}
+
+#[test]
+fn deleting_a_board_takes_its_chats() {
+    use contura_core::diagrams::write_diagram;
+    let f = fx();
+    let data = tempfile::tempdir().unwrap();
+    write_diagram(data.path(), "orders", "flow\n", "{}", false).unwrap();
+    write_diagram(data.path(), "sales", "flow\n", "{}", false).unwrap();
+    f.svc
+        .save_thread(&board_chat("diagram:orders", "Pack", "orders", 100))
+        .unwrap();
+    f.svc
+        .save_thread(&board_chat("diagram:sales", "Sell", "sales", 200))
+        .unwrap();
+    // A refused recycle keeps the files and the chats.
+    let refused = f.svc.delete_board_with(data.path(), "orders", |_| {
+        Err(contura_core::error::Error::File("no bin".into()))
+    });
+    assert!(refused.is_err());
+    let db = f.db();
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_threads WHERE place = ?1",
+            "diagram:orders"
+        ),
+        1
+    );
+    f.svc
+        .delete_board_with(data.path(), "orders", |_| Ok(()))
+        .unwrap();
+    for (table, n) in [("ai_threads", 0), ("ai_topic", 0), ("ai_topic_fts", 0)] {
+        assert_eq!(
+            rows(
+                &db,
+                &format!("SELECT COUNT(*) FROM {table} WHERE place = ?1"),
+                "diagram:orders"
+            ),
+            n,
+            "{table}"
+        );
+    }
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_tool_use WHERE target = ?1",
+            "orders.flow"
+        ),
+        0
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT COUNT(*) FROM ai_threads WHERE place = ?1",
+            "diagram:sales"
+        ),
+        1
+    );
+}
+
+/// Final review M1: a board whose files went to the Recycle Bin is deleted, even when its
+/// chats cannot be cleared then; that failure is logged, not reported (as a rename).
+#[test]
+fn a_delete_that_cannot_clear_the_chats_still_succeeds() {
+    use contura_core::diagrams::{list_diagrams, write_diagram};
+    let f = fx();
+    let data = tempfile::tempdir().unwrap();
+    write_diagram(data.path(), "orders", "flow\n", "{}", false).unwrap();
+    f.svc
+        .save_thread(&board_chat("diagram:orders", "Pack", "orders", 100))
+        .unwrap();
+    // The clear fails inside its transaction: a table it deletes from is gone.
+    f.db().execute_batch("DROP TABLE ai_tool_use").unwrap();
+    let mut recycled = Vec::new();
+    f.svc
+        .delete_board_with(data.path(), "orders", |files| {
+            recycled.extend(files.iter().cloned());
+            for p in files {
+                std::fs::remove_file(p).unwrap();
+            }
+            Ok(())
+        })
+        .expect("the files went, so the delete succeeded");
+    assert!(!recycled.is_empty());
+    assert!(list_diagrams(data.path()).unwrap().is_empty());
+    // The chats stayed (the clear rolled back), and nothing else failed.
+    assert_eq!(
+        rows(
+            &f.db(),
+            "SELECT COUNT(*) FROM ai_threads WHERE place = ?1",
+            "diagram:orders"
+        ),
+        1
+    );
+}
+
+/// Plan D Task 15 fix round 1: Settings' "Clear AI history" also clears every board's chats
+/// (its hint says so), and only those: the Ask threads of other places stay.
+#[test]
+fn clearing_diagram_chats_removes_every_board_chat_and_nothing_else() {
+    let f = fx();
+    let a = thread("diagram:checkout", "a", turn(1, 10, "q", None));
+    let b = thread("diagram:orders_erd", "b", turn(1, 10, "q", None));
+    let kept = thread("ungrouped", "kept", turn(1, 10, "q", None));
+    // A place that only looks like a board's is not one.
+    let near = thread("diagramx", "near", turn(1, 10, "q", None));
+    for t in [&a, &b, &kept, &near] {
+        f.svc.save_thread(t).unwrap();
+    }
+    f.svc.clear_diagram_chats().unwrap();
+    assert!(f.svc.list_threads("diagram:checkout").unwrap().is_empty());
+    assert!(f.svc.list_threads("diagram:orders_erd").unwrap().is_empty());
+    assert_eq!(f.svc.list_threads("ungrouped").unwrap().len(), 1);
+    assert_eq!(f.svc.list_threads("diagramx").unwrap().len(), 1);
+    let left: i64 = f
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM ai_threads WHERE place LIKE 'diagram:%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(left, 0);
+}

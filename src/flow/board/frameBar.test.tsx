@@ -190,9 +190,58 @@ test("the_bar_follows_the_kind", async () => {
 
   setup(LOGIN, null);
   const seq = await screen.findByRole("toolbar", { name: "Login settings" });
-  expect(controls(seq)).toEqual(["Frame name", "Text size", "Colour", "More"]);
+  expect(controls(seq)).toEqual(["Frame name", "Numbering", "Text size", "Colour", "More"]);
   expect(within(seq).queryByRole("combobox", { name: "Direction" })).toBeNull();
   expect(within(seq).queryByRole("combobox", { name: "Numbering" })).toBeNull();
+});
+
+const numbering = (bar: HTMLElement) => within(bar).getByRole("button", { name: "Numbering" });
+
+test("toggle_round_trips_with_one_undo", async () => {
+  const s = setup(LOGIN, null);
+  const bar = await screen.findByRole("toolbar", { name: "Login settings" });
+  expect(numbering(bar).getAttribute("aria-pressed")).toBe("false");
+  expect(numbering(bar).getAttribute("title")).toBe("Number the messages (autonumber)");
+  fireEvent.click(numbering(bar));
+  await waitFor(() => expect(s.text()).toBe(LOGIN.replace("\n", "\nautonumber\n")));
+  await waitFor(() => expect(numbering(s.bar("Login")).getAttribute("aria-pressed")).toBe("true"));
+  act(() => void undo(s.view()));
+  await waitFor(() => expect(s.text()).toBe(LOGIN));
+  await waitFor(() => expect(numbering(s.bar("Login")).getAttribute("aria-pressed")).toBe("false"));
+  // Off: a numbered text loses its directive, and one undo brings it back byte for byte.
+  fireEvent.click(numbering(s.bar("Login")));
+  await waitFor(() => expect(numbering(s.bar("Login")).getAttribute("aria-pressed")).toBe("true"));
+  const numbered = s.text();
+  fireEvent.click(numbering(s.bar("Login")));
+  await waitFor(() => expect(s.text()).toBe(LOGIN));
+  await waitFor(() => expect(numbering(s.bar("Login")).getAttribute("aria-pressed")).toBe("false"));
+  act(() => void undo(s.view()));
+  await waitFor(() => expect(s.text()).toBe(numbered));
+  await waitFor(() => expect(numbering(s.bar("Login")).getAttribute("aria-pressed")).toBe("true"));
+});
+
+test("the_toggle_is_disabled_with_a_problem", async () => {
+  const bad = 'diagram sequence "Login"\nparticipant User\nUser -> \n';
+  setup(bad, null);
+  const bar = await screen.findByRole("toolbar", { name: "Login settings" });
+  expect(numbering(bar)).toHaveProperty("disabled", true);
+  expect(numbering(bar).getAttribute("title")).toBe("Fix the problems in this diagram first.");
+});
+
+test("the_toggle_is_reachable_by_arrow_keys", async () => {
+  setup(LOGIN, null);
+  const bar = await screen.findByRole("toolbar", { name: "Login settings" });
+  const name = within(bar).getByRole("textbox", { name: "Frame name" });
+  name.focus();
+  expect(numbering(bar).tabIndex).toBe(0);
+  // From the name field the arrows stay in its text; Tab-free movement starts from the toggle.
+  numbering(bar).focus();
+  fireEvent.keyDown(numbering(bar), { key: "ArrowLeft" });
+  expect(document.activeElement).toBe(name);
+  fireEvent.keyDown(name, { key: "Tab" });
+  numbering(bar).focus();
+  fireEvent.keyDown(numbering(bar), { key: "ArrowRight" });
+  expect(document.activeElement).toBe(within(bar).getByRole("combobox", { name: "Text size" }));
 });
 
 test("rename_in_the_bar_rewrites_the_header_and_keeps_positions", async () => {

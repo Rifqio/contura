@@ -113,7 +113,7 @@ export function sceneSource(scene: Scene, selected: string[], onScreen: Box): Pu
       const bounds = part === "screen" ? onScreen : part === "selected" && chosen.length > 0 ? sceneBounds(scene, chosen) : sceneBounds(scene);
       // Only the region differs between parts: every part of one palette shares one body string (ADR 0003).
       if (made?.palette !== palette) {
-        const defs = svgDefs(palette, { hairline: sceneOutlined(scene) ? hairlineId() : null, icons: new Map() });
+        const defs = svgDefs(palette, { hairline: sceneOutlined(scene, palette) ? hairlineId() : null, icons: new Map() });
         const body = sceneBody(scene, palette);
         const bytes = utf8Length(body) + utf8Length(defs);
         const tooLarge = bytes > SVG_MAX_BYTES;

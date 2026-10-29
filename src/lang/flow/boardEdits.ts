@@ -31,13 +31,16 @@ export function addFrame(text: string, board: BoardParse, kind: DiagramKind, tit
   return { edits: [{ from: cut, to: text.length, insert: cut === 0 ? header : `${lb}${lb}${header}` }], name: used };
 }
 
+/** What `appendFrames` reads of a board: each frame's title and the shape count. */
+export type BoardCounts = { frames: readonly { parse: { title: string } }[]; shapes: number };
+
 /**
  * Appends whole frames, each after one blank line as `addFrame` appends, in the file's line break. Each text holds
  * exactly one header with a kind; an empty title becomes the kind's word, and each title is made free against the
  * board and the frames before it (`Title 2`) by rewriting only its header's title. `names` maps each text's index to
  * the title it took. Refused whole past the frame or shape cap.
  */
-export function appendFrames(text: string, board: BoardParse, frames: readonly string[]): FlowEditResult {
+export function appendFrames(text: string, board: BoardCounts, frames: readonly string[]): FlowEditResult {
   if (board.frames.length + frames.length > MAX_BOARD_FRAMES) return { edits: [], note: BOARD_NOTES.full };
   const lb = lineBreak(text);
   const taken = new Set(board.frames.map((f) => f.parse.title));

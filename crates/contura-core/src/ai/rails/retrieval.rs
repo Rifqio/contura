@@ -75,6 +75,8 @@ fn source(item: &Item) -> Option<&'static str> {
         // A diagram Ask: the .flow text (labelled `<file>.flow`), or the selected names.
         ItemKind::Diagram if is_selection_label(&item.label) => Some("selection"),
         ItemKind::Diagram => Some("diagram"),
+        // A text file the user attached to a diagram Ask.
+        ItemKind::Attachment => Some("attachment"),
         // Values never leave as an item; the question, the summary and the title calls carry
         // no database text.
         ItemKind::Question | ItemKind::Values | ItemKind::Summary | ItemKind::Title => None,
@@ -317,7 +319,7 @@ pub fn without_rows(exact: &str) -> String {
         .collect()
 }
 
-fn looks_like_instructions(text: &str) -> bool {
+pub(crate) fn looks_like_instructions(text: &str) -> bool {
     let lower = text.to_lowercase();
     INJECTION_PATTERNS.iter().any(|p| lower.contains(p))
 }

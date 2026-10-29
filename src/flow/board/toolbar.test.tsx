@@ -327,9 +327,9 @@ test("a_space_tap_opens_the_space_box_at_the_pointer", async () => {
   await waitFor(() => expect(s.saved.text).toContain('diagram state "State"'));
   await waitFor(() => expect(canvas.props!.nodes.some((n) => n.id === boardFrameId("State"))).toBe(true));
   const node = canvas.props!.nodes.find((n) => n.id === boardFrameId("State"))!;
-  const origin = canvas.props!.origin ?? { x: 0, y: 0 };
-  expect(Math.abs(node.position.x + origin.x + Number(node.style?.width) / 2 - at.x)).toBeLessThanOrEqual(1.5);
-  expect(Math.abs(node.position.y + origin.y + Number(node.style?.height) / 2 - at.y)).toBeLessThanOrEqual(1.5);
+  // The frame's box node is in board units, as the canvas is (Plan F Decision 11).
+  expect(Math.abs(node.position.x + Number(node.style?.width) / 2 - at.x)).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(node.position.y + Number(node.style?.height) / 2 - at.y)).toBeLessThanOrEqual(1.5);
   expect(SPACE_TAP_MS).toBe(250);
 });
 
@@ -394,7 +394,7 @@ test("add_opens_the_shelf_and_a_card_adds_at_the_middle", async () => {
   const s = setup();
   await opened();
   vi.spyOn(s.canvasEl(), "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON() {} } as DOMRect);
-  // Nothing selected: the origin is (0, 0), so the canvas is the board.
+  // The canvas is the board (Plan F Decision 11).
   const mid = canvas.instance!.screenToFlowPosition({ x: 400, y: 300 });
   const centre = vi.spyOn(canvas.instance!, "setCenter");
   fireEvent.click(s.tool("Add"));
@@ -409,12 +409,11 @@ test("add_opens_the_shelf_and_a_card_adds_at_the_middle", async () => {
   const tab = await screen.findByRole("button", { name: "Sequence Sequence" });
   await waitFor(() => expect(tab.getAttribute("aria-current")).toBe("true"));
   await waitFor(() => expect(within(s.bar()).queryByRole("button", { name: "Participant" })).not.toBeNull());
-  // Its box is centred on the middle of the view, on the board.
+  // Its box is centred on the middle of the view, on the board (its box node is in board units).
   await waitFor(() => expect(JSON.parse(s.saved.layout!).frames.Sequence).toBeTruthy());
-  const at = JSON.parse(s.saved.layout!).frames.Sequence.at;
   const node = canvas.props!.nodes.find((n) => n.id === boardFrameId("Sequence"))!;
-  expect(Math.abs(node.position.x + at.x + Number(node.style?.width) / 2 - mid.x)).toBeLessThanOrEqual(1.5);
-  expect(Math.abs(node.position.y + at.y + Number(node.style?.height) / 2 - mid.y)).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(node.position.x + Number(node.style?.width) / 2 - mid.x)).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(node.position.y + Number(node.style?.height) / 2 - mid.y)).toBeLessThanOrEqual(1.5);
   // It glides into view: the view centres on its box.
   await waitFor(() => expect(centre).toHaveBeenCalled());
   const [x, y] = centre.mock.calls[centre.mock.calls.length - 1];

@@ -206,7 +206,8 @@ test("the_card_modules_import_no_scene_canvas_or_card", () => {
   const runtime = [...erCanvasSource.matchAll(/^(?:import|export) (?!type )[^;]*? from "([^"]+)";/gms)].map((m) => m[1]).filter((f) => f.startsWith("."));
   // Task 4: planColumnPaste reads a copied line with parseFlow; edits already imports parse, so it reaches nothing new.
   // Final review: the one refusal chain and table predicate come from erRelate, which reaches only leaves itself.
-  const allowed = ["./board/staticIds", "./editWords", "./erRelate", "../lang/flow/edits", "../lang/flow/model", "../lang/flow/parse"];
+  // Plan F Task 9: the opt-in frame recorder is a leaf too (it imports only the API client's two perf-log calls).
+  const allowed = ["./board/staticIds", "./editWords", "./erRelate", "../lang/flow/edits", "../lang/flow/model", "../lang/flow/parse", "../perf/perfRecorder"];
   expect(runtime.filter((f) => !allowed.includes(f))).toEqual([]);
   expect(editWordsSource).not.toMatch(/^import (?!type )/m);
   // B3 Task 5: the card and the line read the scroll store, so it imports nothing of src at all (React only).

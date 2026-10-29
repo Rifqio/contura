@@ -117,8 +117,12 @@ function setup(initial = BOARD, layout: string | null = LAYOUT) {
   const shapesIn = (key: string): Box[] => {
     const f = boxOf(key);
     return nodes()
-      .filter((n) => n.type !== "boardFrame")
-      .map((n) => (n.parentId ? { x: f.x + n.position.x, y: f.y + n.position.y, w: n.initialWidth ?? 0, h: n.initialHeight ?? 0 } : { x: n.position.x, y: n.position.y, w: n.initialWidth ?? 0, h: n.initialHeight ?? 0 }));
+      .filter((n) => n.type !== "boardFrame" && n.type !== "liveAnchor")
+      // On the board: a child's place is its parent's plus its own (a static frame's box, the live anchor).
+      .map((n) => {
+        const at = n.parentId ? (inst().getInternalNode(n.id)?.internals.positionAbsolute ?? { x: f.x + n.position.x, y: f.y + n.position.y }) : n.position;
+        return { x: at.x, y: at.y, w: n.initialWidth ?? 0, h: n.initialHeight ?? 0 };
+      });
   };
   const screenAt = (p: { x: number; y: number }) => inst().flowToScreenPosition(p);
   /** A press on the canvas at flow `from`, let go at `to` (a click when the same), as a browser sends it. */
@@ -587,10 +591,12 @@ test("a_tool_in_an_overlap_draws_into_the_frame_on_top_where_it_was_pressed", as
   await keepNew();
   await waitFor(() => expect(s.frame(2)).toBe('diagram flow "Shipping"\nPack\nSend\nStep [step]\nPack > Send\n'));
   expect(s.frame(1)).toBe(REFUND);
-  // Drawn where it was pressed: the switch's origin shift moved nothing on screen.
+  // Drawn where it was pressed: the switch moved nothing on screen. Its place on the board is its frame-local position
+  // plus the live anchor's (Plan F Decision 11).
   await waitFor(() => expect(s.nodeOf("Step")).toBeTruthy());
   const n = boxOfNode(s.nodeOf("Step")!);
-  const mid = s.inst().flowToScreenPosition({ x: n.x + n.w / 2, y: n.y + n.h / 2 });
+  const abs = s.inst().getInternalNode("Step")!.internals.positionAbsolute;
+  const mid = s.inst().flowToScreenPosition({ x: abs.x + n.w / 2, y: abs.y + n.h / 2 });
   expect(Math.abs(mid.x - pressed.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(mid.y - pressed.y)).toBeLessThanOrEqual(1);
 });

@@ -1,6 +1,8 @@
 // Mirrors the serde shapes of crates/contura-core (model.rs, connections.rs,
 // suggest.rs, error.rs). Field names are camelCase on the wire.
 
+import type { FrameSource } from "../flow/board/boardLayout";
+
 export type ConnectionId = string;
 export type GroupId = string;
 
@@ -786,6 +788,8 @@ export interface SqlColumn {
   name: string;
   typeName: string;
   pk: boolean;
+  /** PostgreSQL: the labels of the column's enum type, in their sort order; absent for any other type. */
+  enumValues?: string[];
 }
 
 export interface SqlTable {
@@ -1140,12 +1144,19 @@ export type AiError =
   | { kind: "toolOff" }
   /** A diagram file name holding a control character, which cannot go in a request. */
   | { kind: "badFileName" }
+  /** The diagram Ask names an attached file the Core no longer holds: nothing was sent. The chip is cleared. */
+  | { kind: "attachmentGone" }
+  /**
+   * A frame was drawn from a Connection the AI may not see (Never, deleted, another Group's provider), or a node links
+   * to a table of one: nothing was built or sent. `message` names the frame or node and the Connection, never the schema.
+   */
+  | { kind: "diagramHeld"; message: string }
   | { kind: "internal" };
 
 // One Ask and its preview. Mirrors crates/contura-core/src/ai/{request,preview,budget,log}.rs.
 
 /** One kind of item an Ask can send. */
-export type ItemKind = "question" | "names" | "cards" | "dbml" | "sql" | "error" | "savedQueries" | "values" | "rows" | "outline" | "history" | "summary" | "diagram" | "tab" | "steps" | "title";
+export type ItemKind = "question" | "names" | "cards" | "dbml" | "sql" | "error" | "savedQueries" | "values" | "rows" | "outline" | "history" | "summary" | "diagram" | "tab" | "steps" | "title" | "attachment";
 
 export interface TableRef {
   schema: string | null;
@@ -1372,6 +1383,8 @@ export interface PreviewItem {
   /** Why the item cannot be switched on, when it cannot. */
   locked: string | null;
   on: boolean;
+  /** A board frame's row: how much of the frame goes ("in full", "names only: over the budget", "left out: over the budget"). */
+  fit?: string | null;
 }
 
 /** How the table cards fit the budget: demoted to names only before they are left out. Mirrors `TableFit`. */
@@ -1591,6 +1604,12 @@ export interface SentRecord {
   title?: SummarySent | null;
   /** The exact text, only with "Keep the exact text sent" on (R7.2). */
   exact: string | null;
+  /**
+   * Task 4b: the Connections a diagram Ask drew on (frames From my database drew, `table:` links that resolved). The
+   * Core's history gate reads it back from the saved record, so a later Ask leaves the turn out once one is held. Absent
+   * elsewhere. Kept whole: never rebuild the record without it.
+   */
+  sources?: ConnectionId[];
 }
 
 /** The outline call of an Ask, measured from its request. Mirrors `OutlineSent` in sent.rs. */
@@ -1609,7 +1628,7 @@ export interface OutlineSent {
 }
 
 /** One Steps row of the answer log. Mirrors `StepKind` (camelCase). */
-export type StepKind = "access" | "schema" | "tables" | "cleaning" | "request" | "thinking" | "answer" | "sqlCheck" | "outline" | "compact" | "rows" | "diagram" | "toolCheck";
+export type StepKind = "access" | "schema" | "tables" | "cleaning" | "request" | "thinking" | "answer" | "sqlCheck" | "outline" | "compact" | "rows" | "diagram" | "toolCheck" | "boardContext";
 
 /** A Steps row in fixed wording, filled by the Core from what ran. Mirrors `ProcessStep`. */
 export interface ProcessStep {
@@ -1703,6 +1722,8 @@ export type AiEvent =
    * (invisible characters stripped, at most 64 KB): the saved record's `toolUse.input`.
    */
   | { type: "proposal"; proposal: DiagramProposal; input: string }
+  /** A diagram Ask whose call asked one follow-up question instead of proposing changes (at most 300 characters); no `proposal` comes with it. */
+  | { type: "followUp"; question: string }
   | { type: "error"; error: AiError; partial: boolean };
 
 /** What the output rail found in one statement of an answer (R5.3). Mirrors `Flag` (serde tag "kind"). */
@@ -2903,21 +2924,27 @@ export interface SyncOutcome {
   tables: ObjectPath[];
 }
 
-// The diagram assistant (step 11h). Mirrors crates/contura-core/src/ai/{diagram_tool,diagram,sent,tool_uses}.rs.
+// The diagram assistant (step 11h). Mirrors crates/contura-core/src/ai/{diagram_tool,diagram,board,sent,tool_uses}.rs.
 
 /**
  * One change the model proposes, as it is on the wire: snake_case, externally tagged (`{ add_node: { ... } }`).
- * Optional fields may be absent or null.
+ * Optional fields may be absent or null. `frame` is the title of the frame the change is in (boards).
  */
 export type DiagramOp =
-  | { add_node: { name: string; kind?: string | null; id?: string | null; group?: string | null } }
-  | { remove_node: { target: string } }
-  | { rename_node: { target: string; name: string } }
-  | { add_flow: { from: string; to: string; label?: string | null } }
-  | { remove_flow: { from: string; to: string; label?: string | null } }
-  | { relabel_flow: { from: string; to: string; label: string } }
+  | { add_node: { name: string; kind?: string | null; id?: string | null; group?: string | null; frame?: string | null } }
+  | { remove_node: { target: string; frame?: string | null } }
+  | { rename_node: { target: string; name: string; frame?: string | null } }
+  | { add_flow: { from: string; to: string; label?: string | null; frame?: string | null } }
+  | { remove_flow: { from: string; to: string; label?: string | null; frame?: string | null } }
+  | { relabel_flow: { from: string; to: string; label: string; frame?: string | null } }
   /** A null `group` takes the shape out of every group. */
-  | { move_to_group: { target: string; group?: string | null } };
+  | { move_to_group: { target: string; group?: string | null; frame?: string | null } }
+  /** A new frame; `kind` is a `DIAGRAM_KINDS` id. Later changes name it by `title`. */
+  | { add_frame: { title: string; kind: string } }
+  /** ER frames only. A missing or empty `type` is an untyped column; `flags` are `COLUMN_FLAGS`. */
+  | { add_column: { table: string; name: string; type?: string | null; flags?: string[] | null; frame?: string | null } }
+  | { remove_column: { table: string; column: string; frame?: string | null } }
+  | { set_column: { table: string; column: string; name?: string | null; type?: string | null; frame?: string | null } };
 
 /** The tool input (snake_case). */
 export interface ProposeInput {
@@ -2944,6 +2971,10 @@ export interface OutlineNode {
   line: number;
   /** True when the shape has a `table` attribute. */
   table: boolean;
+  /** That attribute's value as written (`shop.orders`), for the diagram Ask's table links; webview only. */
+  tableValue?: string;
+  /** An ER table's column names, in row order; absent on every other shape. */
+  columns?: string[];
 }
 
 export interface OutlineGroup {
@@ -2957,6 +2988,9 @@ export interface OutlineLink {
   to: string;
   label: string | null;
   line: number;
+  /** In an ERD, the column the line starts at (`from` is then its table); absent otherwise. */
+  fromColumn?: string;
+  toColumn?: string;
 }
 
 /** What the Ask may change: all of the diagram, or the selected shapes. */
@@ -2973,7 +3007,14 @@ export type DropReason =
   | "unknownKind"
   | "outsideSelection"
   | "dependsOnDropped"
-  | "tooMany";
+  | "tooMany"
+  /** The frame the change names is not on the board, or is a clashing copy. */
+  | "unknownFrame"
+  | "frameTaken"
+  | "tooManyFrames"
+  | "unknownColumn"
+  | "columnTaken"
+  | "notAnErd";
 
 export type TargetField = "target" | "from" | "to" | "group";
 
@@ -2997,6 +3038,8 @@ export interface ProposedChange {
   status: ChangeStatus;
   /** The indexes of earlier changes this one needs. */
   dependsOn: number[];
+  /** On a board, the title of the frame the change was checked in; records saved before boards have none. */
+  frame?: string | null;
 }
 
 export interface DiagramProposal {
@@ -3046,4 +3089,80 @@ export interface DiagramAskRequest {
   threadId?: string | null;
   model?: string | null;
   picks?: ModelPicks | null;
+  /** The board the Ask was made on; each change is checked in the frame it names. */
+  board?: BoardInput | null;
+  /** Task 4b: each live frame whose layout entry records the Connection it was drawn from. Absent: none. */
+  sources?: FrameSourceIn[];
+  /** Task 4b: each node of the outline with a `table:` value (the Core also reads every one in `text`). Absent: none. */
+  tableLinks?: TableLinkIn[];
+}
+
+/** Where a frame was drawn from, with its title (the layout entry's key). Mirrors `FrameSourceIn` in diagram.rs. */
+export type FrameSourceIn = FrameSource & { frame: string };
+
+/** A node with a `table:` value as written; `frame` is null on a one-frame file. Mirrors `TableLinkIn` in diagram.rs. */
+export interface TableLinkIn {
+  frame: string | null;
+  node: string;
+  table: string;
+}
+
+/** A frame's problem: a frame line and its message. */
+export interface FrameProblem {
+  line: number;
+  message: string;
+}
+
+/** One frame of the board: its slice of `text` (UTF-16 offsets, as `splitFrames` gives), outline and box. */
+export interface BoardFrameInput {
+  index: number;
+  title: string;
+  kind: string | null;
+  from: number;
+  to: number;
+  line: number;
+  /** In file lines. */
+  outline: FlowOutline;
+  problems: FrameProblem[];
+  /** Board units, integers. */
+  box: { x: number; y: number; w: number; h: number };
+  /** A second frame with a title already taken: never a target. */
+  clash: boolean;
+}
+
+/** A shape, column or line named within its frame. */
+export interface PartRef {
+  frame: string;
+  name: string;
+}
+
+/** A sketch as a note with its place on the board. */
+export interface SketchNote {
+  id: string;
+  kind: string;
+  text: string;
+  at: { x: number; y: number };
+  /** The note an arrow starts from. */
+  from: string | null;
+  /** The part an arrow points at. */
+  pointsAt: PartRef | null;
+  /** The frame the note sits on. */
+  on: string | null;
+  /** The frame the note sits near. */
+  near: string | null;
+}
+
+/** The board a diagram Ask is made on (camelCase). */
+export interface BoardInput {
+  /** Every frame, in text order. */
+  frames: BoardFrameInput[];
+  /** The chip titles, in chip order. */
+  focus: string[];
+  /** `sketches` are sketch ids. */
+  selected: { frame: string | null; shapes: string[]; sketches: string[] };
+  sketches: SketchNote[];
+  create: string | null;
+  followUp: { asked: string; reply: string } | null;
+  /** The token of an attachment the Core holds. */
+  attachment: string | null;
 }

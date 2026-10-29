@@ -474,7 +474,12 @@ export const saveAiSettings = async (groupId: GroupId | null, settings: AiSettin
 export const aiTest = (groupId: GroupId | null): Promise<AiTestOk> => invoke("ai_test", { groupId });
 
 /** The provider's models, fetched with the saved key, with what each accepts. */
-export const aiModels = (groupId: GroupId | null): Promise<ModelList> => invoke("ai_models", { groupId });
+export const aiModels = async (groupId: GroupId | null): Promise<ModelList> => {
+  const list = await invoke<ModelList>("ai_models", { groupId });
+  // The fetched listing is kept by the Core; open pickers read their models again.
+  aiSettingsChanged.emit();
+  return list;
+};
 
 /** The models known without the network: the built-in records and the last fetched listing. */
 export const aiKnownModels = (groupId: GroupId | null): Promise<ModelList> => invoke("ai_known_models", { groupId });
@@ -521,6 +526,16 @@ export async function aiCompact(request: CompactRequest, onEvent: (e: AiEvent) =
  * the AI's title, or null when no call went or no title came back.
  */
 export const aiNameChat = (request: NameChatRequest): Promise<string | null> => invoke("ai_name_chat", { request });
+
+/**
+ * Opens the open dialog in the Core and holds the chosen text file (at most 64 KB) for the next diagram Ask, in place
+ * of any held before. Resolves the token the Ask carries in `board.attachment`, the file's name and its size; `null`
+ * when the dialog is cancelled. The webview never sees the path.
+ */
+export const aiPickAttachment = (): Promise<{ token: string; name: string; bytes: number } | null> => invoke("ai_pick_attachment");
+
+/** Lets the held file go from the Core when the user removes its chip; a file picked since, under another token, stays. */
+export const aiClearAttachment = (token: string): Promise<void> => invoke("ai_clear_attachment", { token });
 
 /** What a diagram Ask would send, built by the Core with the global settings (R1.6). */
 export const aiDiagramPreview = (request: DiagramAskRequest): Promise<Preview> => invoke("ai_diagram_preview", { request });
@@ -625,6 +640,9 @@ export const aiClearContext = (connectionId: ConnectionId | null): Promise<void>
 
 /** Removes every AI thread of every place and every AI Context. */
 export const aiClearAll = (): Promise<void> => invoke("ai_clear_all", {});
+
+/** Every board's chats (each `diagram:<name>` place): Settings' Clear AI history clears them with a place's threads. */
+export const aiClearDiagramChats = (): Promise<void> => invoke("ai_clear_diagram_chats", {});
 
 /** The stored AI Contexts of a Connection, or of every Connection with null. */
 export const aiContextStatus = (connectionId: ConnectionId | null): Promise<ContextStatusRow[]> =>
@@ -771,6 +789,11 @@ function aiErrorText(e: AiError): string {
       return "Propose diagram changes is off in Settings.";
     case "badFileName":
       return "This diagram's file name holds a character the assistant cannot send. Rename the file and ask again.";
+    case "attachmentGone":
+      return "The attached file is no longer held. Attach it again.";
+    case "diagramHeld":
+      // The Core's own sentence: the frame or node and the Connection, never the schema.
+      return e.message;
     case "internal":
       return "Something went wrong before the question was sent.";
   }
@@ -904,3 +927,8 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
 }
 
 export { formatBytes };
+
+/** Whether `CONTURA_PERF_LOG` was set when the app started (the opt-in frame recorder). */
+export const perfLogEnabled = (): Promise<boolean> => invoke("perf_log_enabled");
+/** Appends one line to the file `CONTURA_PERF_LOG` names; the path never comes from here. */
+export const perfLogAppend = (line: string): Promise<void> => invoke("perf_log_append", { line });

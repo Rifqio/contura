@@ -19,7 +19,7 @@ import { patientFile } from "../../test/load";
 import { mockReactFlowDom } from "../../test/reactFlow";
 import { DIAGRAM_KIND_WORD } from "../diagramKinds";
 import FlowTab, { type DatabaseAdd, type MermaidAdd } from "../FlowTab";
-import { boardFrameId, FRAME_TAB_H } from "./boardScene";
+import { boardFrameId, FRAME_PICTURE_TYPE, FRAME_TAB_H } from "./boardScene";
 import { MAX_SKETCHES } from "./boardLayout";
 import type { ErFromModel } from "./catalog/fromDatabase";
 import { SINGLE_TEMPLATES, templateById } from "./catalog/templates";
@@ -77,12 +77,12 @@ vi.mock("../useFlowDoc", async (load) => {
     },
   };
 });
-vi.mock("../ai/useDiagramAsk", async (load) => {
-  const real = await load<typeof import("../ai/useDiagramAsk")>();
+vi.mock("../ai/useBoardAsk", async (load) => {
+  const real = await load<typeof import("../ai/useBoardAsk")>();
   return {
     ...real,
-    useDiagramAsk: (...a: Parameters<typeof real.useDiagramAsk>) => {
-      const r = real.useDiagramAsk(...a);
+    useBoardAsk: (...a: Parameters<typeof real.useBoardAsk>) => {
+      const r = real.useBoardAsk(...a);
       return lock.on ? { ...r, locked: true } : r;
     },
   };
@@ -129,6 +129,8 @@ const LAYOUT = JSON.stringify({
 
 type Pt = { x: number; y: number };
 const SHOP: ErFromModel = { title: "shop", text: 'diagram er "shop"\norders {\n  id int pk\n}\n', tables: 1, links: 0, leftOut: 0 };
+/** The Connection From my database read SHOP from (Task 4b). */
+const SHOP_SOURCE = { connectionId: "c1", database: "shop", schema: null };
 
 function setup(text = BOARD, layout: string | null = LAYOUT, extra: { onFromDatabase?: (a: DatabaseAdd) => void; onMermaidFrame?: (a: MermaidAdd) => void; around?: (tab: ReactNode) => ReactNode } = {}) {
   const saved = { text, layout };
@@ -159,11 +161,11 @@ function setup(text = BOARD, layout: string | null = LAYOUT, extra: { onFromData
   const press = (key: string, init: KeyboardEventInit = {}) => fireEvent.keyDown(canvasEl(), { key, ...init });
   const panel = () => screen.queryByRole("dialog", { name: "Add to the board" });
   const layoutNow = () => JSON.parse(saved.layout ?? '{"frames":{},"sketches":[]}');
-  /** A live frame's board origin: its entry's `at`. */
+  /** A frame's place on the board: its entry's `at`. */
   const originOf = (title: string): Pt => layoutNow().frames[title]?.at ?? { x: 0, y: 0 };
   const inst = () => canvas.instance!;
   const nodeOf = (id: string) => canvas.props!.nodes.find((n) => n.id === id);
-  /** A frame's box on the canvas, in flow coordinates. */
+  /** A frame's box on the canvas, in board units (Plan F Decision 11). */
   const boxOf = (title: string) => {
     const n = nodeOf(boardFrameId(title))!;
     return { x: n.position.x, y: n.position.y, w: Number(n.style?.width), h: Number(n.style?.height) };
@@ -185,6 +187,8 @@ async function opened(titles: [string, string][] = [["Flowchart", "Checkout"], [
 async function pickFrame(s: Setup, title: string) {
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(` ${title}$`) }));
   await waitFor(() => expect(s.isSelected(title)).toBe(true));
+  // Live, not only drawn selected (Plan F Decision 12): its box holds no static shape any more.
+  await waitFor(() => expect(canvas.props!.nodes.some((n) => n.parentId === boardFrameId(title))).toBe(false));
 }
 
 /** Opens the Shelf with Add and waits for its search to take focus. */
@@ -226,10 +230,9 @@ function dropAt(s: Setup, dt: ReturnType<typeof transfer>, flow: Pt) {
   dragEvent("drop", s.dropEl(), dt, p);
 }
 
-/** The view's middle on the board, as the add reads it: the canvas centre on screen, plus the live origin. */
-function middle(s: Setup, origin: Pt): Pt {
-  const f = s.inst().screenToFlowPosition({ x: 400, y: 300 });
-  return { x: f.x + origin.x, y: f.y + origin.y };
+/** The view's middle on the board, as the add reads it: the canvas centre on screen (the canvas is the board). */
+function middle(s: Setup): Pt {
+  return s.inst().screenToFlowPosition({ x: 400, y: 300 });
 }
 
 const for_ = <T,>(xs: readonly T[], f: (x: T) => void) => xs.forEach(f);
@@ -239,13 +242,13 @@ const near = (a: number, b: number, by = 1.5) => expect(Math.abs(a - b), `${a} v
 
 test("frame_at_point_reads_board_boxes_and_puts_the_live_frame_first", () => {
   const box = (key: string, index: number, x: number) => ({ key, index, title: key, kind: "flow" as DiagramKind, x, y: 0, w: 200, h: 100, problems: 0, clash: false });
-  const boxes = [box("A", 0, 0), box("B", 1, 100)];
-  // Canvas boxes with origin (500, 0): A spans 500 to 700 on the board.
-  expect(frameAtPoint(boxes, { x: 500, y: 0 }, { x: 550, y: 50 }, null)?.key).toBe("A");
-  expect(frameAtPoint(boxes, { x: 500, y: 0 }, { x: 50, y: 50 }, null)).toBeNull();
+  const boxes = [box("A", 0, 500), box("B", 1, 600)];
+  // Board boxes (Plan F Decision 11): A spans 500 to 700 on the board.
+  expect(frameAtPoint(boxes, { x: 550, y: 50 }, null)?.key).toBe("A");
+  expect(frameAtPoint(boxes, { x: 50, y: 50 }, null)).toBeNull();
   // Overlap: the later in text order, unless the live one is there.
-  expect(frameAtPoint(boxes, { x: 0, y: 0 }, { x: 150, y: 50 }, null)?.key).toBe("B");
-  expect(frameAtPoint(boxes, { x: 0, y: 0 }, { x: 150, y: 50 }, "A")?.key).toBe("A");
+  expect(frameAtPoint(boxes, { x: 650, y: 50 }, null)?.key).toBe("B");
+  expect(frameAtPoint(boxes, { x: 650, y: 50 }, "A")?.key).toBe("A");
   expect([...ICON_NODE_KINDS].sort()).toEqual(["cloud", "dfd", "flow", "mindmap", "state"]);
 });
 
@@ -385,7 +388,7 @@ test("a_kind_card_adds_an_empty_frame_in_the_middle_of_the_view", async () => {
   const s = setup();
   await opened();
   s.sized();
-  const mid = middle(s, { x: 0, y: 0 });
+  const mid = middle(s);
   const p = await openShelf(s);
   const glide = vi.spyOn(s.inst(), "setCenter");
   fireEvent.click(within(p).getByRole("option", { name: KIND_HEAD.er.name }));
@@ -397,10 +400,9 @@ test("a_kind_card_adds_an_empty_frame_in_the_middle_of_the_view", async () => {
   expect(glide.mock.calls[glide.mock.calls.length - 1][2]).toMatchObject({ duration: 0 });
   // Its box is centred on the view's middle, in board coordinates.
   await waitFor(() => expect(s.layoutNow().frames[title]).toBeTruthy());
-  const o = s.originOf(title);
   const b = s.boxOf(title);
-  near(b.x + o.x + b.w / 2, mid.x);
-  near(b.y + o.y + b.h / 2, mid.y);
+  near(b.x + b.w / 2, mid.x);
+  near(b.y + b.h / 2, mid.y);
   await waitFor(() => expect(s.panel()).toBeNull());
   expect(s.toast()?.textContent).toContain(`Added ${title}.`);
 });
@@ -416,7 +418,7 @@ test("a_board_template_adds_three_frames_in_one_undo_and_fits_them", async () =>
   await waitFor(() => expect(s.isSelected(titles[0])).toBe(true));
   await waitFor(() => for_(titles, (t) => expect(s.saved.text).toContain(`"${t}"`)));
   await waitFor(() => expect(fit).toHaveBeenCalledTimes(1));
-  // The union of the three boxes on the canvas (the new origin), with the tabs above them.
+  // The union of the three boxes on the board, with the tabs above them.
   const boxes = titles.map((t) => s.boxOf(t));
   const x0 = Math.min(...boxes.map((b) => b.x));
   const y0 = Math.min(...boxes.map((b) => b.y));
@@ -432,6 +434,32 @@ test("a_board_template_adds_three_frames_in_one_undo_and_fits_them", async () =>
   // One undo takes all three back.
   fireEvent.click(within(s.toast() as HTMLElement).getByRole("button", { name: "Undo" }));
   await waitFor(() => expect(s.saved.text).toBe(BOARD));
+});
+
+test("a_template_fitted_below_100_percent_keeps_its_tabs_in_view", async () => {
+  // Final review I1: the tab strip keeps its screen height below 100 percent (Plan F Decision 5), so the fit pads the
+  // frames by the tab at the zoom it lands on, not by FRAME_TAB_H board units.
+  const s = setup();
+  await opened();
+  await openShelf(s);
+  const sized = s.sized();
+  try {
+    const fit = vi.spyOn(s.inst(), "fitBounds");
+    const shop = templateById("board-online-shop")!;
+    act(() => shelf.props!.onAdd({ kind: "template", id: shop.id }));
+    const titles = ["Orders ERD", "Checkout flow", "Pay sequence"];
+    await waitFor(() => expect(s.isSelected(titles[0])).toBe(true));
+    await waitFor(() => expect(fit).toHaveBeenCalledTimes(1));
+    const y0 = Math.min(...titles.map((t) => s.boxOf(t).y));
+    const [rect] = fit.mock.calls[0];
+    // The zoom React Flow's fit lands on (padding 0.1) in the 800 by 600 canvas: below 100 percent here.
+    const zoom = Math.min(800 / (rect.width * 1.1), 600 / (rect.height * 1.1));
+    expect(zoom).toBeLessThan(0.9);
+    // The tabs above the frames get their full screen height in the fit, within a pixel.
+    expect((y0 - rect.y) * zoom).toBeGreaterThanOrEqual(FRAME_TAB_H - 1);
+  } finally {
+    sized.mockRestore();
+  }
 });
 
 test("a_single_template_adds_its_frame", async () => {
@@ -462,7 +490,7 @@ test("a_click_with_nothing_selected_makes_an_icon_sketch_in_the_middle", async (
   const s = setup();
   await opened();
   s.sized();
-  const mid = middle(s, { x: 0, y: 0 });
+  const mid = middle(s);
   const p = await openShelf(s);
   fireEvent.click(within(p).getByRole("tab", { name: /^Icons/ }));
   fireEvent.click(await within(p).findByRole("option", { name: "PostgreSQL" }));
@@ -495,7 +523,7 @@ test("a_note_opens_its_field_and_adds_only_when_typed", async () => {
   const s = setup();
   await opened();
   s.sized();
-  const mid = middle(s, { x: 0, y: 0 });
+  const mid = middle(s);
   let p = await openShelf(s);
   fireEvent.click(within(p).getByRole("tab", { name: /^Shapes/ }));
   fireEvent.click(within(p).getByRole("option", { name: "Note" }));
@@ -552,7 +580,7 @@ test("a_rectangle_click_adds_a_box_sketch_and_toasts", async () => {
   const s = setup();
   await opened();
   s.sized();
-  const mid = middle(s, { x: 0, y: 0 });
+  const mid = middle(s);
   const p = await openShelf(s);
   fireEvent.click(within(p).getByRole("tab", { name: /^Shapes/ }));
   fireEvent.click(within(p).getByRole("option", { name: "Rectangle" }));
@@ -571,18 +599,17 @@ test("a_drop_places_it_where_released", async () => {
   const s = setup();
   await opened();
   await pickFrame(s, "Login");
-  const origin = s.originOf("Login");
-  expect(origin).toEqual({ x: 700, y: 0 });
+  expect(s.originOf("Login")).toEqual({ x: 700, y: 0 });
   await openShelf(s);
+  // A board point: the canvas is the board, whichever frame is live (Plan F Decision 11).
   const flow = { x: -200, y: 900 };
   dropAt(s, carrying({ kind: "diagram", diagram: "er" }), flow);
   const title = DIAGRAM_KIND_WORD.er;
   await waitFor(() => expect(s.isSelected(title)).toBe(true));
   await waitFor(() => expect(s.layoutNow().frames[title]).toBeTruthy());
-  const o = s.originOf(title);
   const b = s.boxOf(title);
-  near(b.x + o.x + b.w / 2, flow.x + origin.x);
-  near(b.y + o.y + b.h / 2, flow.y + origin.y);
+  near(b.x + b.w / 2, flow.x);
+  near(b.y + b.h / 2, flow.y);
   await waitFor(() => expect(s.panel()).toBeNull());
 });
 
@@ -609,15 +636,14 @@ test("a_drop_of_another_type_does_nothing", async () => {
 
 async function iconDropOnCheckout(s: Setup) {
   await pickFrame(s, "Login");
-  const origin = s.originOf("Login");
   await openShelf(s);
   const box = s.boxOf("Checkout");
-  const flow = { x: box.x + box.w / 2, y: box.y + box.h - 12 };
-  const board = { x: flow.x + origin.x, y: flow.y + origin.y };
-  dropAt(s, carrying({ kind: "icon", name: "brand-postgresql" }), flow);
+  // The canvas is the board (Plan F Decision 11).
+  const board = { x: box.x + box.w / 2, y: box.y + box.h - 12 };
+  dropAt(s, carrying({ kind: "icon", name: "brand-postgresql" }), board);
   await waitFor(() => expect(s.saved.text).toContain("PostgreSQL [icon: brand-postgresql]"));
   await waitFor(() => expect(s.isSelected("Checkout")).toBe(true));
-  // The node sits at the drop point, read in Checkout's origin.
+  // The node sits at the drop point, in Checkout's own units (it hangs from the live anchor at its `at`).
   const at = s.originOf("Checkout");
   await waitFor(() => expect(s.nodeOf("PostgreSQL")).toBeTruthy());
   const n = s.nodeOf("PostgreSQL")!;
@@ -635,13 +661,14 @@ test("an_icon_dropped_on_an_unselected_flowchart_lands_in_that_frame", async () 
   await iconDropOnCheckout(s);
 });
 
-test("an_icon_dropped_in_the_overview_lands_the_same", async () => {
+test("an_icon_dropped_on_a_pictured_frame_lands_the_same", async () => {
   const s = setup();
   await opened();
+  // Zoomed out where its text is far, the view change pictures Checkout (Plan F Decision 7).
   await act(async () => {
     await s.inst().setViewport({ x: 0, y: 0, zoom: 0.3 });
   });
-  act(() => canvas.props!.onOverview?.(true));
+  await waitFor(() => expect(canvas.props!.nodes.some((n) => n.parentId === boardFrameId("Checkout") && n.type === FRAME_PICTURE_TYPE)).toBe(true));
   await iconDropOnCheckout(s);
 });
 
@@ -858,7 +885,7 @@ test("a_database_add_is_refused_while_the_assistant_edits", async () => {
   fireEvent.click(s.tool("Hand"));
   let said: string | null = null;
   await act(async () => {
-    said = await add!.run(SHOP);
+    said = await add!.run(SHOP, SHOP_SOURCE);
   });
   expect(said).toBe(EDIT_MESSAGES.locked);
   expect(s.saved.text).toBe(BOARD);
@@ -883,7 +910,7 @@ test("a_database_add_toasts_with_undo_and_escape_on_its_dialog_keeps_the_board_s
               }
             }}
           >
-            <button type="button" onClick={() => void dlg.run(SHOP)}>
+            <button type="button" onClick={() => void dlg.run(SHOP, SHOP_SOURCE)}>
               Read
             </button>
           </div>
@@ -1175,10 +1202,14 @@ test("a_database_add_under_a_taken_title_toasts_the_title_it_got", async () => {
   act(() => shelf.props!.onAdd({ kind: "fromDatabase" }));
   await waitFor(() => expect(add).not.toBeNull());
   await act(async () => {
-    await add!.run(SHOP);
+    await add!.run(SHOP, SHOP_SOURCE);
   });
   await waitFor(() => expect(s.saved.text).toContain('diagram er "shop 2"'));
   await waitFor(() => expect(s.toast()?.textContent).toContain("Added shop 2: 1 table."));
+  // The source is kept under the title the frame got, and the text names no Connection (Task 4b).
+  await waitFor(() => expect(s.layoutNow().frames["shop 2"]?.source).toEqual(SHOP_SOURCE));
+  expect(s.layoutNow().frames.shop?.source).toBeUndefined();
+  expect(s.saved.text).not.toContain("c1");
 });
 
 test("an_add_undone_before_it_is_drawn_is_not_picked_up_when_redone", async () => {

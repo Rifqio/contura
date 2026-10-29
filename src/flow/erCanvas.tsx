@@ -12,6 +12,7 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState, useS
 import type { CommitHow } from "./interactions/InlineEdit";
 import { isStaticId } from "./board/staticIds";
 import { EDIT_MESSAGES } from "./editWords";
+import { perfMark, perfMeasure, perfOn } from "../perf/perfRecorder";
 import { erRefusal, isErTable } from "./erRelate";
 import type { RunResult } from "./useFlowDoc";
 import { ER_NOTES, type FlowEditOp } from "../lang/flow/edits";
@@ -321,6 +322,7 @@ export function useErCanvas(o: Options) {
     (e: ErEdit) => {
       if (refused()) return false;
       opts.current.notice(null);
+      perfMark("er_field_open_req");
       setEdit(e);
       return true;
     },
@@ -545,7 +547,12 @@ export function useErCanvas(o: Options) {
         }
         if (!t) return refuse(e, ER_MESSAGES.tableGone(e.table), e.kind === "draft" ? (e.field === "name" ? { name: v } : { type: v }) : { typed: v });
         // The whole commit is tracked, its refusal included, so a switch waiting for it sees the field refused (R4).
-        opts.current.track(e.kind === "table" ? commitTable(e, v, how) : e.kind === "col" ? commitColumn(e, t, v, how) : commitDraft(e, t, v, how));
+        const commit = e.kind === "table" ? commitTable(e, v, how) : e.kind === "col" ? commitColumn(e, t, v, how) : commitDraft(e, t, v, how);
+        if (perfOn()) {
+          perfMark("field_commit_start");
+          void commit.then(() => requestAnimationFrame(() => perfMeasure("field_commit_paint", "field_commit_start")));
+        }
+        opts.current.track(commit);
       },
       cancel: (e) => {
         if (editNow() === e) done("cancel");

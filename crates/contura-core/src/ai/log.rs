@@ -80,6 +80,8 @@ pub enum StepKind {
     Diagram,
     /// A diagram Ask: the proposed changes checked against the file.
     ToolCheck,
+    /// A board Ask: how many frames went in full, as names, or were left out.
+    BoardContext,
 }
 
 /// A Steps row, in fixed wording filled from what ran.

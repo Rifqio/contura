@@ -528,3 +528,18 @@ test("a_press_on_a_draggable_tile_lets_the_drag_start_and_focus_comes_back_to_th
   expect(fireEvent.mouseDown(still)).toBe(false);
   void n;
 });
+
+test("initial_side_right_opens_on_the_templates", () => {
+  // Plan D A11: the assistant's Template opens the board Shelf on its templates side.
+  const s = setup({ initialSide: "right" });
+  const dialog = screen.getByRole("dialog", { name: "Add to the board" });
+  expect(dialog.getAttribute("data-side")).toBe("right");
+  expect(document.activeElement).toBe(s.search());
+  const templates = screen.getByRole("listbox", { name: "Templates" });
+  expect(s.search().getAttribute("aria-controls")).toBe(templates.id);
+  // Enter adds a template; Tab goes back to the pick side as before.
+  s.key("Enter");
+  expect(s.onAdd.mock.calls[0][0]).toMatchObject({ kind: "template" });
+  s.key("Tab");
+  expect(dialog.getAttribute("data-side")).toBe("left");
+});

@@ -28,6 +28,7 @@ const KIND_WORDS: Record<ItemKind, string> = {
   tab: "This tab",
   steps: "Recent steps",
   title: "the chat title call",
+  attachment: "the attached file",
 };
 
 const plural = (count: number, word: string) => `${n(count)} ${word}${count === 1 ? "" : "s"}`;

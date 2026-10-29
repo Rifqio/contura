@@ -29,12 +29,22 @@ export interface NodeBaseProps {
 /**
  * A node fading in from 96 percent after an add, or fading out before a delete. The diagram assistant's marks
  * (board 11.5): `suggested` is new in its review (green, dashed, a "New" badge), `removed` is what it would remove
- * (red), `airing` was just added by it (an accent ring that fades).
+ * (red), `changed` is renamed, moved, retyped or relabelled by it (a soft tint, no motion; Plan D Decision 11),
+ * `airing` was just added by it (an accent ring that fades); `ringed` is the same ring on a part an answer only named,
+ * which changed nothing, so its name gets no note.
  */
-export type NodeState = "entering" | "leaving" | "suggested" | "removed" | "airing";
+export type NodeState = "entering" | "leaving" | "suggested" | "removed" | "changed" | "airing" | "ringed";
 
-/** What the assistant's marks add to a node's accessible name. */
-const STATE_NOTE: Partial<Record<NodeState, string>> = { suggested: ", suggested by AI", removed: ", suggested by AI", airing: ", added by AI" };
+/** The class a state draws with: a named part's ring is the landing's ring. */
+export const stateClass = (state: NodeState): string => (state === "ringed" ? "airing" : state);
+
+/** What the assistant's marks add to a node's (or an ER row's) accessible name. */
+export const STATE_NOTE: Partial<Record<NodeState, string>> = {
+  suggested: ", suggested by AI",
+  removed: ", removal suggested by AI",
+  changed: ", changed by AI",
+  airing: ", added by AI",
+};
 
 /** The kind's token pair as the custom properties the stylesheet reads (ADR 0008: tokens only). */
 export function kindStyle(kind: DrawnKind, color?: ShapeColour): CSSProperties {
@@ -116,7 +126,7 @@ export function NodeShell({ kind, family, look, selected, label: plain, name, st
     </span>
   ) : null;
   const hover = useHoverPorts();
-  const sel = (selected ? " fnode-selected" : "") + (state ? ` fnode-${state}` : "") + (sized ? " fnode-sized" : "") + (color ? ` fnode-col${presetOf(color) ? ` fnode-col-${color}` : ""}` : "");
+  const sel = (selected ? " fnode-selected" : "") + (state ? ` fnode-${stateClass(state)}` : "") + (sized ? " fnode-sized" : "") + (color ? ` fnode-col${presetOf(color) ? ` fnode-col-${color}` : ""}` : "");
   // The node itself takes the size, not React Flow's wrapper, which stays measured from it.
   const box: CSSProperties = sized ? { ...kindStyle(kind, color), width: sized.w, height: sized.h } : kindStyle(kind, color);
   // Zoomed out the node drops its family and look classes, so no shape rule (diamond, slant, pill) applies.

@@ -5,8 +5,8 @@
 // `npm run test:perf` (it needs --expose-gc). Every budget is provisional until Task 13 measures it in the release
 // build, and is never raised.
 import { expect, test } from "vitest";
-import { frame } from "../lang/flow/fixtures/bigBoard";
 import { bigBoardLayout } from "../lang/flow/fixtures/bigBoardLayout";
+import { ER_BOARD_KEYS, ER_BOARD_TEXT, ER_FLOW_FRAMES, ER_TABLES, erPositions } from "../lang/flow/fixtures/erBoard";
 import { type FlowDoc, MAX_BOARD_SHAPES } from "../lang/flow/model";
 import { bestMedian } from "../lang/flow/perfGate";
 import { MESSAGES } from "../lang/flow/problems";
@@ -21,16 +21,13 @@ import { buildFlowGraph } from "./flowNodes";
 const gc = () => (globalThis as unknown as { gc: () => void }).gc();
 const heapUsed = () => (globalThis as unknown as { process: { memoryUsage(): { heapUsed: number } } }).process.memoryUsage().heapUsed;
 
-const FLOW_FRAMES = 40;
+const FLOW_FRAMES = ER_FLOW_FRAMES;
 const ER_INDEX = FLOW_FRAMES;
-const TABLES = Array.from({ length: 2000 }, (_, i) => `t${i}`);
-const block = (t: string) => [`${t} {`, "  id int pk", ...Array.from({ length: 19 }, (_, c) => `  c${c + 1} int`), "}"];
-// Each table refers to the next one's key: 2,000 column relationships, every table meeting two lines.
-const RING = TABLES.map((t, i) => `${t}.c1 > ${TABLES[(i + 1) % TABLES.length]}.id`);
-const ERD = ['diagram er "Schema"', ...TABLES.flatMap(block), "", ...RING, ""].join("\n");
-const TEXT = `${Array.from({ length: FLOW_FRAMES }, (_, k) => `${frame(k)}\n`).join("")}${ERD}`;
-const KEYS = [...Array.from({ length: FLOW_FRAMES }, (_, k) => `Area ${k}`), "Schema"];
+const TABLES = ER_TABLES;
+const TEXT = ER_BOARD_TEXT;
+const KEYS = ER_BOARD_KEYS;
 const SCHEMA = { title: "Schema", index: ER_INDEX };
+const positions = erPositions;
 
 /** The board's layout: A5's first 40 frames, and the ERD's 2,000 cards on a grid to their right. */
 function layout(): BoardLayout {
@@ -38,12 +35,6 @@ function layout(): BoardLayout {
   for (let k = FLOW_FRAMES; k < 50; k++) b.frames.delete(`Area ${k}`);
   b.frames.set("Schema", { at: { x: FLOW_FRAMES * 5200, y: 0 }, nodes: positions(), style: "modern", direction: "TB" });
   return b;
-}
-
-function positions(): Record<string, { x: number; y: number }> {
-  const at = Object.create(null) as Record<string, { x: number; y: number }>;
-  TABLES.forEach((t, i) => (at[t] = { x: (i % 50) * 260, y: Math.floor(i / 50) * 520 }));
-  return at;
 }
 
 /** One column edit of table `n` as the card sends it: its 6th column's type. */

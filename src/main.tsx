@@ -11,6 +11,7 @@ import "./styles/backup.css";
 import "./styles/compare.css";
 import "./styles/flow.css";
 import "./styles/flow-canvas.css";
+import "./styles/flow-seq.css";
 import "./styles/update.css";
 import "./styles/guide.css";
 import "./styles/lineage.css";
@@ -20,6 +21,7 @@ import "./styles/flow-shelf.css";
 import { installContextMenuGuard } from "./components/contextMenuGuard";
 import { installTooltipGuard } from "./components/tooltipGuard";
 import { setIconTheme } from "./flow/icons";
+import { startPerfRecorder } from "./perf/perfRecorder";
 import { applyStoredTheme } from "./theme/theme";
 
 // Paint the saved theme before the first render, so the window never flashes the other one.
@@ -29,6 +31,8 @@ setIconTheme(applyStoredTheme());
 installTooltipGuard();
 // The WebView never shows its own right-click menu (its Reload restarts the app); text fields keep Cut, Copy, Paste.
 installContextMenuGuard();
+// Opt-in frame log for the release gates: starts only when the app was run with CONTURA_PERF_LOG.
+void startPerfRecorder();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

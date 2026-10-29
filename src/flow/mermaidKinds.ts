@@ -2,6 +2,7 @@
 // Contura kind (mermaid.js.org: sequenceDiagram, stateDiagram, classDiagram, mindmap, timeline). What changes or is left
 // out is noted with its line and why; a line that cannot be read is an error with its line and how to write it.
 import { attrValue, type FlowDoc, type FlowLink, type FlowNode, flowLabel, flowName, quote, stateMarkerName } from "../lang/flow/model";
+import { AUTONUMBER_MAX } from "../lang/flow/numbering";
 import { writeFlow } from "./flowModel";
 
 export type KindNote = { line: number; text: string };
@@ -88,8 +89,15 @@ export function sequenceToFlow(c: KindContext): KindOut {
       title = m[1].trim();
       continue;
     }
-    if (t === "autonumber" || t.startsWith("autonumber ")) {
-      c.note(line, "autonumber is left out: Contura does not number messages.");
+    if ((m = /^autonumber(?:\s+(off|\d+)(?:\s+\d+)?)?$/.exec(t))) {
+      const start = m[1] === undefined || m[1] === "off" ? null : Number(m[1]);
+      if (start !== null && start > AUTONUMBER_MAX) {
+        c.note(line, `autonumber starts too high; it is written without a start.`);
+        body.push(`${indent()}autonumber`);
+        continue;
+      }
+      if (/^autonumber\s+\d+\s+\d+$/.test(t)) c.note(line, "the autonumber step is left out.");
+      body.push(`${indent()}autonumber${m[1] === undefined ? "" : ` ${m[1] === "off" ? "off" : start}`}`);
       continue;
     }
     if ((m = /^([^\s\-<>:+]+)\s*(-->>|->>|-->|->|--x|-x|--\)|-\))\s*([+-]?)\s*([^\s:+\-<>][^\s:]*)\s*(?::\s*(.*))?$/.exec(t))) {

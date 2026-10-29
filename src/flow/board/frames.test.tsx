@@ -7,6 +7,7 @@ import { useStore } from "@xyflow/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { DiagramCanvasProps } from "../../diagram/DiagramCanvas";
 import DiagramCanvas from "../../diagram/DiagramCanvas";
+import { BOX_BELOW } from "../../diagram/detail";
 import { LangClient } from "../../lang/client";
 import { parseFlow } from "../../lang/flow/parse";
 import { mockEditorDom } from "../../test/editor";
@@ -19,7 +20,8 @@ import boardCss from "../../styles/flow-board.css?raw";
 import { buildFlowGraph } from "../flowNodes";
 import FlowTab from "../FlowTab";
 import { emptyPositions, serializeFlowLayout } from "../layout";
-import { boardFrameId, FRAME_PREVIEW_TYPE, FRAME_TAB_H, type FramePreviewData, inFrameId, Z_LIVE, Z_SKETCH } from "./boardScene";
+import { boardFrameId, FRAME_PICTURE_TYPE, FRAME_TAB_H, inFrameId, LIVE_ANCHOR_ID, SKETCH_PICTURE_TYPE, Z_LIVE, Z_SKETCH } from "./boardScene";
+import { pictureShapes } from "../../test/framePictures";
 import { shownRange } from "./frameView";
 import { sketchNodeId } from "./sketches";
 
@@ -105,9 +107,10 @@ function setup(text = BOARD, layout: string | null = boardLayout()) {
   const nodeOf = (id: string) => nodes().find((n) => n.id === id);
   /** A frame's node on the page (its id holds a NUL, which no CSS selector can name). */
   const frameEl = (key: string) => [...utils.container.querySelectorAll<HTMLElement>(".react-flow__node")].find((e) => e.getAttribute("data-id") === boardFrameId(key)) ?? null;
+  /** Drawn selected: its title button is the current one (its AI Chat and Code Editor may hide in a short room). */
   const isSelected = (key: string) => {
     const el = frameEl(key);
-    return !!el && within(el).queryByRole("button", { name: /^Code Editor/ }) !== null;
+    return !!el && el.querySelector(".board-frame-title")?.getAttribute("aria-current") === "true";
   };
   const press = (key: string, init: KeyboardEventInit = {}) => fireEvent.keyDown(canvasEl(), { key, ...init });
   /** Where a node is on screen: its flow position plus the viewport transform. */
@@ -130,14 +133,10 @@ function setup(text = BOARD, layout: string | null = boardLayout()) {
   /** The flow boxes of a static frame's shapes. */
   const shapesOf = (key: string) => {
     const box = boxOf(key);
-    // Below BOX_BELOW the frame is one preview: its shapes are the ones it draws (Task 18b).
+    // A pictured frame is one image: its shapes are the ones it draws (Plan F Decision 7).
     return nodes()
       .filter((n) => n.parentId === boardFrameId(key))
-      .flatMap((n) =>
-        n.type === FRAME_PREVIEW_TYPE
-          ? [...(n.data as FramePreviewData).areas, ...(n.data as FramePreviewData).shapes].map((r) => ({ x: box.x + r.x, y: box.y + r.y, w: r.w, h: r.h }))
-          : [{ x: box.x + n.position.x, y: box.y + n.position.y, w: n.initialWidth ?? 0, h: n.initialHeight ?? 0 }],
-      );
+      .flatMap((n) => (n.type === FRAME_PICTURE_TYPE ? pictureShapes(n, box) : [{ x: box.x + n.position.x, y: box.y + n.position.y, w: n.initialWidth ?? 0, h: n.initialHeight ?? 0 }]));
   };
   const selection = () => props().selection ?? [];
   const tab = (name: string) => screen.findByRole("button", { name });
@@ -379,8 +378,8 @@ test("dragging_a_tab_moves_the_frame_in_one_undo", async () => {
   act(() => s.props().onFrameDrag!(boardFrameId("Refund"), { x: live.x + 10, y: live.y }, false));
   await waitFor(() => expect(s.ids()).toContain(inFrameId("Refund", "Ask")));
   expect(s.ids()).not.toContain("Ask");
-  // The level of detail still counts the dragged frame's shapes.
-  expect(s.props().detailCount).toBe(2);
+  // The board's own level of detail: real shapes at every zoom and count, the dragged frame's too (Plan F Decision 1).
+  expect(s.props().detailPolicy).toBe("board");
   const moving = s.boxOf("Refund");
   act(() => s.props().onFrameDrag!(boardFrameId("Refund"), { x: moving.x + 40, y: moving.y + 20 }, true));
   await waitFor(() => expect(s.ids()).toContain("Ask"));
@@ -398,6 +397,55 @@ test("dragging_a_tab_moves_the_frame_in_one_undo", async () => {
   await waitFor(() => expect(s.ids()).toContain("Ask"));
   expect(s.boxOf("Refund")).toMatchObject({ x: again.x, y: again.y });
   expect(JSON.parse(s.saved.layout!).frames.Refund.at).toEqual({ x: 640, y: 20 });
+});
+
+test("every_fit_of_a_board_too_big_for_the_least_zoom_opens_at_its_start", async () => {
+  // er2000.flow's shape: frames in a row and one far off, too wide to fit even at 10 percent. Shift+1 opens it at its
+  // start (Task 3); the menus' "Zoom to fit", labelled Shift+1, must land on the same view, not the empty middle.
+  const s = setup(BOARD, boardLayout({ x: 200000, y: 0 }));
+  // The far frame is off screen at the open: its tab is not drawn.
+  await opened(s, ["Checkout"]);
+  const away = () => act(() => void s.inst().setViewport({ x: -5000, y: -3000, zoom: 1 }));
+  /** Where the leftmost frame's left edge is on screen. */
+  const leftEdge = () => s.inst().flowToScreenPosition({ x: s.boxOf("Checkout").x, y: 0 }).x;
+  away();
+  fireEvent.keyDown(s.container.querySelector(".diagram-canvas")!, { key: "!", code: "Digit1", shiftKey: true });
+  await waitFor(() => expect(s.inst().getViewport().zoom).toBeCloseTo(0.1, 5));
+  const shift1 = s.inst().getViewport();
+  // The 800 px view (jsdom's) has its margin, 40 px, before the board's start.
+  expect(leftEdge()).toBeCloseTo(40, 0);
+  // The keyboard menu's Zoom to fit.
+  away();
+  act(() => s.props().onSelect!([]));
+  fireEvent.keyDown(s.canvasEl(), { key: "F10", shiftKey: true });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /^Zoom to fit/ }));
+  await waitFor(() => expect(s.inst().getViewport()).toEqual(shift1));
+  // The canvas menu's.
+  away();
+  fireEvent.contextMenu(s.container.querySelector(".react-flow__pane")!, { clientX: 400, clientY: 300 });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /^Zoom to fit/ }));
+  await waitFor(() => expect(s.inst().getViewport()).toEqual(shift1));
+});
+
+test("zoom_to_a_frame_too_tall_for_the_least_zoom_opens_at_its_top", async () => {
+  // A frame taller than the view holds at 10 percent (the ER limit board's 13,004 by 20,840 ERD): zoom to frame
+  // opens it at its tab, as the board opens, not on the middle of its height; its width, which fits, stays centred.
+  const tall = JSON.parse(boardLayout()) as { frames: Record<string, { nodes: Record<string, { x: number; y: number }> }> };
+  tall.frames.Checkout.nodes.Pay = { x: 0, y: 20000 };
+  const s = setup(BOARD, JSON.stringify(tall));
+  await opened(s);
+  await pick(s, "Checkout", "Cart");
+  act(() => s.props().onSelect!([]));
+  await waitFor(() => expect(s.isSelected("Checkout")).toBe(true));
+  s.press("@", { shiftKey: true, code: "Digit2" });
+  await waitFor(() => expect(s.inst().getViewport().zoom).toBeCloseTo(0.1, 5));
+  const b = s.boxOf("Checkout");
+  const top = s.inst().flowToScreenPosition({ x: b.x, y: b.y }).y;
+  // The tab (30 px on screen) sits a margin (30 px of the 600 px view) in from the top.
+  expect(top).toBeGreaterThan(30);
+  expect(top).toBeLessThan(80);
+  const mid = s.inst().flowToScreenPosition({ x: b.x + b.w / 2, y: 0 }).x;
+  expect(mid).toBeCloseTo(400, 0);
 });
 
 test("shift_2_and_a_tab_double_click_zoom_to_the_frame", async () => {
@@ -475,13 +523,16 @@ test("a_one_frame_file_draws_as_today", async () => {
   await waitFor(() => expect(s.ids()).toContain("Order placed"));
   // Today's drawing of the same text and layout.
   const today = buildFlowGraph(parseFlow(orderHandover).doc!, positions, "modern", { states: new Map(), sizes: undefined, marks: undefined });
-  const shape = (n: Node) => ({ id: n.id, type: n.type, position: n.position, parentId: n.parentId, data: n.data, width: n.initialWidth, height: n.initialHeight });
+  const shape = (n: Node) => ({ id: n.id, type: n.type, position: n.position, data: n.data, width: n.initialWidth, height: n.initialHeight });
   const line = (e: Edge) => ({ id: e.id, source: e.source, target: e.target, type: e.type, data: e.data, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle });
-  const drawnNodes = s.nodes().filter((n) => n.id !== boardFrameId("Order handover"));
+  const drawnNodes = s.nodes().filter((n) => n.id !== boardFrameId("Order handover") && n.id !== LIVE_ANCHOR_ID);
   expect(drawnNodes.map(shape)).toEqual(today.nodes.map(shape));
   expect(s.props().edges.map(line)).toEqual(today.edges.map(line));
-  // The only other node is the frame's own box, under every shape.
-  expect(s.nodes().length).toBe(today.nodes.length + 1);
+  // Every shape hangs from the live anchor, which sits at the board's (0, 0) for a version 1 file (Plan F Decision 11).
+  for (const n of drawnNodes) expect(n.parentId).toBe(LIVE_ANCHOR_ID);
+  expect(s.nodeOf(LIVE_ANCHOR_ID)!.position).toEqual({ x: 0, y: 0 });
+  // The only other nodes are the frame's own box, under every shape, and the anchor.
+  expect(s.nodes().length).toBe(today.nodes.length + 2);
   for (const n of drawnNodes) expect(n.zIndex!).toBeGreaterThan(s.nodeOf(boardFrameId("Order handover"))!.zIndex!);
 });
 
@@ -585,6 +636,12 @@ test("a_section_under_a_frame_never_takes_its_click", async () => {
   layout.sketches = [{ id: "s1", kind: "section", x: -400, y: -400, w: 3_000, h: 1_400, text: "Section" }];
   const s = setup(BOARD, JSON.stringify(layout));
   await opened(s);
+  // Readable, so the Section is a node (far out the sketch layer is pictured, Task 9 fix 2).
+  await act(async () => {
+    await s.inst().setViewport({ x: 0, y: 0, zoom: 0.5 });
+  });
+  await waitFor(() => expect(s.canvasEl().dataset.far ?? "").not.toContain("m"));
+  await waitFor(() => expect(s.nodes().some((n) => n.type === SKETCH_PICTURE_TYPE)).toBe(false));
   const el = await waitFor(() => {
     const found = [...s.container.querySelectorAll<HTMLElement>(".react-flow__node")].find((e) => e.getAttribute("data-id") === sketchNodeId("s1"));
     expect(found).toBeDefined();
@@ -826,9 +883,9 @@ test("a_right_click_on_a_static_shape_selects_the_frame_and_opens_its_menu", asy
   expect(within(menu).getByRole("menuitem", { name: "Details..." })).toBeTruthy();
 });
 
-test("a_right_click_in_the_overview_only_selects_the_frame", async () => {
-  // Controller ruling: below BOX_BELOW a static frame is one preview, so a right-click over a shape's spot selects the
-  // frame alone and opens no shape menu.
+test("a_right_click_on_a_pictured_frame_only_selects_the_frame", async () => {
+  // Controller ruling (B2 C3, Plan F Decision 7): a pictured static frame is one image, so a right-click over a shape's
+  // spot selects the frame alone and opens no shape menu.
   const s = setup();
   await opened(s);
   await pick(s, "Checkout", "Cart");
@@ -836,7 +893,7 @@ test("a_right_click_in_the_overview_only_selects_the_frame", async () => {
   await act(async () => {
     await s.inst().setViewport({ x: 0, y: 0, zoom: 0.3 });
   });
-  act(() => s.props().onOverview?.(true));
+  await waitFor(() => expect(s.nodes().some((n) => n.parentId === boardFrameId("Refund") && n.type === FRAME_PICTURE_TYPE)).toBe(true));
   const p = s.inst().flowToScreenPosition({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
   fireEvent.contextMenu(s.frameEl("Refund")!, { clientX: p.x, clientY: p.y });
   await waitFor(() => expect(s.isSelected("Refund")).toBe(true));
@@ -902,7 +959,7 @@ test("a_board_cut_to_one_frame_reopens_fitted", async () => {
   await s.tab("Flowchart Shipping");
 });
 
-test("below_box_below_static_frames_draw_as_previews_and_swap_back_in_place", async () => {
+test("far_static_frames_draw_as_pictures_and_swap_back_in_place", async () => {
   const s = setup();
   await opened(s);
   const ask = inFrameId("Refund", "Ask");
@@ -911,22 +968,18 @@ test("below_box_below_static_frames_draw_as_previews_and_swap_back_in_place", as
   const shapes = s.shapesOf("Refund");
   const lines = s.props().edges.length;
   expect(lines).toBeGreaterThan(0);
-  // Out past BOX_BELOW: one preview a static frame, no static lines, the boxes where they were.
+  // Out where their text is far: one picture a static frame, no static lines, the boxes where they were.
   await act(async () => {
     await s.inst().setViewport({ x: 0, y: 0, zoom: 0.3 });
   });
   await waitFor(() => expect(s.ids()).not.toContain(ask));
   for (const k of ["Checkout", "Refund", "Shipping"]) {
-    const kids = s.nodes().filter((n) => n.parentId === boardFrameId(k));
-    expect(kids.map((n) => n.type)).toEqual([FRAME_PREVIEW_TYPE]);
+    await waitFor(() => expect(s.nodes().filter((n) => n.parentId === boardFrameId(k)).map((n) => n.type)).toEqual([FRAME_PICTURE_TYPE]));
   }
   expect(s.props().edges).toHaveLength(0);
   expect(["Checkout", "Refund", "Shipping"].map((k) => s.boxOf(k))).toEqual(boxes);
-  // The preview's shapes are where the shapes were drawn.
-  const p = s.nodes().find((n) => n.parentId === boardFrameId("Refund"))!;
-  const box = s.boxOf("Refund");
-  const drawn = (p.data as FramePreviewData).shapes.map((r) => ({ x: box.x + r.x, y: box.y + r.y, w: r.w, h: r.h }));
-  expect(drawn).toEqual(shapes);
+  // The picture's shapes are where the shapes were drawn.
+  expect(s.shapesOf("Refund")).toEqual(shapes);
   // Back in: every shape and line again, in place.
   await act(async () => {
     await s.inst().setViewport({ x: 0, y: 0, zoom: 1 });
@@ -945,9 +998,9 @@ test("a_board_opening_below_box_below_never_draws_its_static_shapes", async () =
   const s = setup(BOARD, JSON.stringify(far));
   await opened(s);
   await waitFor(() => expect(s.inst().getViewport().zoom).toBeLessThan(0.45));
-  await waitFor(() => expect(s.nodes().filter((n) => n.type === FRAME_PREVIEW_TYPE)).toHaveLength(3));
+  await waitFor(() => expect(s.nodes().filter((n) => n.type === FRAME_PICTURE_TYPE)).toHaveLength(3));
   // No canvas update ever held a static frame's shape.
-  for (const id of canvas.ever) expect(id.startsWith("\u0000in:") && !id.endsWith("\u0000\u0000preview"), JSON.stringify(id)).toBe(false);
+  for (const id of canvas.ever) expect(id.startsWith("\u0000in:") && !id.endsWith("\u0000\u0000picture"), JSON.stringify(id)).toBe(false);
 });
 
 test("a_frame_switch_below_box_below_moves_nothing_on_screen", async () => {
@@ -955,14 +1008,14 @@ test("a_frame_switch_below_box_below_moves_nothing_on_screen", async () => {
   far.frames.Refund.at = { x: 3000, y: 0 };
   const s = setup(BOARD, JSON.stringify(far));
   await opened(s);
-  await waitFor(() => expect(s.nodes().filter((n) => n.type === FRAME_PREVIEW_TYPE)).toHaveLength(3));
-  const preview = (k: string) => s.nodes().find((n) => n.parentId === boardFrameId(k) && n.type === FRAME_PREVIEW_TYPE)!.id;
-  const ship = preview("Shipping");
+  await waitFor(() => expect(s.nodes().filter((n) => n.type === FRAME_PICTURE_TYPE)).toHaveLength(3));
+  const picture = (k: string) => s.nodes().find((n) => n.parentId === boardFrameId(k) && n.type === FRAME_PICTURE_TYPE)!.id;
+  const ship = picture("Shipping");
   await waitFor(() => expect(s.inst().getInternalNode(ship)).toBeTruthy());
   const before = s.screenOf(ship);
   await pick(s, "Refund", "Ask");
-  // Refund is live in full; Shipping stays a preview, where it was on screen.
-  expect(s.nodes().filter((n) => n.type === FRAME_PREVIEW_TYPE)).toHaveLength(2);
+  // Refund is live in full; Shipping stays a picture, where it was on screen.
+  expect(s.nodes().filter((n) => n.type === FRAME_PICTURE_TYPE)).toHaveLength(2);
   await waitFor(() => expect(s.inst().getInternalNode(ship)).toBeTruthy());
   expect(s.screenOf(ship)).toEqual(before);
 });
@@ -974,24 +1027,28 @@ function farLayout() {
   return JSON.stringify(far);
 }
 
-test("below_box_below_the_live_frame_draws_fast_and_in_full_above", async () => {
+test("below_box_below_the_live_frame_draws_in_full", async () => {
   const s = setup(BOARD, farLayout());
   await opened(s);
-  await waitFor(() => expect(s.nodes().filter((n) => n.type === FRAME_PREVIEW_TYPE)).toHaveLength(3));
+  await waitFor(() => expect(s.nodes().filter((n) => n.type === FRAME_PICTURE_TYPE)).toHaveLength(3));
   await pick(s, "Refund", "Ask");
-  // Fast, as FAST_OVER draws: straight lines with no label, name boxes, no ports to connect from.
+  // Plan F ruling 1: the live frame is never fast, below BOX_BELOW too (was Task 18b's fast overview).
   const canvasRoot = () => s.container.querySelector(".diagram-canvas") as HTMLElement;
-  await waitFor(() => expect(canvasRoot().classList.contains("is-fast")).toBe(true));
-  await waitFor(() => expect(s.container.querySelector(".react-flow__edge-straight")).not.toBeNull());
+  // The view has settled below BOX_BELOW and the live frame's line is drawn.
+  await waitFor(() => expect(s.inst().getViewport().zoom).toBeLessThan(BOX_BELOW));
+  await waitFor(() => expect(s.container.querySelector(".react-flow__edge")).not.toBeNull());
+  expect(canvasRoot().classList.contains("is-fast")).toBe(false);
+  expect(s.container.querySelector(".react-flow__edge-straight")).toBeNull();
   // Select and drag still work: the live shapes stay selectable and draggable.
   expect(s.nodeOf("Ask")!.selectable).not.toBe(false);
   expect(s.nodeOf("Ask")!.draggable).not.toBe(false);
-  // At or above BOX_BELOW the live frame draws in full again.
+  // At or above BOX_BELOW the live frame draws in full as well.
   await act(async () => {
     await s.inst().setViewport({ x: 0, y: 0, zoom: 1 });
   });
-  await waitFor(() => expect(canvasRoot().classList.contains("is-fast")).toBe(false));
-  await waitFor(() => expect(s.container.querySelector(".react-flow__edge-straight")).toBeNull());
+  await waitFor(() => expect(s.inst().getViewport().zoom).toBe(1));
+  expect(canvasRoot().classList.contains("is-fast")).toBe(false);
+  expect(s.container.querySelector(".react-flow__edge-straight")).toBeNull();
 });
 
 test("a_switch_paints_the_canvas_before_the_pane_swaps_its_text", async () => {
@@ -1000,21 +1057,39 @@ test("a_switch_paints_the_canvas_before_the_pane_swaps_its_text", async () => {
   await pick(s, "Checkout", "Cart");
   const view = () => EditorView.findFromDOM(s.container.querySelector(".cm-editor") as HTMLElement)!;
   await waitFor(() => expect(shownText(view())).toContain('diagram flow "Checkout"'));
-  // The click's own update draws Refund live; the pane still shows Checkout until the frame after.
-  act(() => {
-    fireEvent.click(screen.getByRole("button", { name: "Flowchart Refund" }));
-  });
+  /** One animation frame, and with `task` the task after it (a switch's landing, Plan F Decision 12). */
+  const frame = (task: boolean) =>
+    act(async () => {
+      await new Promise<void>((r) => requestAnimationFrame(() => (task ? setTimeout(r, 0) : r())));
+    });
+  // The click draws Refund selected, its shapes still static; the landing a paint later makes them live while the
+  // pane still shows Checkout (Task 18b: the canvas paints first, the pane swaps in the frame after).
+  fireEvent.click(screen.getByRole("button", { name: "Flowchart Refund" }));
+  expect(s.ids()).not.toContain("Ask");
+  await frame(true);
   expect(s.ids()).toContain("Ask");
   expect(shownText(view())).toContain('diagram flow "Checkout"');
-  // Settled: the pane shows the selected frame's text, and only it.
-  await waitFor(() => expect(shownText(view())).toContain('diagram flow "Refund"'));
-  expect(shownText(view())).not.toContain('diagram flow "Checkout"');
-  // Two switches inside one frame settle on the last.
-  act(() => {
-    fireEvent.click(screen.getByRole("button", { name: "Flowchart Shipping" }));
-    fireEvent.click(screen.getByRole("button", { name: "Flowchart Checkout" }));
-  });
-  await waitFor(() => expect(shownText(view())).toContain('diagram flow "Checkout"'));
-  await new Promise((r) => setTimeout(r, 100));
+  // Shipping picked before the pane's swap to Refund: its landing cancels that swap and schedules its own, so the pane
+  // never shows Refund, and stays on Checkout for a frame after Shipping is live.
+  fireEvent.click(screen.getByRole("button", { name: "Flowchart Shipping" }));
+  await frame(true);
+  expect(s.ids()).toContain("Pack");
   expect(shownText(view())).toContain('diagram flow "Checkout"');
+  await frame(false);
+  expect(shownText(view())).toContain('diagram flow "Checkout"');
+  // Settled: the pane shows the selected frame's text, and only it.
+  await waitFor(() => expect(shownText(view())).toContain('diagram flow "Shipping"'));
+  expect(shownText(view())).not.toContain('diagram flow "Checkout"');
+  expect(shownText(view())).not.toContain('diagram flow "Refund"');
+});
+
+test("a_three_frame_board_at_fit_shows_both_pane_buttons", async () => {
+  // The tab strips fit their room (coordinator ruling on F1): at the board's fit there is room for both buttons.
+  const s = setup();
+  await opened(s);
+  await pick(s, "Refund", "Ask");
+  const el = s.frameEl("Refund")!;
+  expect(s.inst().getViewport().zoom).toBeLessThan(1);
+  expect(within(el).getByRole("button", { name: /^AI Chat/ })).toBeTruthy();
+  expect(within(el).getByRole("button", { name: /^Code Editor/ })).toBeTruthy();
 });

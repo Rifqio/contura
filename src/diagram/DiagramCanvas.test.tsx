@@ -1,11 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { Edge, Node, NodeProps, ReactFlowInstance } from "@xyflow/react";
-import { useMemo, useState } from "react";
+import { type Edge, getViewportForBounds, type Node, type NodeProps, type ReactFlowInstance } from "@xyflow/react";
+import { useEffect, useMemo, useState } from "react";
 import { afterEach, beforeAll, expect, onTestFinished, test, vi } from "vitest";
+import { LIVE_ANCHOR_ID } from "../flow/board/boardScene";
 import { mockReactFlowDom } from "../test/reactFlow";
+import { type CanvasHandle, type CanvasView, LIVE_ANCHOR, MAX_ZOOM, MIN_ZOOM } from "./canvasView";
 import CardFrame, { Ports } from "./CardFrame";
 import DiagramCanvas, { SKETCH_LAYER } from "./DiagramCanvas";
-import { detailFor } from "./detail";
+import { detailFor, useDetail } from "./detail";
 import { JoinBadge, OrthogonalEdge } from "./edges";
 import { setReducedMotionPref } from "./motion";
 import { cardHeight, CARD_WIDTH } from "./metrics";
@@ -89,6 +91,102 @@ test("detail_follows_zoom_and_count", () => {
   expect(detailFor(0.1, 2000)).toEqual({ detail: "box", fast: true });
 });
 
+/** A node that shows the level of detail its canvas provides. */
+function Probe({ id }: NodeProps) {
+  const { detail, fast } = useDetail();
+  return <div data-testid={`probe-${id}`} data-detail={detail} data-fast={String(fast)} />;
+}
+const probeTypes = { card: TestCard, probe: Probe };
+const probe = (id: string, x: number, y = 0): Node => ({ id, type: "probe", position: { x, y }, initialWidth: 100, initialHeight: 48, data: {} });
+/** Nodes the canvas counts but never mounts: jsdom pays for every mounted node, the count is what is under test. */
+const fillers = (n: number) => Array.from({ length: n }, (_, i): Node => ({ ...probe(`n${i}`, 5000 + (i % 50) * 200, Math.floor(i / 50) * 100), hidden: true }));
+const probeReads = (id = "p") => {
+  const el = screen.getByTestId(`probe-${id}`);
+  return { detail: el.dataset.detail, fast: el.dataset.fast === "true" };
+};
+
+test("legacy_canvases_keep_their_swaps", async () => {
+  // Ruling 4: every canvas but a board keeps detail.ts's swaps (no detailPolicy is the legacy policy).
+  const { flow, unmount } = renderCanvas([card("stores", 0)]);
+  await waitFor(() => expect(percent()).toBe("100%"));
+  await act(async () => {
+    await flow().setViewport({ x: 0, y: 0, zoom: 0.3 });
+  });
+  expect(document.querySelector(".card-box")).not.toBeNull();
+  await act(async () => {
+    await flow().setViewport({ x: 0, y: 0, zoom: 0.1 });
+  });
+  expect(document.querySelector(".card-block")).not.toBeNull();
+  unmount();
+  // Over FAST_OVER nodes the canvas is fast at any zoom.
+  const many = [probe("p", 0), ...fillers(300)];
+  const again = renderCanvas(many, { nodeTypes: probeTypes });
+  await waitFor(() => expect(again.flow()).toBeTruthy());
+  await act(async () => {
+    await again.flow().setViewport({ x: 0, y: 0, zoom: 1 });
+  });
+  await waitFor(() => expect(probeReads()).toEqual({ detail: "box", fast: true }));
+  expect(document.querySelector(".diagram-canvas.is-fast")).not.toBeNull();
+});
+
+test("the_board_policy_is_full_at_any_count_and_zoom", async () => {
+  // Decision 1: a board draws full at every zoom and node count.
+  const many = [probe("p", 0), ...fillers(2000)];
+  const { flow } = renderCanvas(many, { nodeTypes: probeTypes, detailPolicy: "board" });
+  await waitFor(() => expect(flow()).toBeTruthy());
+  await act(async () => {
+    await flow().setViewport({ x: 0, y: 0, zoom: 0.1 });
+  });
+  await waitFor(() => expect(screen.getByTestId("probe-p")).toBeTruthy());
+  expect(probeReads()).toEqual({ detail: "full", fast: false });
+  expect(document.querySelector(".diagram-canvas.is-fast")).toBeNull();
+});
+
+/** Each card id ever mounted, for the board's mount count. */
+const mounted = new Set<string>();
+function CountedCard({ id }: NodeProps) {
+  useEffect(() => {
+    mounted.add(id);
+  }, [id]);
+  return <div className="counted-card" />;
+}
+
+test("a_board_mounts_only_the_shapes_in_view", async () => {
+  // The release milestone (Plan F Task 3): React Flow draws every node it has never measured, whatever is on screen, so
+  // a live 2,000-table ERD mounted all 2,000 full cards at open. A board gives each new shape its four side handles
+  // (React Flow's `handles`), so only the shapes in view mount. The fit of this grid (the ERD's: 50 a row, 260 by
+  // 520 apart, 240 by 480 each) lands at the least zoom, 10 percent, where the 800 by 600 view holds at most
+  // 32 x 13 = 416 cards; the view at 100 percent before the fit adds a few.
+  mounted.clear();
+  const cards = Array.from({ length: 2000 }, (_, i): Node => ({ id: `t${i}`, type: "counted", position: { x: (i % 50) * 260, y: Math.floor(i / 50) * 520 }, initialWidth: 240, initialHeight: 480, data: {} }));
+  const { flow } = renderCanvas(cards, { nodeTypes: { counted: CountedCard }, detailPolicy: "board" });
+  await waitFor(() => expect(flow().getViewport().zoom).toBeCloseTo(0.1, 5));
+  await new Promise((r) => setTimeout(r, 50));
+  expect(mounted.size).toBeGreaterThan(0);
+  expect(mounted.size).toBeLessThan(440);
+});
+
+test("a_drawing_too_big_for_the_least_zoom_opens_at_its_start", async () => {
+  // B3's ER limit board, written to a file, opened on an empty view: the fit, held at 10 percent, centred the bounds of
+  // 40 frames in a row and an ERD far right and tall, and nothing was there. A drawing too big to fit opens at its
+  // top left instead (a page larger than the window opens at its start, as draw.io and every document viewer do); a
+  // side that fits is still centred.
+  const { flow } = renderCanvas([card("first", 0, 0), card("far", 200000, 20000)]);
+  await waitFor(() => expect(flow().getViewport().zoom).toBeCloseTo(0.1, 5));
+  const { x, y, zoom } = flow().getViewport();
+  // The first card is on screen, a margin in from the top left.
+  expect(x).toBeGreaterThan(0);
+  expect(y).toBeGreaterThan(0);
+  expect(x + CARD_WIDTH * zoom).toBeLessThan(800);
+  expect(y).toBeLessThan(60);
+  // Only the side that does not fit moves: a wide, short drawing keeps its rows centred.
+  const wide = renderCanvas([card("a", 0, 0), card("b", 200000, 0)]);
+  await waitFor(() => expect(wide.flow().getViewport().zoom).toBeCloseTo(0.1, 5));
+  const v = wide.flow().getViewport();
+  expect(v.x).toBeLessThan(60);
+  expect(v.y + (cardHeight(COLS.length) * v.zoom) / 2).toBeCloseTo(300, 0);
+});
+
 test("a_small_diagram_fits_at_100_percent", async () => {
   renderCanvas([card("stores", 0)]);
   await waitFor(() => expect(percent()).toBe("100%"));
@@ -102,6 +200,12 @@ test("the_fit_takes_sketches_at_their_board_place_not_their_layer", async () => 
   renderCanvas([layer, sketch, card("stores", 0)]);
   // Everything drawn is near the origin: the fit stays at 100 percent.
   await waitFor(() => expect(percent()).toBe("100%"));
+});
+
+test("the_live_anchor_mirror_matches", () => {
+  // diagram/ never imports flow/: the canvas mirrors the board's live anchor id, as it mirrors the sketch layer's.
+  expect(LIVE_ANCHOR).toBe(LIVE_ANCHOR_ID);
+  expect(LIVE_ANCHOR).toBe("\u0000live");
 });
 
 test("zoomed_out_a_card_is_a_name_box_without_rows", async () => {
@@ -342,7 +446,7 @@ test("parity_P11_34_reveal_leaves_a_node_already_in_view_where_it_is", async () 
   });
   const { flow, rerender } = renderCanvas([card("stores", 0), card("near", 300)]);
   await waitFor(() => expect(percent()).toBe("100%"));
-  const before = flow().getViewport();
+  const before = flow()!.getViewport();
   rerender(
     <div style={{ width: 800, height: 600 }}>
       <DiagramCanvas nodes={[card("stores", 0), card("near", 300)]} edges={[]} nodeTypes={nodeTypes} onInit={() => {}} reveal="near" />
@@ -563,6 +667,32 @@ function dragBy(container: HTMLElement, id: string, dx: number, dy: number, keys
   if (release) mouse("mouseup", window, { clientX: 12 + dx, clientY: 10 + dy, ...keys });
 }
 
+test("a_board_card_moved_after_it_is_measured_keeps_its_column_ports", async () => {
+  // A board gives a shape it has never measured four side handles (`withHandles`) so React Flow mounts only those in
+  // view. Once measured, the side handles must leave the node: every later change (the measure itself, a select, a
+  // move) hands React Flow a new node, and a node still carrying `handles` had its measured ports replaced by the four
+  // sides, so a drag from a column port found no handle and silently did nothing.
+  const onConnectPorts = vi.fn();
+  const onDragOver = vi.fn();
+  const { container, flow } = renderCanvas([card("orders", 0), card("stores", 320)], { onConnectPorts, onDragOver, onMove: () => {}, detailPolicy: "board" });
+  await waitFor(() => expect(container.querySelectorAll(".react-flow__handle").length).toBeGreaterThan(0));
+  await waitFor(() => expect(percent()).toBe("100%"));
+  const ids = () => (flow().getInternalNode("orders")?.internals.handleBounds?.source ?? []).map((h) => h.id);
+  // Selected, then moved.
+  fireEvent.click(container.querySelector('.react-flow__node[data-id="orders"]')!);
+  await waitFor(() => expect(container.querySelector('.react-flow__node[data-id="orders"]')!.classList.contains("selected")).toBe(true));
+  dragBy(container, "orders", 30, 20);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(ids()).toContain("city:s");
+  expect(flow().getNodes().every((n) => !n.measured || !n.handles)).toBe(true);
+  // A drag from a column port starts a line.
+  const handle = (node: string, id: string) => container.querySelector(`.react-flow__node[data-id="${node}"] .react-flow__handle[data-handleid="${id}"]`)!;
+  dragPort(handle("orders", "city:s"), handle("stores", "id:t"));
+  await waitFor(() => expect(onDragOver).toHaveBeenLastCalledWith(expect.objectContaining({ from: { nodeId: "orders", column: "city" } })));
+  fireEvent.mouseUp(document, { clientX: 300, clientY: 40 });
+  expect(onConnectPorts).toHaveBeenCalledWith({ node: "orders", port: "city" }, { node: "stores", port: "id" }, false, AT);
+});
+
 test("F7 a dragged card lands where it is let go, on no grid, unless an edge or centre is within 6 px of a neighbour's", async () => {
   const onMove = vi.fn();
   const { container } = renderCanvas([card("orders", 0, 0), card("stores", 450, 200)], { onMove });
@@ -708,4 +838,102 @@ test("an_unchanged_node_keeps_its_object_when_another_changes", async () => {
   await waitFor(() => expect((inst!.getNode("b")!.data as CardData).cols).toEqual(["id"]));
   expect(inst!.getNode("a")).toBe(was);
   expect(inst!.getNode("b")).not.toBe(wasB);
+});
+
+test("glide_view_reports_its_target_first", async () => {
+  // Plan F Decision 8: a glide reports where it lands once, before the view moves, then nothing more until it is there.
+  const seen: { v: CanvasView; landing: boolean; at: { x: number; y: number; zoom: number } }[] = [];
+  let handle: CanvasHandle | null = null;
+  let flow: () => ReactFlowInstance | null = () => null;
+  const r = renderCanvas([card("a", 0), card("b", 900, 500)], {
+    onViewChange: (v, landing) => seen.push({ v, landing, at: flow()?.getViewport() ?? { x: 0, y: 0, zoom: 0 } }),
+    onCanvasReady: (h) => (handle = h),
+  });
+  flow = r.flow;
+  await waitFor(() => expect(handle).not.toBeNull());
+  // The first fit has landed and been reported.
+  await waitFor(() => expect(seen.length).toBeGreaterThan(0));
+  await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+  const before = flow()!.getViewport();
+  seen.length = 0;
+  await act(async () => handle!.glideView({ center: { x: 500, y: 300 }, zoom: 2 }));
+  await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+  // One report, the landing view in flow units (800 by 600 pane at 200 percent), made while the view was still where it was.
+  expect(seen).toHaveLength(1);
+  expect(seen[0].landing).toBe(true);
+  expect(seen[0].v).toEqual({ x: 300, y: 150, w: 400, h: 300, zoom: 2 });
+  expect(seen[0].at).toEqual(before);
+  expect(flow()!.getViewport()).toEqual({ x: -600, y: -300, zoom: 2 });
+  // Bounds: React Flow's fit of them, reported the same way.
+  seen.length = 0;
+  const b = { x: 0, y: 0, width: 1600, height: 1200 };
+  await act(async () => handle!.glideView({ bounds: b, padding: 0.1 }));
+  const fit = getViewportForBounds(b, 800, 600, MIN_ZOOM, MAX_ZOOM, 0.1);
+  expect(seen).toHaveLength(1);
+  expect(seen[0].landing).toBe(true);
+  expect(seen[0].v.zoom).toBeCloseTo(fit.zoom, 6);
+  expect(seen[0].v.x).toBeCloseTo(-fit.x / fit.zoom, 6);
+  expect(seen[0].v.w).toBeCloseTo(800 / fit.zoom, 6);
+  // A pan that is not a glide is reported once per animation frame, not landing.
+  seen.length = 0;
+  act(() => {
+    for (let i = 0; i < 5; i++) void flow()!.setViewport({ x: -10 * i, y: 0, zoom: 1 });
+  });
+  await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+  expect(seen).toHaveLength(1);
+  expect(seen[0]).toMatchObject({ landing: false, v: { x: 40, y: 0, w: 800, h: 600, zoom: 1 } });
+});
+
+/** Motion on for one test: glides take their 240 ms. */
+function motionOn() {
+  vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
+  onTestFinished(() => {
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("reduce"), media: q, addEventListener() {}, removeEventListener() {} }));
+  });
+}
+
+test("a_wheel_during_a_glide_is_reported_at_once", async () => {
+  // Review Minor 2: a pan or wheel zoom that cuts a glide short is the view from then on, not after the glide's fallback.
+  const seen: { v: CanvasView; landing: boolean; t: number }[] = [];
+  let handle: CanvasHandle | null = null;
+  const { container } = renderCanvas([card("a", 0), card("b", 900, 500)], {
+    onViewChange: (v, landing) => seen.push({ v, landing, t: performance.now() }),
+    onCanvasReady: (h) => (handle = h),
+  });
+  await waitFor(() => expect(handle).not.toBeNull());
+  await waitFor(() => expect(seen.length).toBeGreaterThan(0));
+  motionOn();
+  seen.length = 0;
+  void handle!.glideView({ center: { x: 2000, y: 1500 }, zoom: 2 });
+  expect(seen).toHaveLength(1);
+  expect(seen[0].landing).toBe(true);
+  await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+  const wheelAt = performance.now();
+  fireEvent.wheel(container.querySelector(".react-flow__pane")!, { deltaY: 100, clientX: 400, clientY: 300 });
+  await waitFor(() => expect(seen.filter((x) => !x.landing).length).toBeGreaterThan(0), { timeout: 1000 });
+  // Within a frame or two of the wheel, well before the 290 ms fallback.
+  expect(seen.find((x) => !x.landing)!.t - wheelAt).toBeLessThan(150);
+});
+
+test("a_glide_cut_by_an_unmount_reports_nothing_after", async () => {
+  // Review Minor 3: the fallback timer is cleared, so a tab closed mid-glide is never told about a view.
+  let calls = 0;
+  let gone = false;
+  let late = 0;
+  let handle: CanvasHandle | null = null;
+  const { unmount } = renderCanvas([card("a", 0)], {
+    onViewChange: () => {
+      calls++;
+      if (gone) late++;
+    },
+    onCanvasReady: (h) => (handle = h),
+  });
+  await waitFor(() => expect(handle).not.toBeNull());
+  await waitFor(() => expect(calls).toBeGreaterThan(0));
+  motionOn();
+  void handle!.glideView({ center: { x: 2000, y: 1500 }, zoom: 2 });
+  unmount();
+  gone = true;
+  await act(async () => new Promise((r) => setTimeout(r, 400)));
+  expect(late).toBe(0);
 });

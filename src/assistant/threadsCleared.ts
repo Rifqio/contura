@@ -5,6 +5,9 @@ type Listener = (place: string | null) => void;
 
 const listeners = new Set<Listener>();
 
+/** The place a clear of every board's chats names (Settings' Clear AI history also clears them, boards having no Group). */
+export const DIAGRAM_CHATS = "diagram:*";
+
 /** Tells every open panel that `place`'s threads were cleared; null clears every place. */
 export function threadsCleared(place: string | null): void {
   // The place's Recent steps go with its threads, whether a panel is open or not.

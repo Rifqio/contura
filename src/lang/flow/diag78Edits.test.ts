@@ -244,3 +244,23 @@ describe("fix round 1: the writer", () => {
     expect(r.note).toBe("This message shares its line with others (A -> B -> C). Split the line in the text to move it on its own.");
   });
 });
+
+describe("a coloured sequence frame", () => {
+  test("renaming_a_coloured_block_keeps_its_colour", () => {
+    const text = lines('diagram sequence "S"', "participant A", "participant B", "opt a [color: info] {", "  A -> B: hi", "}");
+    expect(apply(text, { op: "setFrameLabel", index: 0, was: "opt a", label: "b" }).text).toBe(text.replace("opt a [", "opt b ["));
+    const bare = text.replace("opt a [color: info] {", "opt [color: info] {");
+    expect(apply(bare, { op: "setFrameLabel", index: 0, was: "opt", label: "b" }).text).toBe(bare.replace("opt [", "opt b ["));
+  });
+
+  test("a_label_ending_in_attribute_brackets_is_refused_not_read_as_attributes", () => {
+    const text = lines('diagram sequence "S"', "participant A", "participant B", "loop retry {", "  A -> B: hi", "}");
+    for (const label of ["retry [color: red]", "see [label: x]"]) {
+      const r = apply(text, { op: "setFrameLabel", index: 0, was: "loop retry", label });
+      expect(r.edits, label).toEqual([]);
+      expect(r.note, label).toBe("Brackets at the end of a frame's label read as its colour. Write the colour in code, for example opt card saved [color: warning] {.");
+    }
+    // A UML guard in brackets stays words.
+    expect(apply(text, { op: "setFrameLabel", index: 0, was: "loop retry", label: "each [n > 0]" }).text).toBe(text.replace("loop retry {", "loop each [n > 0] {"));
+  });
+});

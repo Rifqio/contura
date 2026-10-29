@@ -46,6 +46,7 @@ pub(crate) async fn sql_schema(pool: &Pool, database: &str) -> Result<SqlSchema>
             name,
             type_name,
             pk: key == "PRI",
+            enum_values: Vec::new(),
         });
     }
 

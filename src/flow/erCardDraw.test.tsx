@@ -71,6 +71,13 @@ test("past_twenty_columns_the_card_scrolls", () => {
   expect(document.querySelector(".fkind-er-body")!.classList.contains("is-scroll")).toBe(false);
 });
 
+test("rows_under_review_are_marked", () => {
+  // Plan D Task 8: the waiting proposal's marks on the rows, in the class and the row's hint; an unmarked row has none.
+  render(<KindNode d={{ ...ORDERS, rowStates: ["changed", undefined, "removed"] }} selected={false} />);
+  expect(rows().map((r) => ["is-ai-changed", "is-ai-removed", "is-ai-suggested"].filter((c) => r.classList.contains(c)))).toEqual([["is-ai-changed"], [], ["is-ai-removed"]]);
+  expect(rows().map((r) => r.title)).toEqual(["id int (primary key, not null), changed by AI", "customer_id int (not null)", "total numeric (nullable), removal suggested by AI"]);
+});
+
 test("a_labelled_table_shows_its_label", () => {
   render(<KindNode d={{ ...ORDERS, shows: "Orders" }} selected={false} />);
   expect(document.querySelector(".fkind-head .fnode-name")!.textContent).toBe("Orders");

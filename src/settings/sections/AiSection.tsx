@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   aiClearAll,
+  aiClearDiagramChats,
   aiKnownModels,
   aiModels,
   aiSettings,
@@ -27,7 +28,7 @@ import type {
   ThinkingLevel,
 } from "../../api/types";
 import { loadSendsOpen, onSendsOpen, saveSendsOpen } from "../../assistant/sendsFold";
-import { threadsCleared } from "../../assistant/threadsCleared";
+import { DIAGRAM_CHATS, threadsCleared } from "../../assistant/threadsCleared";
 import { hintFor } from "../../commands/keymap";
 import { useKeymap } from "../../commands/useCommandKeys";
 import Dialog from "../../components/Dialog";
@@ -199,10 +200,17 @@ function ClearRow({ groupId, groupName }: { groupId: GroupId | null; groupName: 
     setAsking(null);
     setResult(null);
     try {
-      if (what === "history") await clearAiThreads(place);
-      else await aiClearAll();
-      // An open Assistant panel drops the threads at once.
-      threadsCleared(what === "history" ? place : null);
+      if (what === "history") {
+        await clearAiThreads(place);
+        // An open Assistant panel drops the place's threads at once, even when the boards' clear below fails.
+        threadsCleared(place);
+        // The diagram chats the hint names: boards belong to no Group, so every board's chats go too.
+        await aiClearDiagramChats();
+        threadsCleared(DIAGRAM_CHATS);
+      } else {
+        await aiClearAll();
+        threadsCleared(null);
+      }
       setResult({ ok: true, text: what === "history" ? `Cleared the AI history of ${placeName}.` : "Cleared all AI data." });
     } catch (e) {
       setResult({ ok: false, text: errorText(e) });
@@ -212,7 +220,7 @@ function ClearRow({ groupId, groupName }: { groupId: GroupId | null; groupName: 
   return (
     <Row
       {...ROW.clearAi}
-      hint={`The stored Ask threads and diagram chats of ${placeName}. Clear all AI data also removes every AI Context.`}
+      hint={`The stored Ask threads of ${placeName} and every board's chats. Clear all AI data also removes every AI Context.`}
       below={
         result && (
           <span className={result.ok ? "muted" : "field-error"} role={result.ok ? "status" : "alert"}>
@@ -232,7 +240,7 @@ function ClearRow({ groupId, groupName }: { groupId: GroupId | null; groupName: 
           <div className="dialog-body">
             <p>
               {asking === "history"
-                ? `Clear the AI history of ${placeName}? Every thread in this place is removed.`
+                ? `Clear the AI history of ${placeName}? Every thread in this place and every board's chats are removed.`
                 : "Clear all AI data? Every thread and every AI Context is removed. Connections and settings stay."}
             </p>
           </div>

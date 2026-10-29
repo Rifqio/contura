@@ -163,11 +163,17 @@ const PATHS = {
   shapes: `M8.3 10a.7.7 0 0 1-.63-1.08L11.4 3a.7.7 0 0 1 1.2-.04L16.3 8.9a.7.7 0 0 1-.57 1.1z${rect(3, 14, 7, 7, 1)}${circle(17.5, 17.5, 3.5)}`,
   stickyNote: "M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8zM15 3v4a2 2 0 0 0 2 2h4",
   rotateCcw: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5",
+  // A sequence frame's kind on its side tab (Plan E Decision 13): repeat, split and git-branch follow Lucide (ISC);
+  // numbering, the Numbering toggle's, is a circle with a 1 on the same grid.
+  repeat: "M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3",
+  split: "M16 3h5v5M8 3H3v5M12 22v-8.3a4 4 0 0 0-1.17-2.87L3 3M15 9l6-6",
+  branch: `M6 3v12${circle(18, 6, 3)}${circle(6, 18, 3)}M18 9a9 9 0 0 1-9 9`,
+  numbering: `${circle(12, 12, 9)}M10.5 9.5 12.5 8V16`,
 } as const;
 
 export type IconName = keyof typeof PATHS;
 
-export type IconSize = 14 | 16 | 20;
+export type IconSize = 14 | 16 | 18 | 20;
 
 /** An icon's path data on its 24 px grid, for exports that draw it as a plain SVG path. */
 export const iconPath = (name: IconName): string => PATHS[name];

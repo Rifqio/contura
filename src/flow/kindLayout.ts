@@ -5,6 +5,9 @@
 import type { Positions } from "../diagram/layout";
 import type { DrawnKind } from "../diagram/types";
 import type { FlowDoc, FlowNode } from "../lang/flow/model";
+import { messageNumbers } from "../lang/flow/numbering";
+import { drawnColour } from "./palette";
+import { ACT_W, FOOT_GAP, FRAME_LEFT, FRAME_RIGHT, GapTree, LABEL_PAD, labelChip, numberWidth, ROW_LINE, SEG_MIN, SELF_DROP, SEQ_SELF_ROW, type SeqBar, type SeqBlock, type SeqDrawing, type SeqLane, type SeqMessage, TAB_STEP, TAB_W } from "./seqGeometry";
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 /** About 7 px a character of the body font, 7.2 of Code small. */
@@ -12,38 +15,62 @@ const textW = (s: string) => s.length * 7;
 
 /**
  * diag-910 fix round 2 (L2): a state's name as it is drawn, in the canvas's bold 13 px UI font, so the pill is as wide as
- * its name. Measured once per name with a canvas where there is one (the app); a guess of 8.2 px a letter elsewhere.
- * Tests set their own.
+ * its name. Measured once per name with a canvas where there is one (the app); a guess elsewhere. Tests set their own.
+ * Plan E Decision 16: a sequence's message labels and captions (`message`, 400 12 px) and its block words (`word`,
+ * 600 11 px) are measured the same way, one cache per font, each cleared when it holds 4,000 entries before an insert.
  */
-let labelMeasure: ((s: string) => number) | null | undefined;
-const measured = new Map<string, number>();
-export function setLabelMeasure(fn: ((s: string) => number) | null) {
+export type LabelFont = "state" | "message" | "word";
+const LABEL_FONTS: Record<LabelFont, string> = { state: "600 13px", message: "400 12px", word: "600 11px" };
+/** Px a letter with nothing to measure with: wide enough for the widest common letters. */
+const LABEL_GUESS: Record<LabelFont, number> = { state: 8.2, message: 7, word: 7 };
+const LABEL_CACHE_MAX = 4000;
+let labelMeasure: ((s: string, font: LabelFont) => number) | null | undefined;
+const measured: Record<LabelFont, Map<string, number>> = { state: new Map(), message: new Map(), word: new Map() };
+export function setLabelMeasure(fn: ((s: string, font: LabelFont) => number) | null): void {
   labelMeasure = fn;
-  measured.clear();
+  for (const m of Object.values(measured)) m.clear();
 }
-function labelW(s: string): number {
+/**
+ * `s` as a string of its own (Plan E Task 9). A label the parser cut from the text is a slice of it in V8, which keeps
+ * the whole text alive: kept as a cache key, every edited label held its whole board's text (about 250 KB a keystroke
+ * on the sequence limit, up to 4,000 of them).
+ */
+const ownCopy = (s: string): string => JSON.parse(JSON.stringify(s)) as string;
+function measureLabel(s: string, font: LabelFont): number {
   if (labelMeasure === undefined) {
     labelMeasure = null;
     try {
       const ctx = typeof document !== "undefined" ? document.createElement("canvas").getContext("2d") : null;
       if (ctx) {
         const family = getComputedStyle(document.documentElement).getPropertyValue("--font-family-ui").trim() || "sans-serif";
-        ctx.font = `600 13px ${family}`;
-        labelMeasure = (t) => ctx.measureText(t).width;
+        labelMeasure = (t, f) => {
+          ctx.font = `${LABEL_FONTS[f]} ${family}`;
+          return ctx.measureText(t).width;
+        };
       }
     } catch {
       labelMeasure = null;
     }
   }
-  if (!labelMeasure) return Math.ceil(s.length * 8.2);
-  let w = measured.get(s);
+  if (!labelMeasure) return Math.ceil(s.length * LABEL_GUESS[font]);
+  const cache = measured[font];
+  let w = cache.get(s);
   if (w === undefined) {
-    // Bounded: names come and go as they are typed.
-    if (measured.size > 4000) measured.clear();
-    w = Math.ceil(labelMeasure(s));
-    measured.set(s, w);
+    // Bounded: names and labels come and go as they are typed.
+    if (cache.size >= LABEL_CACHE_MAX) cache.clear();
+    w = Math.ceil(labelMeasure(s, font));
+    cache.set(ownCopy(s), w);
   }
   return w;
+}
+const labelW = (s: string) => measureLabel(s, "state");
+/** A sequence label's (or a participant's words', `state`) drawn width in `font`, times the frame's text size (the scale multiplies after the cache). */
+export function messageLabelW(s: string, font: LabelFont, scale = 1): number {
+  return measureLabel(s, font) * scale;
+}
+/** How many widths `font`'s cache holds (never more than 4,000). */
+export function labelCacheSize(font: LabelFont): number {
+  return measured[font].size;
 }
 const CODE_CHAR = 7.2;
 const codeW = (s: string) => s.length * CODE_CHAR;
@@ -146,7 +173,7 @@ export const SEQ_HEAD = 40;
 /** Room between the participant boxes and the first message, so its label clears the boxes. */
 const SEQ_PAD = 16;
 /** Room above a frame's first message for its tab, and below its last message. */
-const FRAME_TAB = 28;
+export const FRAME_TAB = 28;
 const FRAME_FOOT = 10;
 /** Room between participants, between timeline items, and between mind map levels. */
 const SEQ_GAP = 72;
@@ -157,7 +184,7 @@ const MIND_STEP = 64;
 export const isMethod = (row: string) => row.includes("(");
 
 /** The size of a step 12 shape, from its words and rows (flow-canvas.css draws them at these sizes). */
-export function kindSize(kind: DrawnKind, n: Pick<FlowNode, "name" | "rows" | "text" | "depth">): { w: number; h: number } | null {
+export function kindSize(kind: DrawnKind, n: Pick<FlowNode, "name" | "rows" | "text" | "depth"> & Partial<Pick<FlowNode, "attrs">>): { w: number; h: number } | null {
   const rows = n.rows ?? [];
   switch (kind) {
     case "document":
@@ -193,7 +220,8 @@ export function kindSize(kind: DrawnKind, n: Pick<FlowNode, "name" | "rows" | "t
       return { w: 26, h: 26 };
     case "participant":
     case "actor":
-      return { w: clamp(textW(n.name) + 40, 120, 260), h: SEQ_HEAD };
+      // Plan E Decision 6: 24 px more for the icon (an actor's is the user glyph).
+      return { w: clamp(textW(n.name) + 40 + (kind === "actor" || n.attrs?.icon ? 24 : 0), 120, 260), h: SEQ_HEAD };
     case "root":
       return { w: clamp(textW(n.name) + 48, 120, 300), h: 44 };
     case "topic":
@@ -219,10 +247,10 @@ export type KindBox = { x: number; y: number; w: number; h: number };
 export interface FixedLayout {
   positions: Positions;
   sizes: Map<string, { w: number; h: number }>;
-  /** Sequence: how long each lifeline runs, each frame's box, and each message row's middle (from the top). */
+  /** Sequence: where each lifeline ends (the foot boxes' top), each message row's line (from the top), and the drawing. */
   lifeline?: number;
   rows?: number[];
-  frames?: { label: string; box: KindBox; depth: number }[];
+  seq?: SeqDrawing;
   /** Timeline: the axis and each section's band. */
   axis?: KindBox;
   sections?: { name: string; box: KindBox }[];
@@ -232,32 +260,340 @@ export interface FixedLayout {
 
 const pos = (): Positions => Object.create(null) as Positions;
 
-/** Participants in a row, in the order they are written; a message row each, top to bottom. */
-function sequenceLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number }): FixedLayout {
+/**
+ * Participants in a row, in the order they are written; a message row each, top to bottom; and the one drawing the
+ * canvas and Publish both read (Plan E, seqGeometry.ts). Passes: rows; participant widths; the gaps grown to fit the
+ * labels (Decision 8, through a Fenwick tree); centres; active ranges; messages; blocks, innermost first; notes right
+ * of everything drawn. O((m + n) log n) for m messages and n participants, plus each block's own rows.
+ */
+function* sequenceLayoutSteps(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number }, scale: number): Generator<void, FixedLayout> {
   const positions = pos();
   const sizes = new Map<string, { w: number; h: number }>();
-  // Each message row is SEQ_ROW tall; a frame that opens on a row adds room for its tab above it, and one that
-  // closes adds a little below, so a tab never sits on a message or its label.
+  const links = doc.links;
+  const m = links.length;
   const frameList = doc.frames ?? [];
-  const rows: number[] = [];
+  const full = (f: { from: number; to: number }) => f.to >= f.from && f.from < m;
+
+  // Rows: a plain row is SEQ_ROW tall and a self row SEQ_SELF_ROW, its line ROW_LINE below its top. A frame that
+  // opens on a row adds room for its tab above it, and one that closes adds a little below. An empty block takes a
+  // band of its own, as tall as that room, where it is written (PlantUML and Mermaid draw it as a header-height box).
+  const opens = new Int32Array(m);
+  const closes = new Int32Array(m);
+  const empties = new Int32Array(m + 1);
+  for (const f of frameList) {
+    if (full(f)) {
+      opens[f.from]++;
+      closes[f.to]++;
+    } else empties[Math.min(Math.max(f.from, 0), m)]++;
+  }
+  const bands = new Float64Array(m + 1);
+  const rows: number[] = new Array<number>(m);
+  const tops = new Float64Array(m);
+  const heights = new Float64Array(m);
   let y = SEQ_HEAD + SEQ_PAD;
-  for (let i = 0; i < doc.links.length; i++) {
-    y += frameList.filter((f) => f.from === i && f.to >= f.from).length * FRAME_TAB;
-    rows.push(y + SEQ_ROW / 2);
-    y += SEQ_ROW + frameList.filter((f) => f.to === i && f.to >= f.from).length * FRAME_FOOT;
+  for (let i = 0; i < m; i++) {
+    bands[i] = y;
+    y += (empties[i] + opens[i]) * FRAME_TAB;
+    tops[i] = y;
+    rows[i] = y + ROW_LINE;
+    heights[i] = links[i].from === links[i].to ? SEQ_SELF_ROW : SEQ_ROW;
+    y += heights[i] + closes[i] * FRAME_FOOT;
   }
-  const lifeline = y + SEQ_ROW;
-  const centre = new Map<string, number>();
-  let x = 0;
-  for (const n of doc.nodes) {
-    if (n.kind === "note") continue;
-    const s = size(n);
-    positions[n.name] = { x, y: 0 };
-    sizes.set(n.name, { w: s.w, h: lifeline });
-    centre.set(n.name, x + s.w / 2);
-    x += s.w + SEQ_GAP;
+  bands[m] = y;
+  y += empties[m] * FRAME_TAB;
+  const end = y;
+  const bottom = end + FOOT_GAP;
+
+  yield;
+  // Participant widths, and the gaps between their boxes.
+  const parts = doc.nodes.filter((n) => n.kind !== "note");
+  const count = parts.length;
+  const at = new Map<string, number>();
+  const widths = new Float64Array(count);
+  const before = new Float64Array(count + 1);
+  parts.forEach((n, j) => {
+    at.set(n.name, j);
+    widths[j] = size(n).w;
+    before[j + 1] = before[j] + widths[j];
+  });
+  const gaps = new GapTree(count);
+  for (let j = 1; j < count; j++) gaps.add(j, SEQ_GAP);
+  const centreOf = (j: number) => before[j] + gaps.sum(j) + widths[j] / 2;
+
+  yield;
+  // Active ranges per participant, merged into sorted disjoint [from, to] pairs.
+  const active = new Map<string, number[]>();
+  const ranges = new Map<string, [number, number][]>();
+  for (const a of doc.activations ?? []) {
+    if (a.to < a.from) continue;
+    const list = ranges.get(a.name);
+    if (list) list.push([a.from, a.to]);
+    else ranges.set(a.name, [[a.from, a.to]]);
   }
-  // Notes sit to the right of the last participant, one under another.
+  for (const [name, list] of ranges) {
+    list.sort((p, q) => p[0] - q[0]);
+    const flat: number[] = [];
+    for (const [f, t] of list) {
+      const k = flat.length;
+      if (k && f <= flat[k - 1]) flat[k - 1] = Math.max(flat[k - 1], t);
+      else flat.push(f, t);
+    }
+    active.set(name, flat);
+  }
+  const activeAt = (name: string, i: number) => {
+    const flat = active.get(name);
+    if (!flat) return false;
+    let lo = 0;
+    let hi = flat.length / 2 - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (flat[mid * 2] > i) hi = mid - 1;
+      else if (flat[mid * 2 + 1] < i) lo = mid + 1;
+      else return true;
+    }
+    return false;
+  };
+
+  yield;
+  // Per message: its number, its start and end insets (Decision 9) and its label's width.
+  const numbers = messageNumbers(doc);
+  const startIn = new Float64Array(m);
+  const endIn = new Float64Array(m);
+  const labelWs = new Float64Array(m);
+  for (let i = 0; i < m; i++) {
+    const l = links[i];
+    const n = numbers[i];
+    startIn[i] = n !== null ? numberWidth(n, scale) / 2 : activeAt(l.from, i) ? ACT_W / 2 : 0;
+    endIn[i] = activeAt(l.to, i) ? ACT_W / 2 : 0;
+    labelWs[i] = l.label ? messageLabelW(l.label, "message", scale) : 0;
+  }
+  const loopW = (i: number) => Math.max(74, labelWs[i] / 2 + 14);
+
+  yield;
+  // Decision 8: messages spanning the fewest participants first, then in text order; each grows the gap just left
+  // of its rightmost participant by what it is short. A self-message keeps the next box 12 px right of its chip.
+  const order: number[] = [];
+  const spans = new Int32Array(m);
+  for (let i = 0; i < m; i++) {
+    const a = at.get(links[i].from);
+    const b = at.get(links[i].to);
+    if (a === undefined || b === undefined) continue;
+    spans[i] = Math.abs(a - b);
+    order.push(i);
+  }
+  order.sort((p, q) => spans[p] - spans[q] || p - q);
+  for (const i of order) {
+    const a = at.get(links[i].from)!;
+    const b = at.get(links[i].to)!;
+    if (a === b) {
+      if (a + 1 >= count) continue;
+      const reach = startIn[i] + loopW(i) + (labelWs[i] ? labelWs[i] / 2 + 4 : 0) + 12;
+      const room = centreOf(a + 1) - widths[a + 1] / 2 - centreOf(a);
+      if (reach > room) gaps.add(a + 1, reach - room);
+      continue;
+    }
+    if (!labelWs[i]) continue;
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    const need = labelWs[i] + 2 * LABEL_PAD + 2 * SEG_MIN + startIn[i];
+    const dist = centreOf(hi) - centreOf(lo);
+    if (need > dist) gaps.add(hi, need - dist);
+  }
+  const cx = new Float64Array(count);
+  for (let j = 0; j < count; j++) cx[j] = centreOf(j);
+
+  // Bounds: the boxes, blocks, label chips and number pills.
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const take = (x: number, y0: number, w: number, h: number) => {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y0);
+    maxX = Math.max(maxX, x + w);
+    maxY = Math.max(maxY, y0 + h);
+  };
+
+  yield;
+  // Lanes: each participant's node runs from its head box to its foot box.
+  const lanes: SeqLane[] = [];
+  parts.forEach((n, j) => {
+    const left = cx[j] - widths[j] / 2;
+    positions[n.name] = { x: left, y: 0 };
+    sizes.set(n.name, { w: widths[j], h: bottom + SEQ_HEAD });
+    take(left, 0, widths[j], bottom + SEQ_HEAD);
+    const lane: SeqLane = { name: n.name, who: n.kind === "actor" ? "actor" : "participant", x: cx[j], top: SEQ_HEAD, bottom };
+    const colour = drawnColour(n.attrs.color);
+    if (colour) lane.colour = colour;
+    lanes.push(lane);
+  });
+
+  // Activation bars, 6 px above their first message's line to 6 px below their last one's (Decision 12).
+  const bars: SeqBar[] = [];
+  for (const a of doc.activations ?? []) {
+    const j = at.get(a.name);
+    if (j === undefined) continue;
+    const lane = lanes[j];
+    const has = full(a);
+    let top: number;
+    let h: number;
+    if (has) {
+      top = rows[a.from] - 6;
+      h = rows[a.to] - rows[a.from] + 12;
+    } else if (a.from < m) {
+      top = rows[a.from] - 6;
+      h = SEQ_ROW - 12;
+    } else {
+      // After the last message: it ends where that row's bar would, above the foot boxes.
+      const tail = m ? rows[m - 1] + 6 : bottom;
+      top = Math.max(SEQ_HEAD, tail - (SEQ_ROW - 12));
+      h = tail - top;
+    }
+    const bar: SeqBar = { name: a.name, who: lane.who, x: lane.x - ACT_W / 2, y: top, h };
+    if (lane.colour) bar.colour = lane.colour;
+    bars.push(bar);
+  }
+
+  // The innermost block holding each message: its label's chip takes that block's wash.
+  const blockOf = new Int32Array(m).fill(-1);
+  const blockDepth = new Int32Array(m).fill(-1);
+  frameList.forEach((f, k) => {
+    if (!full(f)) return;
+    for (let i = f.from; i <= f.to; i++)
+      if (f.depth > blockDepth[i]) {
+        blockDepth[i] = f.depth;
+        blockOf[i] = k;
+      }
+  });
+
+  yield;
+  // Messages (Decisions 7, 9, 10, 11).
+  const messages: SeqMessage[] = [];
+  const byIndex: (SeqMessage | undefined)[] = new Array(m);
+  for (let i = 0; i < m; i++) {
+    const l = links[i];
+    const a = at.get(l.from);
+    const b = at.get(l.to);
+    if (a === undefined || b === undefined) continue;
+    const ry = rows[i];
+    const self = a === b;
+    const lw = labelWs[i];
+    const dir = self || cx[b] >= cx[a] ? 1 : -1;
+    const x0 = cx[a] + dir * startIn[i];
+    const bg: "canvas" | number = blockOf[i] >= 0 ? blockOf[i] : "canvas";
+    let d: string;
+    let points: { x: number; y: number }[];
+    let label: SeqMessage["label"];
+    if (self) {
+      const x2 = x0 + loopW(i);
+      const back = cx[a] + endIn[i];
+      const yb = ry + SELF_DROP;
+      points = [
+        { x: x0, y: ry },
+        { x: x2, y: ry },
+        { x: x2, y: yb },
+        { x: back, y: yb },
+      ];
+      if (lw) {
+        const ly = ry + 19;
+        d = `M${x0} ${ry} H${x2} V${ly - 10} M${x2} ${ly + 10} V${yb} H${back}`;
+        label = { text: l.label!, x: x2, y: ly, w: lw, chip: labelChip(x2, ly, lw), bg };
+      } else d = `M${x0} ${ry} H${x2} V${yb} H${back}`;
+      take(x0, ry, x2 - x0, SELF_DROP);
+    } else {
+      const x1 = cx[b] - dir * endIn[i];
+      points = [
+        { x: x0, y: ry },
+        { x: x1, y: ry },
+      ];
+      if (lw) {
+        const mid = (x0 + x1) / 2;
+        const half = lw / 2 + LABEL_PAD;
+        d = `M${x0} ${ry} H${mid - dir * half} M${mid + dir * half} ${ry} H${x1}`;
+        label = { text: l.label!, x: mid, y: ry, w: lw, chip: labelChip(mid, ry, lw), bg };
+      } else d = `M${x0} ${ry} H${x1}`;
+    }
+    const msg: SeqMessage = { index: i, from: l.from, to: l.to, self, reply: l.arrow === "-->", y: ry, d, points };
+    if (label) {
+      msg.label = label;
+      take(label.chip.x, label.chip.y, label.chip.w, label.chip.h);
+    }
+    const n = numbers[i];
+    if (n !== null) {
+      const lane = lanes[a];
+      const w = numberWidth(n, scale);
+      msg.number = { n, x: cx[a], y: ry, w, who: lane.who };
+      if (lane.colour) msg.number.colour = lane.colour;
+      take(cx[a] - w / 2, ry - 10 * scale, w, 20 * scale);
+    }
+    messages.push(msg);
+    byIndex[i] = msg;
+  }
+
+  yield;
+  // Blocks (Decisions 13, 14), in close order, so every block's inner blocks come before it: the levels nested
+  // inside a block are those of the blocks one deeper that closed since the last block of its own depth did.
+  const endsAt = new Map<number, number[]>();
+  for (const f of frameList) {
+    if (!full(f)) continue;
+    (endsAt.get(f.to) ?? endsAt.set(f.to, []).get(f.to)!).push(f.depth);
+  }
+  const deeper = (list: number[] | undefined, depth: number) => (list ?? []).filter((d) => d >= depth).length;
+  const slotTop = blockTops(frameList, m, bands, full);
+  const below: number[] = [];
+  // The right edge of the widest block one deeper that closed since the last block of each depth did.
+  const widest: number[] = [];
+  const blocks: SeqBlock[] = frameList.map((f, k) => {
+    const levels = (below[f.depth + 1] ?? -1) + 1;
+    below[f.depth + 1] = -1;
+    below[f.depth] = Math.max(below[f.depth] ?? -1, levels);
+    const inner = widest[f.depth + 1] ?? -Infinity;
+    widest[f.depth + 1] = -Infinity;
+    let lo = Infinity;
+    let hi = -Infinity;
+    let reach = -Infinity;
+    if (full(f))
+      for (let i = f.from; i <= f.to; i++) {
+        const msg = byIndex[i];
+        if (!msg) continue;
+        const a = cx[at.get(msg.from)!];
+        const b = cx[at.get(msg.to)!];
+        lo = Math.min(lo, a, b);
+        hi = Math.max(hi, a, b);
+        if (msg.self) reach = Math.max(reach, msg.label ? msg.label.chip.x + msg.label.chip.w : msg.points[1].x);
+      }
+    if (lo === Infinity) lo = hi = count ? cx[0] : 0;
+    const left = lo - FRAME_LEFT - TAB_STEP * levels;
+    const caption = (f.label.startsWith(f.kind) ? f.label.slice(f.kind.length) : f.label).trim();
+    const captionW = caption ? messageLabelW(caption, "message", scale) + 12 : 0;
+    // A block is wide enough to hold its caption chip and the blocks inside it (PlantUML and Eraser widen a
+    // fragment to fit its guard), so canvas, Publish and far pictures all keep the caption inside the outline.
+    const right = Math.max(Math.max(hi + FRAME_RIGHT, reach + 12) + 8 * levels, caption ? left + TAB_W + 4 + captionW + 8 : -Infinity, inner + 8);
+    widest[f.depth] = Math.max(widest[f.depth] ?? -Infinity, right);
+    const top = slotTop[k];
+    const foot = full(f) ? tops[f.to] + heights[f.to] + (deeper(endsAt.get(f.to), f.depth) - 1) * FRAME_FOOT + 2 : top + FRAME_TAB - 4;
+    const box = { x: left, y: top, w: right - left, h: foot - top };
+    take(box.x, box.y, box.w, box.h);
+    const wordW = messageLabelW(f.kind, "word", scale);
+    const block: SeqBlock = {
+      index: k,
+      kind: f.kind,
+      caption,
+      depth: f.depth,
+      box,
+      tab: { x: box.x, y: box.y, w: TAB_W, h: box.h },
+      captionBox: caption ? { x: box.x + TAB_W + 4, y: box.y + 3, w: captionW, h: 18 } : null,
+      word: box.h >= 5 + 18 + 8 + wordW + 8,
+      wordW,
+    };
+    const colour = drawnColour(f.color);
+    if (colour) block.colour = colour;
+    return block;
+  });
+
+  const bounds = minX === Infinity ? { x: 0, y: 0, w: 0, h: 0 } : { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+  // Notes sit to the right of everything drawn, one under another.
+  const x = minX === Infinity ? 0 : maxX + SEQ_GAP;
   let ny = SEQ_HEAD + SEQ_PAD;
   for (const n of doc.nodes) {
     if (n.kind !== "note") continue;
@@ -266,23 +602,49 @@ function sequenceLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: num
     sizes.set(n.name, s);
     ny += s.h + 16;
   }
-  // A frame spans the participants its messages touch, over its message rows. Frames opening on the same row
-  // stack their tabs, the outer one highest; their feet stack the same way below the closing row.
-  const frames = frameList.map((f) => {
-    const msgs = f.to >= f.from ? doc.links.slice(f.from, f.to + 1) : [];
-    const xs = msgs.flatMap((l) => [centre.get(l.from), centre.get(l.to)]).filter((v): v is number => v !== undefined);
-    const lo = xs.length ? Math.min(...xs) - 60 : 0;
-    const hi = xs.length ? Math.max(...xs) + 60 : 120;
-    const inset = f.depth * 8;
-    const first = rows[f.from] ?? SEQ_HEAD + SEQ_PAD + SEQ_ROW / 2;
-    const last = rows[Math.max(f.from, f.to)] ?? first;
-    const above = frameList.filter((g) => g.from === f.from && g.to >= g.from && g.depth >= f.depth).length;
-    const below = frameList.filter((g) => g.to === f.to && g.to >= g.from && g.depth >= f.depth).length;
-    const top = first - SEQ_ROW / 2 - above * FRAME_TAB + 2;
-    const bottom = last + SEQ_ROW / 2 + (below - 1) * FRAME_FOOT + 2;
-    return { label: f.label, depth: f.depth, box: { x: lo + inset, y: top, w: hi - lo - inset * 2, h: bottom - top } };
+  return { positions, sizes, lifeline: bottom, rows, seq: { lanes, bars, messages, blocks, bounds } };
+}
+
+/**
+ * Each block's top. A row's band holds one tab for every block that opens there, empty or not, in the order they
+ * open in the text, so an outer block's tab comes before the tabs of the blocks inside it (an empty block first inside
+ * a block that opens on the same row sits under its parent's tab). Blocks come in close order, so a block's parent is
+ * the next block one level up; the open order is the tree's pre-order with siblings in close order. O(blocks).
+ */
+function blockTops(frames: NonNullable<FlowDoc["frames"]>, m: number, bands: Float64Array, full: (f: { from: number; to: number }) => boolean): Float64Array {
+  const nf = frames.length;
+  const parent = new Int32Array(nf).fill(-1);
+  const nextAt: number[] = [];
+  for (let k = nf - 1; k >= 0; k--) {
+    const d = frames[k].depth;
+    if (d > 0 && nextAt[d - 1] !== undefined) parent[k] = nextAt[d - 1];
+    nextAt[d] = k;
+  }
+  const kids: number[][] = [];
+  const roots: number[] = [];
+  for (let k = 0; k < nf; k++) (parent[k] < 0 ? roots : (kids[parent[k]] ??= [])).push(k);
+  // Pre-order: a block opens before the blocks inside it, and siblings open in the order they close.
+  const order = new Int32Array(nf);
+  let next = 0;
+  const stack = roots.reverse();
+  while (stack.length) {
+    const k = stack.pop()!;
+    order[k] = next++;
+    const inner = kids[k];
+    if (inner) for (let j = inner.length - 1; j >= 0; j--) stack.push(inner[j]);
+  }
+  const rowOf = (f: { from: number; to: number }) => (full(f) ? f.from : Math.min(Math.max(f.from, 0), m));
+  const byRow = new Map<number, number[]>();
+  frames.forEach((f, k) => {
+    const r = rowOf(f);
+    (byRow.get(r) ?? byRow.set(r, []).get(r)!).push(k);
   });
-  return { positions, sizes, lifeline, frames, rows };
+  const top = new Float64Array(nf);
+  for (const [r, list] of byRow) {
+    list.sort((p, q) => order[p] - order[q]);
+    list.forEach((k, rank) => (top[k] = bands[r] + rank * FRAME_TAB + 2));
+  }
+  return top;
 }
 
 /**
@@ -407,9 +769,25 @@ function timelineLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: num
 }
 
 /** The layout of a sequence, mind map or timeline; null for the kinds that are dragged into place. */
-export function fixedLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number }, opts: { folded?: ReadonlySet<string> } = {}): FixedLayout | null {
-  if (doc.kind === "sequence") return sequenceLayout(doc, size);
+export function fixedLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number }, opts: { folded?: ReadonlySet<string>; textScale?: number } = {}): FixedLayout | null {
+  if (doc.kind === "sequence") {
+    const steps = sequenceLayoutSteps(doc, size, opts.textScale ?? 1);
+    for (;;) {
+      const r = steps.next();
+      if (r.done) return r.value;
+    }
+  }
   if (doc.kind === "mindmap") return mindLayout(doc, size, opts.folded);
   if (doc.kind === "timeline") return timelineLayout(doc, size);
   return null;
+}
+
+/**
+ * `fixedLayout` in steps (Plan E Task 9): a sequence's passes yield between them, so a far picture of the sequence at
+ * its limit (2,000 participants, 3,000 messages: about 5 ms in all) is laid out across time slices. Drained, it is
+ * `fixedLayout`.
+ */
+export function* fixedLayoutSteps(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number }, opts: { folded?: ReadonlySet<string>; textScale?: number } = {}): Generator<void, FixedLayout | null> {
+  if (doc.kind === "sequence") return yield* sequenceLayoutSteps(doc, size, opts.textScale ?? 1);
+  return fixedLayout(doc, size, opts);
 }

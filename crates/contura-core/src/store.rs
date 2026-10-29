@@ -147,37 +147,6 @@ fn write_thread_columns(db: &Connection, id: &str, t: &AiThread) -> Result<()> {
 /// so the guide never opens there on its own.
 pub const FIRST_START_GUIDE_KEY: &str = "first_start_guide";
 
-/// A stored thread read for its answers' SQL only (`ai_thread_statements`): every other
-/// field is skipped by the parser.
-mod sql_only {
-    use crate::ai::rails::output::StatementCheck;
-    use serde::Deserialize;
-
-    #[derive(Deserialize)]
-    pub(super) struct Thread {
-        #[serde(default)]
-        pub messages: Vec<Message>,
-    }
-
-    #[derive(Deserialize)]
-    pub(super) struct Message {
-        #[serde(default)]
-        pub record: Option<Record>,
-    }
-
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub(super) struct Record {
-        #[serde(default)]
-        pub sql_blocks: Vec<Block>,
-    }
-
-    #[derive(Deserialize)]
-    pub(super) struct Block {
-        pub statements: Vec<StatementCheck>,
-    }
-}
-
 /// The store's files are for this OS user only (L1, security audit 1.0). A new file is
 /// made 0600 before SQLite opens it, and SQLite gives the WAL, shared-memory and
 /// journal files the mode of the database file. Files an older build left looser are
@@ -491,17 +460,25 @@ impl AppStore {
     }
 
     /// The SQL statements of the answers of the place's newest `THREAD_LIMIT` threads, in
-    /// the order `list_ai_threads` gives them (memory: only the checked statements are
-    /// read; logs, thinking, exact text and message text are skipped, not built).
+    /// the order `list_ai_threads` gives them (memory: SQLite reads only the checked
+    /// statements from the JSON column; logs, thinking and message text are never built).
     pub fn ai_thread_statements(
         &self,
         place: &str,
     ) -> Result<Vec<crate::ai::rails::output::StatementCheck>> {
+        // SQLite walks the JSON and hands back one statement object at a time (`json_tree`
+        // over `$.messages`, keeping the objects under each record's `sqlBlocks[*].statements`),
+        // so no thread is parsed whole and a field the typed shape rejects cannot fail the read.
         let mut stmt = self
             .db
             .prepare(
-                "SELECT json FROM ai_threads WHERE place = ?1
-                 ORDER BY updated_at DESC LIMIT ?2",
+                "SELECT s.value
+                 FROM (SELECT id, json, updated_at FROM ai_threads WHERE place = ?1
+                       ORDER BY updated_at DESC LIMIT ?2) t,
+                      json_tree(t.json, '$.messages') s
+                 WHERE s.type = 'object'
+                   AND s.path GLOB '$.messages[[]*].record.sqlBlocks[[]*].statements'
+                 ORDER BY t.updated_at DESC, t.id, s.id",
             )
             .map_err(store_err)?;
         let rows = stmt
@@ -509,16 +486,7 @@ impl AppStore {
             .map_err(store_err)?;
         let mut out = Vec::new();
         for row in rows {
-            let t: sql_only::Thread =
-                serde_json::from_str(&row.map_err(store_err)?).map_err(store_err)?;
-            for b in t
-                .messages
-                .into_iter()
-                .filter_map(|m| m.record)
-                .flat_map(|r| r.sql_blocks)
-            {
-                out.extend(b.statements);
-            }
+            out.push(serde_json::from_str(&row.map_err(store_err)?).map_err(store_err)?);
         }
         Ok(out)
     }
@@ -700,6 +668,120 @@ impl AppStore {
         tx.commit().map_err(store_err)?;
         self.checkpoint();
         Ok(())
+    }
+
+    /// The places that hold a board's chats (`diagram:<name>`), in name order.
+    pub fn diagram_ai_places(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .db
+            .prepare(
+                "SELECT DISTINCT place FROM ai_threads \
+                 WHERE substr(place, 1, 8) = 'diagram:' ORDER BY place",
+            )
+            .map_err(store_err)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(store_err)?;
+        rows.collect::<std::result::Result<_, _>>()
+            .map_err(store_err)
+    }
+
+    /// Moves every chat of place `from` to place `to` (a board's rename, A14), in one
+    /// immediate transaction: the `place` column and the `place` inside each thread's JSON,
+    /// the Topics, their search rows (deleted and inserted again), and the tool-use rows
+    /// that targeted `<from>.flow`. Titles, messages and saved records stay as they were;
+    /// nothing is left under `from`. A `to` that already holds chats keeps its newest
+    /// `THREAD_LIMIT`, the older ones going with their rows. Returns how many chats moved.
+    pub fn move_ai_place(&self, from: &str, to: &str) -> Result<usize> {
+        if from == to {
+            return Ok(0);
+        }
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.db,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(store_err)?;
+        let moved = tx
+            .execute(
+                "UPDATE ai_threads SET place = ?2, json = json_set(json, '$.place', ?2)
+                 WHERE place = ?1",
+                params![from, to],
+            )
+            .map_err(store_err)?;
+        if moved == 0 {
+            return Ok(0);
+        }
+        tx.execute(
+            "UPDATE ai_topic SET place = ?2 WHERE place = ?1",
+            params![from, to],
+        )
+        .map_err(store_err)?;
+        type FtsRow = (String, i64, String, String, String, String);
+        let fts: Vec<FtsRow> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT thread_id, seq, title, summary, tables, questions
+                     FROM ai_topic_fts WHERE place = ?1",
+                )
+                .map_err(store_err)?;
+            let rows = stmt
+                .query_map(params![from], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                })
+                .map_err(store_err)?;
+            rows.collect::<std::result::Result<_, _>>()
+                .map_err(store_err)?
+        };
+        tx.execute("DELETE FROM ai_topic_fts WHERE place = ?1", params![from])
+            .map_err(store_err)?;
+        for (thread_id, seq, title, summary, tables, questions) in fts {
+            tx.execute(
+                "INSERT INTO ai_topic_fts
+                   (thread_id, seq, place, title, summary, tables, questions)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![thread_id, seq, to, title, summary, tables, questions],
+            )
+            .map_err(store_err)?;
+        }
+        if let (Some(old), Some(new)) = (from.strip_prefix("diagram:"), to.strip_prefix("diagram:"))
+        {
+            tx.execute(
+                "UPDATE ai_tool_use SET target = ?2
+                 WHERE target = ?1 AND thread_id IN (SELECT id FROM ai_threads WHERE place = ?3)",
+                params![format!("{old}.flow"), format!("{new}.flow"), to],
+            )
+            .map_err(store_err)?;
+        }
+        let over: Vec<String> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id FROM ai_threads WHERE place = ?1
+                     ORDER BY updated_at DESC, id LIMIT -1 OFFSET ?2",
+                )
+                .map_err(store_err)?;
+            let rows = stmt
+                .query_map(params![to, THREAD_LIMIT], |r| r.get::<_, String>(0))
+                .map_err(store_err)?;
+            rows.collect::<std::result::Result<_, _>>()
+                .map_err(store_err)?
+        };
+        memory::store::delete_for_threads(&tx, &over)?;
+        tool_uses::delete_for_threads(&tx, &over)?;
+        for id in &over {
+            tx.execute("DELETE FROM ai_threads WHERE id = ?1", params![id])
+                .map_err(store_err)?;
+        }
+        tx.commit().map_err(store_err)?;
+        // The old place name and any trimmed chat leave the WAL, as after a clear.
+        self.checkpoint();
+        Ok(moved)
     }
 
     /// Every thread of every place.
@@ -1621,6 +1703,82 @@ mod tests {
             .map(|st| st.text)
             .collect();
         assert_eq!(texts, vec!["select 5", "select 1"]);
+    }
+
+    fn place_fixture(s: &AppStore) {
+        use crate::ai::rails::output::{SqlBlock, StatementCheck};
+        use crate::ai::sent::AnswerRecord;
+        use crate::safety::StatementClass;
+        for (place, at, sqls) in [
+            ("ungrouped", 1, vec!["select 1", "select 1b"]),
+            ("ungrouped", 5, vec!["select 5"]),
+            ("ungrouped", 9, vec![]),
+        ] {
+            let mut t = thread(place, "t", at);
+            let mut a = t.messages[0].clone();
+            a.role = crate::ai::AiRole::Assistant;
+            a.at = at + 1;
+            a.record = Some(AnswerRecord {
+                sql_blocks: sqls
+                    .iter()
+                    .map(|q| SqlBlock {
+                        fence: 0,
+                        body_sha256: String::new(),
+                        label: "1 statement".into(),
+                        statements: vec![StatementCheck {
+                            text: (*q).into(),
+                            class: StatementClass::Read,
+                            flags: Vec::new(),
+                        }],
+                    })
+                    .collect(),
+                ..AnswerRecord::default()
+            });
+            t.messages.push(a);
+            s.save_ai_thread(&t).unwrap();
+        }
+    }
+
+    #[test]
+    fn place_load_reads_statements_from_columns() {
+        let (_d, s) = open_tmp();
+        place_fixture(&s);
+        let serde_path: Vec<_> = s
+            .list_ai_threads("ungrouped")
+            .unwrap()
+            .into_iter()
+            .flat_map(|t| t.messages)
+            .filter_map(|m| m.record)
+            .flat_map(|r| r.sql_blocks)
+            .flat_map(|b| b.statements)
+            .collect();
+        assert_eq!(serde_path.len(), 3);
+        assert_eq!(s.ai_thread_statements("ungrouped").unwrap(), serde_path);
+        // A field the typed thread rejects does not stop its statements.
+        s.db.execute(
+            "UPDATE ai_threads SET json = json_set(json, '$.id', 12345)",
+            [],
+        )
+        .unwrap();
+        assert!(s.list_ai_threads("ungrouped").is_err());
+        assert_eq!(s.ai_thread_statements("ungrouped").unwrap(), serde_path);
+    }
+
+    #[test]
+    #[ignore = "timing: a perf check, run with --release; the 20 ms bound is provisional"]
+    fn place_load_of_50_large_threads_under_20ms() {
+        let (_d, s) = open_tmp();
+        place_fixture(&s);
+        for i in 0..50 {
+            let mut t = thread("big", "t", i);
+            t.messages[0].text = "x".repeat(1_000_000);
+            s.save_ai_thread(&t).unwrap();
+        }
+        let start = std::time::Instant::now();
+        let n = s.ai_thread_statements("big").unwrap().len();
+        let took = start.elapsed();
+        assert_eq!(n, 0);
+        assert!(took.as_millis() < 20, "took {took:?}");
     }
 
     #[test]

@@ -58,7 +58,7 @@ function firstStatement(text: string, lineStart: number): boolean {
 
 /** The words that start a statement in the kinds written with them. */
 const LEADING_WORDS: Partial<Record<DiagramKind, string[]>> = {
-  sequence: ["participant", "actor", "activate", "deactivate", "loop", "alt", "opt"],
+  sequence: ["participant", "actor", "activate", "deactivate", "loop", "alt", "opt", "autonumber"],
   class: ["class", "interface", "enum"],
   mindmap: ["root"],
   timeline: ["section", "milestone"],
@@ -338,7 +338,7 @@ export function completeFlow(
     const kinds = ctx.line || dk === "cloud" || dk === "sequence" || hasKind ? [] : dk ? KINDS[dk] : [...KINDS.dfd, ...KINDS.flow];
     // A cloud node is drawn by its icon, so the icon key comes first there. A line takes only a colour; the kinds
     // written with a word or a date take no label or colour (step 11).
-    const all = dk === "cloud" ? ["icon", ...ATTR_KEYS.filter((k) => k !== "icon")] : dk === "sequence" ? (/^\s*(participant|actor)\s/.test(line) ? ["icon", "label", "color"] : []) : [...ATTR_KEYS];
+    const all = dk === "cloud" ? ["icon", ...ATTR_KEYS.filter((k) => k !== "icon")] : dk === "sequence" ? (/^\s*(participant|actor)\s/.test(line) ? ["icon", "label", "color"] : /^\s*(loop|alt|opt|par|critical)\b/.test(line) ? ["color"] : []) : [...ATTR_KEYS];
     const keys = ctx.line ? (!dk || LINE_COLOUR_DIAGRAMS.has(dk) ? ["color"] : []) : all.filter((k) => !dk || ATTR_DIAGRAMS.has(dk) || (k !== "label" && k !== "color"));
     const items: FlowCompletion[] = [
       ...kinds.map((k) => ({ label: k, kind: "kind" as const, apply: k })),

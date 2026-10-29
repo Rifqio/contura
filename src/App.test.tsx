@@ -2698,7 +2698,7 @@ test("first_start_guide_keeps_the_title_bar_out_of_reach_and_owns_esc", async ()
 const askPanel = () => screen.queryByRole("complementary", { name: "Ask" });
 const toggleAsk = () => userEvent.keyboard("{Control>}{Alt>}i{/Alt}{/Control}");
 
-test("the Ask panel shows on Home and Settings, not on a diagram, where the toggle says why", async () => {
+test("the Ask panel shows on Home, not on Settings or a diagram, where the toggle says why", async () => {
   workspaceRoutes({
     ai_settings: () => {
       throw { kind: "storage", message: "no" };
@@ -2720,9 +2720,15 @@ test("the Ask panel shows on Home and Settings, not on a diagram, where the togg
 
   await userEvent.keyboard("{Control>},{/Control}");
   expect(await screen.findByRole("tab", { name: "Settings", selected: true })).toBeTruthy();
-  expect(askPanel()).toBeTruthy();
-
+  // Settings fill the window: the panel steps aside, the toggle says why, and Home brings it back as it was.
+  expect(askPanel()).toBeNull();
+  expect(document.querySelector(".body")!.className).not.toContain("body-ai");
+  await toggleAsk();
+  expect(askPanel()).toBeNull();
+  expect(await screen.findByText("Settings fill the window, so the Ask panel stays closed here.")).toBeTruthy();
   await userEvent.click(screen.getByRole("tab", { name: "Home" }));
+  expect(await screen.findByRole("complementary", { name: "Ask" })).toBeTruthy();
+
   await userEvent.click(await screen.findByRole("button", { name: /^checkout, / }));
   await waitFor(() => expect(screen.getByRole("tab", { name: /checkout/, selected: true })).toBeTruthy());
   expect(askPanel()).toBeNull();

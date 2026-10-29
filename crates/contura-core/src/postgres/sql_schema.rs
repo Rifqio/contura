@@ -23,11 +23,13 @@ fn scope(only_search_path: bool) -> &'static str {
 
 fn columns_sql(only_search_path: bool) -> String {
     let scope = scope(only_search_path);
-    // An array type is named `_int4`, so it is shown as `int4[]`.
+    // An array type is named `_int4`, so it is shown as `int4[]`. An enum's labels come
+    // in their sort order; any other type has no pg_enum rows, so its array is empty.
     format!(
         "SELECT n.nspname::text, c.relname::text, c.relkind::text, a.attname::text, \
          CASE WHEN t.typcategory = 'A' THEN et.typname::text || '[]' ELSE t.typname::text END, \
-         COALESCE(a.attnum = ANY(ix.indkey), false) \
+         COALESCE(a.attnum = ANY(ix.indkey), false), \
+         ARRAY(SELECT e.enumlabel::text FROM pg_enum e WHERE e.enumtypid = t.oid ORDER BY e.enumsortorder) \
          FROM pg_attribute a \
          JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
          JOIN pg_type t ON t.oid = a.atttypid LEFT JOIN pg_type et ON et.oid = t.typelem \
@@ -100,6 +102,7 @@ pub(super) async fn sql_schema(client: &Client) -> Result<SqlSchema> {
             name: row.get(3),
             type_name: row.get(4),
             pk: row.get(5),
+            enum_values: row.get(6),
         });
     }
 

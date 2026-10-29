@@ -300,7 +300,6 @@ test("reduced_motion_zeroes_every_board_glide", async () => {
   await opened(s);
   const fit = vi.spyOn(canvas.instance!, "fitBounds").mockResolvedValue(true);
   const centre = vi.spyOn(canvas.instance!, "setCenter").mockResolvedValue(true);
-  const fitView = vi.spyOn(canvas.instance!, "fitView").mockResolvedValue(true);
 
   // Zoom to frame: Shift+2 with nothing selected.
   act(() => canvas.props!.onSelect!([]));
@@ -320,12 +319,13 @@ test("reduced_motion_zeroes_every_board_glide", async () => {
   await waitFor(() => expect(centre).toHaveBeenCalled());
   for (const c of fit.mock.calls) expect(c[1]?.duration).toBe(0);
   for (const c of centre.mock.calls) expect(c[2]?.duration).toBe(0);
-  // The keyboard menu's Zoom to fit (FlowTab's `fit`) takes the same option.
+  // The keyboard menu's Zoom to fit (the canvas's Shift+1 fit) jumps too: the view is there at once.
   act(() => canvas.props!.onSelect!([]));
+  const away = { x: -5000, y: -3000, zoom: 1 };
+  act(() => void canvas.instance!.setViewport(away));
   fireEvent.keyDown(s.canvasEl(), { key: "F10", shiftKey: true });
   fireEvent.click(await screen.findByRole("menuitem", { name: /^Zoom to fit/ }));
-  expect(fitView).toHaveBeenCalledTimes(1);
-  expect(fitView.mock.calls[0][0]).toMatchObject({ duration: 0 });
+  expect(canvas.instance!.getViewport()).not.toEqual(away);
 
   // The same zoom with motion on takes the table's 240 ms: the zeros above come from the preference.
   reduced.on = false;
@@ -355,10 +355,22 @@ test("keys_typed_in_a_dialog_never_act_on_the_board", async () => {
   const copy = within(dialog).getAllByRole("button")[0];
   copy.focus();
   const keys: KeyboardEventInit[] = [{ key: "r" }, { key: "f" }, { key: "n" }, { key: "h" }, { key: " " }, { key: "Delete" }, { key: "Backspace" }, { key: "Enter", ctrlKey: true }, { key: "j", ctrlKey: true }, { key: "b", ctrlKey: true }];
-  for (const k of keys) {
-    // Not cancelled: the dialog's own buttons keep Space and Enter.
-    expect(fireEvent.keyDown(copy, k), JSON.stringify(k)).toBe(true);
-    fireEvent.keyUp(copy, k);
+  // Not cancelled by anything on the board's path: a bubble listener on the document runs after React's handlers and
+  // the board's own listeners, and before the app keymap's window listener, which keeps every app command's key (Ctrl+B
+  // is grid.followKey) from the browser (PR41) and holds it while a dialog is open.
+  const seen: boolean[] = [];
+  const probe = (e: KeyboardEvent) => seen.push(e.defaultPrevented);
+  document.addEventListener("keydown", probe);
+  try {
+    for (const k of keys) {
+      seen.length = 0;
+      fireEvent.keyDown(copy, k);
+      // The dialog's own buttons keep Space and Enter.
+      expect(seen, JSON.stringify(k)).toEqual([false]);
+      fireEvent.keyUp(copy, k);
+    }
+  } finally {
+    document.removeEventListener("keydown", probe);
   }
   expect(s.canvasEl().classList.contains("is-space-held")).toBe(false);
   expect(screen.queryByRole("dialog", { name: "Add here" })).toBeNull();

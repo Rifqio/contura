@@ -193,7 +193,7 @@ test("sections_and_boxes_draw_under_frames", () => {
   const byId = new Map(out.nodes.map((n) => [n.id, n]));
   const layer = byId.get(SKETCH_LAYER_ID)!;
   expect(layer).toBeDefined();
-  // Zero-size, taking no pointer events, under everything; at -origin (no frame live: the origin).
+  // Zero-size, taking no pointer events, under everything; at the board's (0, 0) (Plan F Decision 11).
   expect(layer.width).toBe(0);
   expect(layer.height).toBe(0);
   expect(layer.style?.width).toBe(0);
@@ -221,10 +221,11 @@ test("sections_and_boxes_draw_under_frames", () => {
     expect(n.style).toMatchObject({ width: s.w, height: s.h });
     expect((n.data as { sketch: Sketch }).sketch).toBe(s);
   }
-  // With Refund live, its `at` is the origin: the layer alone moves.
+  // With Refund live the layer stays where it is, the very same node (Plan F Decision 11: one origin for the board).
   const live = scene.build(r.frames, boardWith(SKETCHES), KEYS, { title: "Refund", index: 1 }, { nodes: [] }, []);
   const layer2 = live.nodes.find((n) => n.id === SKETCH_LAYER_ID)!;
-  expect(layer2.position).toEqual({ x: -600, y: -40 });
+  expect(layer2).toBe(layer);
+  expect(layer2.position).toEqual({ x: 0, y: 0 });
   for (const s of SKETCHES) expect(live.nodes.find((n) => n.id === sketchNodeId(s.id))).toBe(byId.get(sketchNodeId(s.id)));
   // No sketches: no layer.
   expect(scene.build(r.frames, boardWith([]), KEYS, null, null, []).nodes.some((n) => n.id === SKETCH_LAYER_ID)).toBe(false);

@@ -225,6 +225,22 @@ test("S2 a participant's head dragged sideways shows where it goes and moves its
   await waitFor(() => expect(s.doc()).toBe(SEQ));
 });
 
+test("S2 a participant's foot dragged sideways moves its line as the head does", async () => {
+  const s = setup();
+  await shown(s, "Participant Payments");
+  // The foot box repeats the head at the bottom of the same node (Plan E Decision 6).
+  const foot = s.box("Payments").y + s.box("Payments").h - 20;
+  fireEvent.pointerDown(s.node("Participant Payments")!, { button: 0, pointerId: 1, ...s.screenAt(s.mid("Payments"), foot) });
+  fireEvent.pointerMove(window, { buttons: 1, pointerId: 1, ...s.screenAt(s.mid("Payments") - 20, foot) });
+  const gap = (s.mid("Customer") + s.mid("Shop")) / 2;
+  fireEvent.pointerMove(window, { buttons: 1, pointerId: 1, ...s.screenAt(gap, foot) });
+  await waitFor(() => expect(s.container.querySelector(".flow-drop-line.is-vertical")).not.toBeNull());
+  fireEvent.pointerUp(window, { pointerId: 1, ...s.screenAt(gap, foot) });
+  await waitFor(() => expect(s.doc()).toBe(SEQ.replace("participant Payments\n", "").replace("participant Shop\n", "participant Payments\nparticipant Shop\n")));
+  act(() => void undo(s.view()));
+  await waitFor(() => expect(s.doc()).toBe(SEQ));
+});
+
 // ----- S4: the message menu, Loop, a selected loop
 
 test("S4 the message menu: Reply (dashed), Request (solid), Add reply below and Reverse, each one undo step", async () => {
@@ -315,4 +331,61 @@ test("S4 a double press on a loop's tab edits its label on the tab; Esc keeps wh
   await userEvent.clear(label);
   await userEvent.type(label, "per line{Escape}");
   await waitFor(() => expect(s.doc()).toBe(LOOPED.replace("loop every item {", "loop per line {")));
+});
+
+// ----- Plan E Task 6: the block's side tab and its caption.
+
+test("S4 a press on a block's side tab selects it", async () => {
+  const s = setup(LOOPED);
+  await shown(s, "Participant Stock");
+  const box = s.box("\u0000frame:0");
+  const caption = s.box("\u0000frameTab:0");
+  const pane = s.canvasEl().querySelector(".react-flow__pane")!;
+  // Just right of the side tab, on the block's wash: no selection.
+  const off = s.screenAt(box.x + 40, box.y + box.h - 8);
+  fireEvent.pointerDown(pane, { button: 0, pointerId: 1, ...off });
+  fireEvent.pointerUp(window, { pointerId: 1, ...off });
+  await settle();
+  expect(s.container.querySelector(".flow-loop-selected")).toBeNull();
+  // Low on the side tab, well below the caption: the press selects the loop.
+  expect(box.y + box.h - 8).toBeGreaterThan(caption.y + caption.h);
+  const at = s.screenAt(box.x + 12, box.y + box.h - 8);
+  fireEvent.pointerDown(pane, { button: 0, pointerId: 2, ...at });
+  fireEvent.pointerUp(window, { pointerId: 2, ...at });
+  await waitFor(() => expect(s.strip().textContent).toContain("Selected the loop."));
+  expect(s.container.querySelector(".flow-loop-selected")).not.toBeNull();
+});
+
+test("S4 F2 and a new loop open their label field on the caption", async () => {
+  const s = setup(LOOPED);
+  await shown(s, "Participant Stock");
+  const cap = s.box("\u0000frameTab:0");
+  const at = s.screenAt(cap.x + 10, cap.y + 8);
+  fireEvent.pointerDown(s.canvasEl().querySelector(".react-flow__pane")!, { button: 0, pointerId: 1, ...at });
+  fireEvent.pointerUp(window, { pointerId: 1, ...at });
+  await waitFor(() => expect(s.container.querySelector(".flow-loop-selected")).not.toBeNull());
+  s.press("F2");
+  const label = await s.field("Loop label");
+  const wrap = label.closest(".inline-edit-wrap") as HTMLElement;
+  // The field's left edge on the caption's, its middle on the caption's middle.
+  expect(parseFloat(wrap.style.left)).toBeCloseTo(cap.x);
+  expect(parseFloat(wrap.style.top)).toBeCloseTo(cap.y + cap.h / 2);
+  fireEvent.keyDown(label, { key: "Escape" });
+  cleanup();
+
+  // A new loop's field opens where its caption will be once it is written.
+  const t = setup();
+  await shown(t, "Participant Payments");
+  act(() => canvas.props!.onLineSelect!(["edge:1", "edge:3"]));
+  act(() => canvas.props!.onContextMenu!({ node: null, line: "edge:3", screen: { x: 200, y: 200 }, flow: { x: 0, y: 0 }, fit: () => {} }));
+  await userEvent.click(within(await screen.findByRole("menu", { name: "Message actions" })).getByRole("menuitem", { name: "Loop around 2 messages" }));
+  const field = await t.field("Loop label");
+  const w = field.closest(".inline-edit-wrap") as HTMLElement;
+  const [left, top] = [parseFloat(w.style.left), parseFloat(w.style.top)];
+  fireEvent.keyDown(field, { key: "Enter" });
+  await waitFor(() => expect(t.doc()).toContain("loop every item {\n"));
+  await waitFor(() => expect(canvas.props!.nodes.some((n) => n.id === "\u0000frameTab:0")).toBe(true));
+  const made = t.box("\u0000frameTab:0");
+  expect(left).toBeCloseTo(made.x);
+  expect(top).toBeCloseTo(made.y + made.h / 2);
 });

@@ -115,6 +115,10 @@ _Avoid_: Log, recent queries
 A question put to the AI assistant, inline where the user is working or in the chat panel.
 _Avoid_: Prompt, query, chat message
 
+**Chip**:
+A reference in the Ask box to a Frame, the selection or a file. It sets the focus, not what may change.
+_Avoid_: Tag, mention, scope
+
 **Sends**:
 The line shown before an Ask, listing exactly what would leave the PC (question, schema, query text, sample rows). The Core builds it, and the text it shows is the text that is sent. "Show exactly" opens the full text.
 _Avoid_: Payload, context, preview

@@ -63,6 +63,8 @@ export type FlowEditOp =
       unique?: boolean;
     }
   // An ER relationship's end may be a column of its table (`orders.customer_id`); without one it joins the whole table.
+  // A sequence's `autonumber` lines, all of them: on leaves one after the header, off leaves none.
+  | { op: "setNumbering"; on: boolean }
   | { op: "addLink"; from: string; to: string; arrow: FlowArrow; label?: string; fromColumn?: string; toColumn?: string }
   | { op: "renameNode"; old: string; next: string }
   | { op: "deleteNode"; name: string }
@@ -933,6 +935,9 @@ export function oldErFrame(parse: FlowParse): boolean {
 
 const refused = (note: string): FlowEditResult => ({ edits: [], note });
 
+/** Why a frame's new label was refused: it ends in brackets the parser reads as the frame's attributes. */
+const FRAME_LABEL_BRACKETS = "Brackets at the end of a frame's label read as its colour. Write the colour in code, for example opt card saved [color: warning] {.";
+
 /** Why `table` takes no column edits, or null when it does. */
 function columnOwnerNote(parse: FlowParse, table: string): string | null {
   if (oldErFrame(parse)) return ER_NOTES.oldForm;
@@ -1518,6 +1523,24 @@ export function addActivation(text: string, parse: FlowParse, name: string): Tex
   return [insertLine(text, topLevelSpot(text, parse), line, nl)];
 }
 
+/**
+ * The Numbering toggle: every `autonumber` line goes (a trailing comment stays, at the line's indent); on writes one
+ * bare `autonumber` after the header. Nothing outside a sequence, while the frame has an error, or when the text
+ * already has exactly that one line.
+ */
+export function setNumbering(text: string, parse: FlowParse, on: boolean): TextEdit[] {
+  const dirs = parse.doc?.autonumber ?? [];
+  const header = parse.span("diagram");
+  if (parse.kind !== "sequence" || !parse.doc || !header) return [];
+  const spans = dirs.map((_, k) => parse.span(`autonumber:${k}`));
+  if (spans.some((sp) => !sp)) return [];
+  const at = nextLine(text, header.from);
+  if (on && dirs.length === 1 && !dirs[0].off && dirs[0].start === undefined && lineStart(text, spans[0]!.from) === at) return [];
+  const edits = spans.map((sp) => removeStatement(text, sp!.from, sp!.to));
+  if (on) edits.push(insertLine(text, at, "autonumber", lineBreak(text)));
+  return normalize(text, edits);
+}
+
 /** `loop label {` ... `}` around messages `from` to `to`, their lines one level in (Visio's combined fragment). */
 export function addLoop(text: string, parse: FlowParse, label: string, from: number, to: number): TextEdit[] {
   const value = label.trim();
@@ -1682,6 +1705,8 @@ export function applyFlowEdit(text: string, parse: FlowParse, edit: FlowEditOp):
       return { edits: ungroup(text, parse, edit.name) };
     case "deleteGroup":
       return { edits: deleteGroup(text, parse, edit.name) };
+    case "setNumbering":
+      return { edits: setNumbering(text, parse, edit.on) };
     case "addActivation":
       return { edits: addActivation(text, parse, edit.name) };
     case "addLoop": {
@@ -1704,8 +1729,16 @@ export function applyFlowEdit(text: string, parse: FlowParse, edit: FlowEditOp):
     }
     case "moveParticipant":
       return { edits: moveParticipant(text, parse, edit.name, edit.before) };
-    case "setFrameLabel":
+    case "setFrameLabel": {
+      // The typed words stay words: a trailing [..] the parser would read as the frame's attributes is refused.
+      const f = parse.kind === "sequence" ? parse.doc?.frames?.[edit.index] : undefined;
+      const value = edit.label.trim();
+      if (f && value && !/[{}\r\n]/.test(value) && /\]$/.test(value)) {
+        const probe = parseFlow(`diagram sequence "S"\n${f.kind} ${value} {\n}\n`).doc?.frames?.[0];
+        if (probe?.label !== `${f.kind} ${value}`) return refused(FRAME_LABEL_BRACKETS);
+      }
       return { edits: setFrameLabel(text, parse, edit.index, edit.was, edit.label) };
+    }
     case "unwrapFrame":
       return { edits: unwrapFrame(text, parse, edit.index, edit.was) };
   }

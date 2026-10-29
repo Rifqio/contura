@@ -2809,6 +2809,22 @@ test("arrows_move_and_enter_runs_the_active_command", async () => {
   expect(screen.queryByRole("listbox", { name: "Commands" })).toBeNull();
 });
 
+test("the_ask_panel_never_compacts_a_board_chat", async () => {
+  // Explicit, not only because App gives this panel "ungrouped" or "group:<id>" (Plan D Task 15 fix round 1).
+  const user = userEvent.setup();
+  known = groqModels();
+  settings = groq;
+  askError = null;
+  const t = { ...longThread().t, place: "diagram:checkout" };
+  threads = [t];
+  routeInvoke({ ...handlersNow(), ai_compact: () => compactionOf({ threadId: t.id }) });
+  renderPanel({ place: "diagram:checkout" });
+  await screen.findByText(t.messages[0].text, { selector: ".msg-user" });
+  await user.type(composer(), "/compact{Enter}");
+  await act(async () => {});
+  expect(callsTo("ai_compact")).toHaveLength(0);
+});
+
 test("each_command_runs_its_control", async () => {
   // /compact calls ai_compact for the open thread.
   let user = await slashPanel({ ai_compact: () => compactionOf({ threadId: "t" }) }, longThread().t);
@@ -3257,6 +3273,20 @@ test("the_first_answer_calls_name_chat_and_the_row_takes_the_title", async () =>
   await openHistory(user);
   expect(await screen.findByRole("button", { name: /Unpaid clients to date/ })).toBeTruthy();
   expect(screen.queryByRole("button", { name: /which clients have not paid/ })).toBeNull();
+});
+
+test("the_ask_panel_never_names_a_board_chat", async () => {
+  // A board's chats are named only by the board's own assistant (Plan D A20): the panel's title path skips them.
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  nameChat = () => "AI words";
+  renderPanel({ place: "diagram:checkout" });
+  await user.type(await screen.findByRole("textbox", { name: "Message" }), "what does checkout do?{Enter}");
+  await screen.findByText("Use an index.");
+  await waitFor(() => expect(callsTo("ai_append_turn")).toHaveLength(1));
+  await act(async () => {});
+  expect(nameRequests()).toHaveLength(0);
 });
 
 test("a_hand_title_is_not_named_again", async () => {

@@ -234,6 +234,10 @@ pub struct PreviewItem {
     pub tokens: u32,
     pub locked: Option<String>,
     pub on: bool,
+    /// A board frame's row: how much of the frame goes ("in full", "names only: over the
+    /// budget", "left out: over the budget").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit: Option<String>,
 }
 
 /// The parts of what is sent besides the system prompt: the schema block, which goes in
@@ -1061,6 +1065,7 @@ async fn outline_step(
         tokens,
         locked: None,
         on,
+        fit: None,
     };
     let exact = format!("{block}\n\n{turn}");
     let mut run = OutlineRun {
@@ -2597,6 +2602,7 @@ pub(crate) fn assemble_with(
         tokens: 0,
         locked: None,
         on: history_on,
+        fit: None,
     };
     let mut summaries = 0usize;
     for i in ask.items {
@@ -2624,6 +2630,7 @@ pub(crate) fn assemble_with(
             label: i.label,
             locked: i.locked,
             on: i.on,
+            fit: None,
         });
     }
     for t in &turns {

@@ -8,7 +8,7 @@ import { defaultKeymap, historyKeymap, indentWithTab, isolateHistory, redo, undo
 import { type Diagnostic as CmDiagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
 import { EditorState, StateEffect, StateField, type Transaction } from "@codemirror/state";
 import { Decoration, EditorView, keymap, WidgetType } from "@codemirror/view";
-import type { Edge, Node, NodeTypes, ReactFlowInstance } from "@xyflow/react";
+import { type Edge, type Node, type NodeTypes, type ReactFlowInstance } from "@xyflow/react";
 import { type ClipboardEvent, type CSSProperties, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import Icon, { type IconName } from "../components/Icon";
@@ -20,14 +20,18 @@ import { COLOUR_INFO, type DrawnColour, drawnColour, type PaletteName } from "./
 import { useFlowAssistMode, useFlowPaneOpen, useFlowSidePanel } from "../prefs/usePrefs";
 import SidePanel from "./SidePanel";
 import DiagramAssistant from "./ai/DiagramAssistant";
-import { useDiagramAsk } from "./ai/useDiagramAsk";
+import { columnRing, docParts, type PartFrame, type PartLink, ringColumn } from "./ai/answerRefs";
+import { boardInput, onBoard, sketchNotes } from "./ai/boardInput";
+import type { FrameReview } from "./ai/boardReview";
+import { AIRING_MS, type Airing, type BoardCanvasApi, useBoardAsk } from "./ai/useBoardAsk";
 import { acceptLabel } from "./ai/ProposalCard";
+import type { RowState } from "./kindNodes";
 import NodeEditor, { type NodeEdit, nodeEditOps } from "./NodeEditor";
 import PublishDialog from "../diagram/export/PublishDialog";
-import type { ExportTheme } from "../diagram/export/palette";
+import { exportPalette, type ExportTheme } from "../diagram/export/palette";
 import type { Box as SceneBox, Scene } from "../diagram/export/scene";
 import type { PublishSource } from "../diagram/export/source";
-import { glideOptions, type MotionKey, motionMs } from "../diagram/motion";
+import { type MotionKey, motionMs } from "../diagram/motion";
 import { routeOrthogonal } from "../diagram/route";
 import type { Port } from "../diagram/types";
 import type { Positions } from "../diagram/layout";
@@ -43,8 +47,10 @@ import { createKindEditStore, DATE_MESSAGES, type KindEdit, KindEditContext, MEM
 import { columnPasteLine, ER_MESSAGES, ER_TYPES, ErCanvasContext, erTypesOf, planColumnPaste, splitRow, useErCanvas } from "./erCanvas";
 import { createErScrollStore, createErSoleStore, ErScrollContext, ErSoleContext } from "./erScroll";
 import { type CardHit, erRefusal, isErTable, RELATE_MESSAGES } from "./erRelate";
+import { labelScale } from "./textScale";
 import { useErRelate } from "./useErRelate";
 import { COLOUR_WHY, EDIT_MESSAGES, GROUP_WORD, groupNeedsName, MARKER_NOTE, MULTI_LINE, NO_COLOUR, NO_GROUPS, needsName, nounOf, oneLineHint, said, takenName } from "./editWords";
+import { numberingOn } from "../lang/flow/numbering";
 import { openAsDbml } from "./erToDbml";
 import { CanvasOverlay, createOverlayStore } from "./interactions/overlay";
 import QuickAdd, { quickItems } from "./interactions/QuickAdd";
@@ -69,7 +75,6 @@ import {
   ATTR_DIAGRAMS,
   LINE_COLOUR_DIAGRAMS,
   defaultArrow,
-  DIAGRAM_KINDS,
   type DiagramKind,
   FIXED_KINDS,
   type FlowArrow,
@@ -88,7 +93,7 @@ import {
 import type { FlowProblem } from "../lang/flow/problems";
 import { staleBanner } from "../lang/flow/problems";
 import { buildFlowGraph, drawnKind, FLOW_EDGE_TYPES, FLOW_NODE_TYPES, type FlowEdgeData, FlowFitContext, FlowGroupSelContext, FlowResizeContext, GHOST_ID, groupBoxes, layoutInput, LineEndsContext, nodeLimits, nodeSize, rowRoute } from "./flowNodes";
-import { frameWord, mindTreeOf, seqGeometryOf, subtreeOf } from "./orderGestures";
+import { frameWord, mindTreeOf, newLoopCaption, onParticipantBox, seqGeometryOf, subtreeOf } from "./orderGestures";
 import { groupDragEnd, groupDragFrame, groupDropAt, startGroupDrag } from "./groupDrag";
 import { deletedWords, GroupAsk, groupContents } from "./groupGestures";
 import { ER_REFUSED, headOf, isMermaid, kindWord, MERMAID_KINDS } from "./mermaidHead";
@@ -98,37 +103,46 @@ import { pasteFrame } from "../lang/flow/board";
 import { parseFlow } from "../lang/flow/parse";
 import { createOrderDragStore, drawAt, DROP, type FoldDot, foldDotsOf, laneIndex, nearestIndex, topicDropAt, type TopicDrop, type TopicIndex, topicIndex } from "./orderDrag";
 import OrderDragLayer, { FoldDots } from "./interactions/OrderDragLayer";
-import { ER_CARD_CHROME, erMetrics, KIND_ROW, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { erCardH, erMetrics, KIND_ROW, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
 import { ADD_TOOLS, type AddTool } from "./FlowToolbar";
+import BoardMap from "./board/BoardMap";
 import FrameBar, { type FrameSettingPatch } from "./board/FrameBar";
 import LineBar from "./board/LineBar";
 import { FRAME_GAP, frameLayoutView, TEXT_SCALE } from "./board/boardLayout";
-import { anyFrameDrawn, type BoardPart, type BoardPublishInput, boardPublishInput } from "./board/publish/boardPublish";
+import { anyFrameDrawn, type BoardPart, type BoardPublishInput, boardPublishInput, tabWidth } from "./board/publish/boardPublish";
+import { BoardFarContext } from "./board/BoardFar";
+import { type DrawnForms, frameDraw, type FrameDrawPlan, type SketchForm, SKETCHES_REAL, sketchesFar, stepForms, stepSketches, swapBudget, SWAP_BUDGET_SHAPES, tabHeight, withLiveReal } from "./board/boardDetail";
+import { type CanvasHandle, type CanvasView, MAX_ZOOM, MIN_ZOOM, type ViewTarget } from "../diagram/canvasView";
+import type { TextSize } from "./board/boardLayout";
 import { boardIconNames, boardSource } from "./board/publish/boardSvg";
 import BoardToolbar from "./board/BoardToolbar";
-import { templateById } from "./board/catalog/templates";
+import { REVIEW_SAID_MS, ReviewBarOnCanvas, reviewKeys, reviewText, typingIn } from "./board/ReviewBar";
 import Shelf, { type ShelfCloseReason } from "./board/shelf/Shelf";
+import { type ShelfOutcome, useShelfAdd } from "./board/useShelfAdd";
 import { shelfIconSource } from "./board/shelf/iconSource";
 import SpaceBox, { type SpaceBoxCloseReason, ViewMoved } from "./board/shelf/SpaceBox";
 import { SHELF_DRAG_TYPE, type ShelfItem } from "./board/shelf/types";
-import { frameAtPoint, ICON_NODE_KINDS } from "./board/shelfDrop";
 import { addedDatabaseText, type ErFromModel } from "./board/catalog/fromDatabase";
 import { firstNodeHint, GENERIC_TOOLS, genericInFrame, isKindTool, KIND_TOOLS, keyOfAddTool, kindToolFor, NOTE_TOOL_ID, PEN_TOOL_ID, SPACE_MOVE_PX, SPACE_TAP_MS } from "./board/kindTools";
-import { blankText, DIAGRAM_KIND_WORD } from "./diagramKinds";
 import { axisEnds, axisKey, emptyPositions, type FlowDirection } from "./layout";
-import { frameHeadsOf, type FrameSelection, kindOfText, type Parsed, type Rect, type RunResult, useFlowDoc } from "./useFlowDoc";
-import { clashInFrameId, createBoardScene, FRAME_PREVIEW_TYPE, FRAME_TAB_H, type FrameBox, inFrameId, isStaticId, liveZ, SKETCH_UNDER_CLASS, Z_LIVE, Z_LIVE_BOX } from "./board/boardScene";
+import { frameHeadsOf, type FrameSelection, isDup, kindOfText, type Parsed, type Rect, type RunResult, useFlowDoc } from "./useFlowDoc";
+import { airRows, boardFrameId, boardNodeBoxes, clashInFrameId, createBoardScene, duplicateFrameId, FRAME_PICTURE_TYPE, FRAME_TAB_H, type FrameBox, GROUP_ID, inFrameId, isStaticId, LIVE_ANCHOR_ID, LIVE_ANCHOR_TYPE, liveZ, type PartBox, partName, rowStates, SKETCH_PICTURE_TYPE, SKETCH_UNDER_CLASS, type SketchLayerDraw, Z_LIVE, Z_LIVE_BOX } from "./board/boardScene";
 import FrameNode, { type FrameNodeData, type FramePane } from "./board/FrameNode";
-import FramePreview from "./board/FramePreview";
-import { SKETCH_NODE_TYPES } from "./board/SketchNode";
-import type { Sketch, SketchKind } from "./board/boardLayout";
-import { draftSketch, ICON_SKETCH_SIZE, NOTE_BOX, SketchBar, SketchDraw, type SketchDrawHandle, SketchField, SKETCH_TOOLS, textBox } from "./board/SketchDraw";
+import { byLeft, tabNeighbours, tabRoom } from "./board/tabRoom";
+import FramePicture, { SketchLayerPicture } from "./board/FramePicture";
+import { createSketchPictureStore, createSketchTiles } from "./board/sketchPicture";
+import { sketchExtent } from "./board/publish/boardPublish";
+import { perfMark, perfMeasure, perfOn, perfStep } from "../perf/perfRecorder";
+import { browserRasteriser, createPictureStore, oncePerFrame } from "./board/framePicture";
+import { SketchLayerNode, SKETCH_NODE_TYPES } from "./board/SketchNode";
+import type { FrameSource, Sketch, SketchKind } from "./board/boardLayout";
+import { draftSketch, NOTE_BOX, SketchBar, SketchDraw, type SketchDrawHandle, SketchField, SKETCH_TOOLS, textBox } from "./board/SketchDraw";
 import { type SketchEdit, SketchEditContext } from "./board/SketchNode";
 import {
   addSketch,
   addSketches,
-  SKETCH_WORD,
   changeSketch,
+  drawsUnder,
   finiteSketch,
   isSketchNodeId,
   moveSketches,
@@ -153,7 +167,7 @@ import SyntaxHelp from "./board/SyntaxHelp";
 import { frameHeaders } from "../lang/flow/board";
 import IconCredits from "./IconCredits";
 import IconPicker from "./IconPicker";
-import { iconTitleOf, sendIconNames } from "./icons";
+import { iconTitleOf, sendIconNames, useIconTheme } from "./icons";
 import { flowScene, loadSceneIcons, sceneIconNames } from "./flowScene";
 
 const NODE_WORD: Record<FlowNodeKind, string> = {
@@ -187,45 +201,6 @@ const NODE_WORD: Record<FlowNodeKind, string> = {
 };
 
 /** What a line is called in the strip, per kind (the counts' nouns). */
-/** What an add from the Shelf came to: added (toasted now, or once its frames are selected), a field opened, refused, or nothing. */
-type ShelfOutcome = { added: string; later?: boolean } | { refused: string } | "field" | "none";
-
-/** The shape an icon node is drawn as in each kind that takes one, for its size before it is drawn (B2 decision 7). */
-const ICON_NODE_SHAPE: Partial<Record<DiagramKind, FlowNodeKind>> = {
-  flow: "step",
-  dfd: "process",
-  state: "state",
-  cloud: "service",
-  mindmap: "topic",
-};
-
-/** A Shelf drag's payload read back (R11): null for anything that is not a whole Shelf item. */
-function shelfItemOf(raw: string): ShelfItem | null {
-  let v: unknown;
-  try {
-    v = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!v || typeof v !== "object") return null;
-  const o = v as Record<string, unknown>;
-  const str = (k: string) => typeof o[k] === "string" && o[k] !== "";
-  switch (o.kind) {
-    case "diagram":
-      return DIAGRAM_KINDS.includes(o.diagram as DiagramKind) ? (o as ShelfItem) : null;
-    case "template":
-      return str("id") ? (o as ShelfItem) : null;
-    case "icon":
-      return str("name") ? (o as ShelfItem) : null;
-    case "sketch":
-      return ["rect", "ellipse", "diamond", "note", "text"].includes(o.sketch as string) ? (o as ShelfItem) : null;
-    case "shape":
-      return DIAGRAM_KINDS.includes(o.frameKind as DiagramKind) && str("label") ? (o as ShelfItem) : null;
-    default:
-      return null;
-  }
-}
-
 const LINE_WORD: Record<DiagramKind, string> = {
   dfd: "Flow",
   flow: "Line",
@@ -289,6 +264,10 @@ const without = <T,>(set: ReadonlySet<T>, item: T): ReadonlySet<T> => {
 };
 
 /** The first item of a set, or null when it is empty. */
+const NO_NAMES: ReadonlySet<string> = new Set();
+/** A frame label's field box height (a loop's, a section's): its `at` is the box's top left, its text on the middle. */
+const LOOP_FIELD_H = 24;
+const NO_RING: Airing = new Map();
 const firstOf = (set: ReadonlySet<string>): string | null => set.values().next().value ?? null;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -342,6 +321,10 @@ const PASTE_CELL = { w: 208, h: 112 };
 /** How far a duplicate or a second paste lands from the shapes it copies: one grid step (draw.io's grid size). */
 const PASTE_STEP = 16;
 const ORIGIN0 = { x: 0, y: 0 };
+/** A frame box's node id: its key's, or its index's for a frame whose title an earlier frame has. */
+const frameNodeId = (b: FrameBox) => (b.key === null ? duplicateFrameId(b.index) : boardFrameId(b.key));
+/** Added to the rank of a frame the plan does not draw, so every frame in view builds its picture first. */
+const RANK_OUT_OF_VIEW = 1e12;
 
 /**
  * The last copy on any diagram (one clipboard, as in draw.io): its .flow text, where its shapes were drawn and on
@@ -355,6 +338,24 @@ const isField = (t: EventTarget | null) => t instanceof HTMLElement && (t.isCont
 const isArea = (id: string) => id.startsWith("\u0000");
 /** The ERD's Relationship tool (A): its press and its clicks join columns, the arrow inferred (B3 decision 9, R10). */
 const ER_RELATIONSHIP = "er.relationship";
+/** An ER card with its rows' review states: every row, as the live card scrolls (Plan D Task 8). The same node when none is marked. */
+function withRowStates(n: Node, review: Pick<FrameReview, "addedRows" | "removedRows" | "changedRows">): Node {
+  const rows = rowStates(review, n.id, (n.data as { rows?: string[] }).rows, Number.POSITIVE_INFINITY);
+  return rows ? { ...n, data: { ...n.data, rowStates: rows } } : n;
+}
+
+/**
+ * An ER card with the columns an answer named or a landing added ringing on their rows (`landed` holds the landing's
+ * ring entries): the same node when none is drawn.
+ */
+function withAiredRows(n: Node, cols: ReadonlyMap<string, ReadonlySet<string>>, landed: ReadonlySet<string>): Node {
+  const named = cols.get(n.id);
+  if (!named) return n;
+  const data = n.data as { rows?: string[]; rowStates?: readonly (RowState | undefined)[] };
+  const rows = airRows(data.rows, named, data.rowStates, Number.POSITIVE_INFINITY, (col) => landed.has(columnRing(n.id, col)));
+  return rows === data.rowStates ? n : { ...n, data: { ...n.data, rowStates: rows } };
+}
+
 const boxOfNode = (n: Node): Box => ({ x: n.position.x, y: n.position.y, w: n.initialWidth ?? 0, h: n.initialHeight ?? 0 });
 /** Where lines meet the node: its box, or a cloud service's 48 px tile. */
 const lineBoxOf = (n: Node): Box => linkBox(n.type, boxOfNode(n));
@@ -380,7 +381,8 @@ const NO_STATES: ReadonlyMap<string, NodeState> = new Map();
  * Manual z mode drops React Flow's own lift, so it is kept here, inside the live frame's band.
  */
 const LIVE_LIFT = Z_LIVE + 29;
-const BOARD_NODE_TYPES: NodeTypes = { ...FLOW_NODE_TYPES, boardFrame: FrameNode, [FRAME_PREVIEW_TYPE]: FramePreview, ...SKETCH_NODE_TYPES };
+// The live anchor draws nothing, as the sketch layer does (Plan F Decision 11).
+const BOARD_NODE_TYPES: NodeTypes = { ...FLOW_NODE_TYPES, boardFrame: FrameNode, [FRAME_PICTURE_TYPE]: FramePicture, [SKETCH_PICTURE_TYPE]: SketchLayerPicture, ...SKETCH_NODE_TYPES, [LIVE_ANCHOR_TYPE]: SketchLayerNode };
 /** A flow let go this close to its own node was a click on a port, not a drawn flow. */
 const RELEASE_ON_SELF_PX = 12;
 /** A press with a shape tool that moves further than this, in screen pixels, sizes the shape (Decision 18). */
@@ -834,6 +836,7 @@ function FlowEditor({ initialText, doc, client, bandLines, ghost, onLineClick, o
               const history = u.transactions.some(historyTr);
               // Typing into another frame (a header typed mid-frame, Review Focus 2) switches in the microtask, never in
               // this update (frameView's contract); until then the canvas's selection does not move the pane.
+              if (typed) perfMark("keystroke");
               if (typed) {
                 const at = frameAtPos(u.state, u.state.selection.main.head);
                 if (at && at.index !== latest.current.follow.shownIndex(u.state)) typedTo.current = at;
@@ -882,6 +885,10 @@ function FlowEditor({ initialText, doc, client, bandLines, ghost, onLineClick, o
   // Problems underline the text once their parse is for the text shown.
   // Once a parse: `doc` is a new object on every render (a frame switch is one), and each dispatch lays out the page.
   const parsed = doc.parsed;
+  // A keystroke in the code pane ends at the canvas paint after its parse lands (the opt-in recorder; the mark is spent once).
+  useEffect(() => {
+    if (parsed && perfOn()) requestAnimationFrame(() => perfMeasure("keystroke_to_canvas", "keystroke"));
+  }, [parsed]);
   const applyFix = useRef(doc.applyFix);
   applyFix.current = doc.applyFix;
   useEffect(() => {
@@ -978,6 +985,38 @@ function Problems({
 
 // ----- the tab
 
+/** The same frame: by index and title (Decision 9), null only with null. */
+function sameFrame(a: FrameSelection | null, b: FrameSelection | null): boolean {
+  return a === b || (!!a && !!b && a.index === b.index && a.title === b.title);
+}
+
+/** A key pressed on the canvas while a switch waits (Plan F Decision 12), kept to be pressed again on the frame picked. */
+interface HeldKey {
+  key: string;
+  code: string;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+  target: EventTarget | null;
+}
+
+/** Keys held while a switch waits; more are dropped. */
+const HELD_KEYS_MAX = 8;
+/** The longest a replayed key waits for the one before it to land (Decision 12), a paste's clipboard read included. */
+const KEY_SETTLE_MS = 4_000;
+
+/** A printable key typed into an open field as the field would take it: over its selected text. */
+function typeInto(el: HTMLInputElement | HTMLTextAreaElement, ch: string) {
+  const from = el.selectionStart ?? el.value.length;
+  const to = el.selectionEnd ?? from;
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  // React tracks the value it set: the native setter makes the input event a change it sees.
+  Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, el.value.slice(0, from) + ch + el.value.slice(to));
+  el.setSelectionRange(from + ch.length, from + ch.length);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 interface Props {
   /** The diagram's name: `<name>.flow` in Contura's diagrams folder. */
   name: string;
@@ -1007,8 +1046,11 @@ export interface MermaidAdd {
 /** B2 Task 10: what the From my database dialog adds into: this board's file, and the add itself. */
 export interface DatabaseAdd {
   file: string;
-  /** Adds the schema as an ER frame in the middle of the view, in one undo; why it was refused, or null once added. */
-  run(frame: ErFromModel): Promise<string | null>;
+  /**
+   * Adds the schema as an ER frame in the middle of the view, in one undo; why it was refused, or null once added.
+   * `source` is the Connection it was read from: the frame's layout entry keeps it, so the diagram Ask is gated there.
+   */
+  run(frame: ErFromModel, source: FrameSource): Promise<string | null>;
 }
 
 /** Step 10 (F28): what the Mermaid dialog inserts into: this diagram's kind and file, and the insert itself. */
@@ -1018,6 +1060,33 @@ export interface MermaidInsert {
   /** Writes the converted .flow text in, as one undo step, the new shapes selected; why it was refused, or null. */
   run(flow: string): Promise<string | null>;
 }
+
+const TEXT_SIZES: readonly TextSize[] = ["s", "m", "l"];
+const NO_SIZES: ReadonlySet<TextSize> = new Set();
+
+function sameFormMap<T>(a: ReadonlyMap<number, T>, b: ReadonlyMap<number, T>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) if (b.get(k) !== v) return false;
+  return true;
+}
+/** The same frames at the same places. */
+function sameBoxes(a: readonly FrameBox[], b: readonly FrameBox[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i];
+    const q = b[i];
+    if (p.index !== q.index || p.x !== q.x || p.y !== q.y || p.w !== q.w || p.h !== q.h) return false;
+  }
+  return true;
+}
+function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+/** The same drawn forms: every frame's form and every count mounted so far. */
+const sameForms = (a: DrawnForms, b: DrawnForms) => sameFormMap(a.form, b.form) && sameFormMap(a.mounted, b.mounted);
 
 export default function FlowTab({ name, client: given, active = true, onOpenSettings, onMermaid, onOpenModel, onFromDatabase, onMermaidFrame }: Props) {
   const client = given ?? appLang().client;
@@ -1048,8 +1117,29 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     setPaneShown(!p.hidden);
   };
   const [assistMode, setAssistMode] = useFlowAssistMode();
+  /** What the board Ask reads from the canvas when it sends; set each render below, once the board scene is built. */
+  const readBoard = useRef<BoardCanvasApi["input"]>(() => Promise.reject(new Error("The board is not drawn yet.")));
+  /** The middle of the view in board coordinates, where the assistant's new frames go (as the Shelf adds them); set below. */
+  const viewMiddleRef = useRef<() => Point>(() => ({ x: 0, y: 0 }));
+  /** Fits the view to frames by layout key and to board rectangles of frames not drawn yet; set each render below. */
+  const glideKeysRef = useRef<BoardCanvasApi["glideTo"]>(() => {});
+  const canvasApi = useMemo<BoardCanvasApi>(
+    () => ({
+      input: () => readBoard.current(),
+      centre: () => viewMiddleRef.current(),
+      glideTo: (keys, extra) => glideKeysRef.current(keys, extra),
+      ring: (parts) => ringRef.current(parts),
+    }),
+    [],
+  );
+  /** The parts an answer named, ringing for `AIRING_MS` (Decision 17): by frame layout key, a column as `columnRing`. */
+  const [ringed, setRinged] = useState<Airing>(NO_RING);
+  const ringTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(ringTimer.current), []);
+  /** Rings the parts of the frames on screen; set each render below, once the view can be read. */
+  const ringRef = useRef<BoardCanvasApi["ring"]>(() => {});
   // The diagram assistant: while its Ask runs or its changes wait, the text is read-only and the canvas takes no edits.
-  const ai = useDiagramAsk(name, doc, client, assistMode);
+  const ai = useBoardAsk(name, doc, assistMode, canvasApi);
   const aiLock = useRef(false);
   aiLock.current = ai.locked;
   /** The identity of the frame the Assistant's run belongs to, from Ask to the end of its changes; null when none. */
@@ -1170,6 +1260,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   const chooseIcon = useRef<HTMLButtonElement>(null);
   const instance = useRef<ReactFlowInstance | null>(null);
   const canvasEl = useRef<HTMLDivElement>(null);
+  /** The canvas's fit, Shift+1's: the menus' "Zoom to fit" is the same fit. */
+  const canvasFit = useRef<() => boolean>(() => false);
   /** This tab's drawing pane: the keyboard pick's keys come from inside it only (N1). */
   const paneEl = useRef<HTMLElement>(null);
   const drawnRef = useRef(drawn);
@@ -1236,6 +1328,16 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   // Motion (spec section 4): positions drawn part of the way through a glide, nodes fading in or out, the
   // drag and draw overlay, the label box, "Add and connect" and the canvas note.
   const overlay = useMemo(() => createOverlayStore(), []);
+  /**
+   * One origin for the whole board (Plan F Decision 11): the canvas's flow positions are board positions, and the live
+   * frame's shapes hang from an anchor at its `at`, so its graph, its drags and its overlay stay frame-local. A point the
+   * canvas hands out is converted where it is used: `toBoard` for the board (frames, sketches, Shelf adds), `toLive` for
+   * the live frame's own work; `fromLive` takes a frame-local point back to the board (to put it on screen).
+   */
+  const liveAtRef = useRef<Point>(ORIGIN0);
+  const toBoard = (flow: Point): Point => flow;
+  const toLive = (flow: Point): Point => ({ x: flow.x - liveAtRef.current.x, y: flow.y - liveAtRef.current.y });
+  const fromLive = (local: Point): Point => ({ x: local.x + liveAtRef.current.x, y: local.y + liveAtRef.current.y });
   /** A glide's frame: only the moving nodes (and the group areas around them), drawn over the layout. */
   const [glide, setGlideState] = useState<LivePositions | null>(null);
   const glideRef = useRef<LivePositions | null>(null);
@@ -1281,6 +1383,31 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   frameSelRef.current = frameSel;
   /** The shapes a switch selects once it has happened (a click on a shape in another frame). */
   const pendingPick = useRef<string[] | null>(null);
+  /**
+   * A switch in two paints (Plan F Decision 12, ruling 6): the frame picked is drawn selected at once (its ring and its
+   * tab), its shapes still static; `doc.select` runs after that paint, so `frameSel` and `liveSel` keep their meanings
+   * and the live shapes come one paint later. Null with no switch waiting. `pendingRef` holds it with the shapes to pick.
+   */
+  const [pendingFrame, setPendingFrameState] = useState<FrameSelection | null>(null);
+  const pendingRef = useRef<{ sel: FrameSelection; pick: string[] } | null>(null);
+  /** The waiting switch's `doc.select` is scheduled; a newer number drops an earlier schedule. */
+  const pendingSeq = useRef(0);
+  const pendingScheduled = useRef(false);
+  /** Keys pressed while a switch waits (at most 8, in order), replayed on the picked frame once it is live. */
+  const heldKeys = useRef<HeldKey[]>([]);
+  /** The switch just landed with keys held: they are replayed once this commit's effects have run. */
+  const replayDue = useRef(false);
+  /** A key's async work not yet with the doc (a paste reading the clipboard), for `keySettled`. */
+  const keyWork = useRef(0);
+  /** False once the tab is gone: a landing or a replay still scheduled then does nothing. */
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      pendingSeq.current++;
+    };
+  }, []);
   /**
    * The one way to act after a frame switch ("select a frame, then run this once the switch has landed"): `run` goes on
    * the first render with frame `sel` live, with its box. A switch elsewhere first, Esc or a new press drops it, and a
@@ -1383,7 +1510,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     track: (p) => trackCommit(p),
     band: (at) => bandWritten(at),
     nodes: () => graphRef.current.nodes,
-    frameAt: (p) => (staticFrameAt(p) ? { live: false } : frameAt(p) ? { live: true } : null),
+    // Its points are the live frame's (frame-local); the frames' boxes are the board's.
+    frameAt: (p) => (staticFrameAt(fromLive(p)) ? { live: false } : frameAt(fromLive(p)) ? { live: true } : null),
     scroll: erScroll,
     store: er.value.store,
     ...erGate,
@@ -1394,6 +1522,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   relRef.current = rel;
   /** The live ER card part the last press on the canvas landed on: a column's row or a header (a Shapes line's pick). */
   const erPress = useRef<CardHit>(null);
+  /** The press on a live ER card has moved past a click's 3 px: what it selects is a drag's, never a line pick. */
+  const erDragged = useRef(false);
   // The cards read why they take no edits (`blocked`) as they draw: an old-form frame draws its last good drawing,
   // which does not change as the frame turns old or is rewritten, so the context does (decision 3).
   const erOld = parsed?.frame?.oldEr === true;
@@ -1462,7 +1592,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
    * The Shelf (B2 decision 2): the tab it opened on and what opened it (Add, More shapes, or `/` off the canvas),
    * where focus goes back when it closes (R16).
    */
-  const [shelf, setShelf] = useState<{ tab: "diagrams" | "shapes"; query: string; from: "add" | "more" | "slash" } | null>(null);
+  const [shelf, setShelf] = useState<{ tab: "diagrams" | "shapes"; query: string; from: "add" | "more" | "slash" | "template"; side?: "right" } | null>(null);
+  /** What had focus when the assistant's Template opened the Shelf: it gets focus back when the Shelf closes. */
+  const templateOpener = useRef<HTMLElement | null>(null);
   const shelfId = `${useId()}shelf`;
   /** A drag out of the Shelf is under way: the frame kind its Shapes list showed, held until the drag ends; undefined when none is. */
   const [shelfDrag, setShelfDrag] = useState<DiagramKind | null | undefined>(undefined);
@@ -1493,6 +1625,17 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   };
   // Every per-frame thing resets in one place, before the effects that compare one doc with the next (Decision 29).
   useFrameSwitch(frameKey, () => {
+    // The waiting switch has landed: the frame drawn selected is the live one, and the keys held go to it.
+    const p = pendingRef.current;
+    if (p && frameSel && sameFrame(frameSel, p.sel)) {
+      pendingRef.current = null;
+      pendingScheduled.current = false;
+      setPendingFrameState(null);
+      replayDue.current = heldKeys.current.length > 0;
+      if (perfOn()) requestAnimationFrame(() => perfMeasure("select_live", "select_pick"));
+    }
+    // The strip's notice was about the frame left (B3 L2): "Linked ..." never follows a switch.
+    setNotice(null);
     // A kind tool is its frame's; a drawing tool, the hand and the section stay armed.
     setArmed((a) => (isKindTool(a) ? "select" : a));
     // An action waits only for the frame it selected; a pick a tool started belongs to the frame left.
@@ -1547,7 +1690,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   const connectionLine = useMemo(
     () =>
       makeConnectionLine((draw) => {
-        lastDraw.current = { from: draw.from, to: draw.end };
+        // The connection line draws on the board; the pull-back draws in the live frame's overlay.
+        const from = toLive(draw.from);
+        lastDraw.current = { from: { ...draw.from, ...from }, to: toLive(draw.end) };
         onDrawRef.current(draw.fromId, draw.lock);
       }),
     [],
@@ -1629,22 +1774,45 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   // Only placed nodes are drawn, so the first fit sees where everything is. A glide does not rebuild this: its
   // frames go to the canvas as live positions of the moving nodes only (ruling P20).
   // The assistant's marks join the motion states: its review's new and removed shapes, and the shapes it just added.
-  const airing = ai.airing;
+  // The live frame flashes what landed in it, by its layout key (a clashing title never flashes another frame).
+  const airingKey = frameSel && parsed && parsed.result.frames[frameSel.index]?.title === frameSel.title ? parsed.keys[frameSel.index] : undefined;
+  // The parts an answer named ring the same way (Decision 17); a column rings its row, a shape its box.
+  const airingAll = useMemo(() => {
+    if (ringed.size === 0) return ai.airing;
+    const out = new Map(ai.airing);
+    for (const [k, names] of ringed) out.set(k, new Set([...(out.get(k) ?? []), ...names]));
+    return out;
+  }, [ai.airing, ringed]);
+  const airingNames = useMemo(() => (airingKey === undefined ? NO_NAMES : (airingAll.get(airingKey) ?? NO_NAMES)), [airingAll, airingKey]);
+  const airing = useMemo(() => ([...airingNames].some((n) => ringColumn(n)) ? new Set([...airingNames].filter((n) => !ringColumn(n))) : airingNames), [airingNames]);
+  /** The live frame's ringing columns, by table. */
+  const airingRows = useMemo(() => {
+    const rows = new Map<string, Set<string>>();
+    for (const n of airingNames) {
+      const c = ringColumn(n);
+      if (c) rows.set(c.table, (rows.get(c.table) ?? new Set()).add(c.column));
+    }
+    return rows;
+  }, [airingNames]);
+  const landedNames = useMemo(() => (airingKey === undefined ? NO_NAMES : (ai.airing.get(airingKey) ?? NO_NAMES)), [ai.airing, airingKey]);
   const shownStates = useMemo(() => {
     if (!review && airing.size === 0) return states;
     const next = new Map(states);
-    for (const n of airing) next.set(n, "airing");
+    // What a landing added says so in its name; a part an answer only named rings with no note.
+    for (const n of airing) next.set(n, landedNames.has(n) ? "airing" : "ringed");
     if (review) {
       for (const n of review.added) next.set(n, "suggested");
       for (const n of review.removed) next.set(n, "removed");
+      for (const n of review.changed) next.set(n, "changed");
     }
     return next;
-  }, [states, review, airing]);
+  }, [states, review, airing, landedNames]);
   const marks = useMemo(() => {
     if (!review) return undefined;
-    const m = new Map<number, "add" | "del">();
+    const m = new Map<number, "add" | "del" | "changed">();
     for (const i of review.addedLinks) m.set(i, "add");
     for (const i of review.removedLinks) m.set(i, "del");
+    for (const i of review.changedLinks) m.set(i, "changed");
     return m;
   }, [review]);
   // A member being added grows its class by one row, so the new row is not scrolled out of sight.
@@ -1685,7 +1853,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   };
   /** Where the ghost was last drawn: its field stays there if the topic it was added to goes meanwhile (M10). */
   const keptGhost = useRef<{ open: number; box: Box } | null>(null);
-  const graph = useMemo(() => {
+  /** The live frame's nodes and lines, before the review's ER row marks. */
+  const baseGraph = useMemo(() => {
     if (!shown) return { nodes: [], edges: [] };
     if (FIXED_KINDS.has(shown.kind))
       return buildFlowGraph(shown, layout.nodes, look, {
@@ -1708,6 +1877,16 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       ...(notation !== "crow" ? { notation } : {}),
     });
   }, [shown, layout.nodes, layout.sizes, layout.axes, look, shownStates, freshEdge, marks, growing, folded, ghostParent, ghostAfter, ghostW, ghostH, textScale, notation]);
+  // The live ER card marks every row the review adds, removes or changes, and scrolls to the first (Plan D Task 8).
+  const graph = useMemo(() => {
+    let g = baseGraph;
+    if (review && (review.addedRows.size > 0 || review.removedRows.size > 0 || review.changedRows.size > 0)) g = { ...g, nodes: g.nodes.map((n) => withRowStates(n, review)) };
+    // A renamed group's area, as a static frame draws it: tinted by class, and its name says so.
+    if (review && review.changed.size > 0) g = { ...g, nodes: g.nodes.map((n) => (n.id.startsWith(GROUP_ID) && review.changed.has(n.id.slice(GROUP_ID.length)) ? { ...n, className: n.className ? `${n.className} is-ai-changed` : "is-ai-changed", data: { ...n.data, state: "changed" } } : n)) };
+    if (airing.size > 0) g = { ...g, nodes: g.nodes.map((n) => (n.id.startsWith(GROUP_ID) && airing.has(n.id.slice(GROUP_ID.length)) ? { ...n, className: n.className ? `${n.className} is-ai-airing` : "is-ai-airing" } : n)) };
+    if (airingRows.size > 0) g = { ...g, nodes: g.nodes.map((n) => withAiredRows(n, airingRows, landedNames)) };
+    return g;
+  }, [baseGraph, review, airingRows, airing, landedNames]);
   /** The latest Publish theme change, so a slower earlier one never overwrites it. */
   const publishInkSeq = useRef(0);
   const graphRef = useRef(graph);
@@ -1718,24 +1897,398 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   const scene = useMemo(() => createBoardScene("modern"), []);
   /** The live frame's tab is being dragged: it is drawn static until it is let go (Decision 5). */
   const [frameDragLive, setFrameDragLive] = useState(false);
+  // The drawn-live index: `frameSel`, never a frame still waiting for its paint (Decision 12), so a frame picked stays
+  // static in the first paint (what Task 6 passes as `FrameDrawInput.live`).
   const liveSel = frameDragLive ? null : frameSel;
   /**
-   * The view is below BOX_BELOW (Task 18b): static frames draw as one preview each. True until the canvas has placed
-   * its first view, so a board opening at its fit never draws every static shape first.
+   * Tiny frames' pictures (Plan F Decision 7), in the theme on screen. At open every static frame is pictured at once,
+   * before the first paint, so a board opening at its fit never mounts a static shape; after open pictures build in
+   * time slices, and each slice that built one draws the board again.
    */
-  const [overview, setOverview] = useState(true);
+  const iconTheme = useIconTheme();
+  const [pictureTick, setPictureTick] = useState(0);
+  /** When the last picture redraw was asked for: its render and commit go to the perf log as `picture_redraw`. */
+  const pictureRedrawAt = useRef(0);
+  /** Both stores' `onReady`: the board is drawn again once an animation frame at most, however many slices built. */
+  const picturesReady = useMemo(
+    () =>
+      oncePerFrame(() => {
+        pictureRedrawAt.current = performance.now();
+        setPictureTick((t) => t + 1);
+      }),
+    [],
+  );
+  useLayoutEffect(() => {
+    if (pictureRedrawAt.current === 0) return;
+    perfStep("picture_redraw", performance.now() - pictureRedrawAt.current);
+    pictureRedrawAt.current = 0;
+  }, [pictureTick]);
+  /**
+   * Which picture builds first (Task 9 fix 4): the frames the plan draws, nearest the view's centre, then the rest. In
+   * the WebView, where pictures are bitmaps, nothing is built at open: each frame is its box until its bitmap is in, so
+   * the first paint holds no SVG to draw as vector and no 50 SVG builds in one task (round 3 measured 118 to 164 ms of
+   * them in the open frame). Where nothing draws bitmaps (jsdom) the SVG is the picture, built at open as before.
+   */
+  const pictureRank = (id: string): number => {
+    const b = boardRef.current;
+    const box = b?.boxes.find((x) => frameNodeId(x) === id);
+    if (!box) return Number.MAX_VALUE;
+    const v = viewRef.current;
+    if (!v) return box.index;
+    const plan = frameDrawRef.current.plan;
+    const d = (box.x + box.w / 2 - (v.x + v.w / 2)) ** 2 + (box.y + box.h / 2 - (v.y + v.h / 2)) ** 2;
+    return plan && !plan.form.has(box.index) ? RANK_OUT_OF_VIEW + d : d;
+  };
+  const pictureRankRef = useRef(pictureRank);
+  pictureRankRef.current = pictureRank;
+  const pictures = useMemo(() => {
+    const rasterise = browserRasteriser();
+    return createPictureStore({ palette: exportPalette, loadIcons: loadSceneIcons, onReady: picturesReady, sync: !rasterise, rasterise, rank: (id) => pictureRankRef.current(id) });
+  }, [picturesReady]);
+  /**
+   * The frames in view and how each is drawn (Plan F Decisions 6 and 7): `plan` is kept only when its key changes (a
+   * crossing), `drawn` steps toward it each animation frame. Null until the canvas reports its first view: every frame
+   * draws real then.
+   */
+  const [frameDrawState, setFrameDrawState] = useState<{ plan: FrameDrawPlan | null; drawn: DrawnForms | null }>({ plan: null, drawn: null });
+  const frameDrawRef = useRef(frameDrawState);
+  frameDrawRef.current = frameDrawState;
+  /**
+   * When the last step of the drawn forms was set: its render and commit go to the perf log as `form_step` (Task 9 fix
+   * 4), so a long glide frame shows how much of it was React's work for the step and how much the WebView's own.
+   */
+  const formStepAt = useRef(0);
+  useLayoutEffect(() => {
+    if (formStepAt.current === 0) return;
+    perfStep("form_step", performance.now() - formStepAt.current);
+    formStepAt.current = 0;
+  }, [frameDrawState]);
+  const plan = frameDrawState.plan;
+  /** The text sizes far at this zoom, as "s m l" (Plan F Decision 2), from the plan: changed only by a crossing. */
+  const farKey = useMemo(() => (plan ? TEXT_SIZES.filter((t) => plan.far.has(t)).join(" ") : ""), [plan]);
+  const far = useMemo(() => new Set(farKey.split(" ").filter(Boolean) as TextSize[]) as ReadonlySet<TextSize>, [farKey]);
   // The tab counts what the foot counts: the errors.
   const boardErrors = useMemo(() => (parsed?.result.problems ?? []).filter((p) => p.severity === "error"), [parsed]);
-  const board = useMemo(
-    () =>
-      parsed
-        ? // The parse's own keys, never the header keys, which run ahead of the parse (Task 5 carry).
-          scene.build(parsed.result.frames, doc.board, parsed.keys, liveSel, liveSel ? { nodes: graph.nodes } : null, boardErrors, doc.clashLayouts, overview)
-        : null,
-    [scene, parsed, doc.board, liveSel, graph, boardErrors, doc.clashLayouts, overview],
+  /**
+   * The sketch layer pictured when far (Task 9 fix 2): its tiles' pictures, built in slices as the frames' are, and how
+   * the layer is drawn now (`stepSketches`). Pictured only while body text is far, no sketch is picked and no sketch
+   * tool is armed: those work on real sketches, so the layer turns real at once for them.
+   */
+  const sketchTiles = useMemo(() => createSketchTiles(), []);
+  /** The sketch tiles build nearest the view's centre first, as the frames do. */
+  const tileRank = (id: string): number => {
+    const t = sketchTiles.of(boardLayoutRef.current.sketches).find((x) => x.id === id);
+    const v = viewRef.current;
+    if (!t || !v) return 0;
+    return (t.box.x + t.box.w / 2 - (v.x + v.w / 2)) ** 2 + (t.box.y + t.box.h / 2 - (v.y + v.h / 2)) ** 2;
+  };
+  const tileRankRef = useRef(tileRank);
+  tileRankRef.current = tileRank;
+  const sketchPictures = useMemo(
+    () => createSketchPictureStore({ palette: exportPalette, loadIcons: loadSceneIcons, onReady: picturesReady, rasterise: browserRasteriser(), rank: (id) => tileRankRef.current(id) }),
+    [picturesReady],
   );
+  // A closed tab stops building its queued pictures (final review M2). No prune: the stores are this tab's alone, so
+  // its pictures go with it, and a prune would empty them under React's development re-mount while the board still
+  // draws from them. That re-mount draws the board once more, so it asks again for the builds dropped here.
+  const disposedPictures = useRef(false);
+  useEffect(() => {
+    if (disposedPictures.current) {
+      disposedPictures.current = false;
+      setPictureTick((t) => t + 1);
+    }
+    return () => {
+      pictures.dispose();
+      sketchPictures.dispose();
+      disposedPictures.current = true;
+    };
+  }, [pictures, sketchPictures]);
+  const [sketchForm, setSketchForm] = useState<SketchForm>(SKETCHES_REAL);
+  const sketchFormRef = useRef(sketchForm);
+  sketchFormRef.current = sketchForm;
+  const sketchBusy = sketchSel.length > 0 || SKETCH_TOOLS.has(armed);
+  /**
+   * The canvas has keyboard focus (final review I2, controller ruling): focus came into it by a key, not a press. The
+   * sketch layer is real meanwhile (over the swap budget), so Tab reaches every sketch at any zoom, as on main; it is
+   * pictured again once focus leaves the canvas. A pointer-only session keeps the pictures.
+   */
+  const [keyFocus, setKeyFocus] = useState(false);
+  /** The last input was a key, not a press (what `:focus-visible` goes by). */
+  const lastByKey = useRef(false);
+  useEffect(() => {
+    const key = () => {
+      lastByKey.current = true;
+    };
+    const press = () => {
+      lastByKey.current = false;
+    };
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("pointerdown", press, true);
+    window.addEventListener("mousedown", press, true);
+    return () => {
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("pointerdown", press, true);
+      window.removeEventListener("mousedown", press, true);
+    };
+  }, []);
+  const wantSketchPictures = doc.board.sketches.length > 0 && sketchesFar(plan?.far ?? NO_SIZES, sketchBusy || keyFocus);
+  /** Each tile's picture so far (asked for when it is not built), and whether every one is built for its sketches now. */
+  const sketchTileImages = (): { draw: SketchLayerDraw["tiles"]; ready: boolean } => {
+    const tiles = sketchTiles.of(doc.board.sketches);
+    sketchPictures.prune(new Set(tiles.map((t) => t.id)));
+    const draw: SketchLayerDraw["tiles"][number][] = [];
+    let ready = true;
+    for (const t of tiles) {
+      const image = sketchPictures.url(t.id, sketchTiles.keyOf(t), t);
+      if (image === null) ready = false;
+      else draw.push({ id: t.id, under: t.under, box: t.box, image });
+      if (!sketchPictures.ready(t.id)) ready = false;
+    }
+    return { draw, ready };
+  };
+  const aiReview = ai.review;
+  const aiProposedAt = ai.proposedAt;
+  const board = useMemo(
+    () => {
+      // A theme switch drops every picture: the board draws them again in the new theme (Review Focus 4).
+      pictures.setTheme(iconTheme);
+      sketchPictures.setTheme(iconTheme);
+      const sketchDraw: SketchLayerDraw | null = sketchForm.pictured ? { tiles: sketchTileImages().draw, mounted: sketchForm.mounted } : null;
+      return parsed
+        ? // The parse's own keys, never the header keys, which run ahead of the parse (Task 5 carry).
+          // The waiting proposal draws on every frame it touches and its new frames at their places (Plan D Decision 11).
+          scene.build(
+            parsed.result.frames,
+            doc.board,
+            parsed.keys,
+            liveSel,
+            liveSel ? { nodes: graph.nodes } : null,
+            boardErrors,
+            doc.clashLayouts,
+            frameDrawState.drawn,
+            pictures,
+            sketchDraw,
+            aiReview ?? undefined,
+            aiProposedAt,
+            airingAll,
+            ai.airing,
+          )
+        : null;
+    },
+    // pictureTick: a slice of pictures is built.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scene, parsed, doc.board, liveSel, graph, boardErrors, doc.clashLayouts, frameDrawState.drawn, pictures, iconTheme, pictureTick, sketchForm, aiReview, aiProposedAt, airingAll, ai.airing],
+  );
+  /** The board's frames for the Assistant's `/` list and chips. */
+  const assistFrames = useMemo(
+    () => parsed?.result.frames.map((f, i) => ({ title: f.title, kind: f.kind, clash: isDup(parsed.keys[i] ?? ""), key: parsed.keys[i] })),
+    [parsed],
+  );
+  /** What each frame holds now, by place: the names an answer's backticks can link to (Decision 17). */
+  const assistParts = useMemo<PartFrame[] | undefined>(() => parsed?.result.frames.map((f, i) => ({ ...docParts(f.title, f.doc ?? f.lastValid), clash: isDup(parsed.keys[i] ?? "") })), [parsed]);
+  /** A frame whose AI Chat was opened without selecting it: the Assistant adds its chip. A new object each time. */
+  const [frameChip, setFrameChip] = useState<{ title: string; index: number } | null>(null);
+  const assistFrame = useMemo(() => (frameSel ? { title: frameSel.title, index: frameSel.index, key: parsed?.keys[frameSel.index] } : null), [frameSel, parsed]);
   const boardRef = useRef(board);
   boardRef.current = board;
+  const boardLayoutRef = useRef(doc.board);
+  boardLayoutRef.current = doc.board;
+  /** The view the canvas last reported (board units), and its handle for glides (Plan F Decision 8). */
+  const viewRef = useRef<CanvasView | null>(null);
+  /** The flow point a wheel zoom was around, until a view that did not come from the wheel replaces it (fill toward it). */
+  const pointerRef = useRef<{ x: number; y: number } | null>(null);
+  const canvasHandle = useRef<CanvasHandle | null>(null);
+  /** Every view move that glides goes through the canvas's `glideView`, which reports where it lands first. */
+  const glideView = (to: ViewTarget) => void canvasHandle.current?.glideView(to);
+  /**
+   * Each frame's text size, shape count, parts (shapes and lines: what turning real mounts) and centre by frame index,
+   * for the plan and its steps.
+   */
+  const frameFacts = (b: NonNullable<typeof board>) => {
+    const n = b.boxes.reduce((m, x) => Math.max(m, x.index + 1), 0);
+    const sizes: TextSize[] = new Array(n).fill("m");
+    const shapes: number[] = new Array(n).fill(0);
+    const parts: number[] = new Array(n).fill(0);
+    const centres: Point[] = new Array(n).fill(ORIGIN0);
+    for (const x of b.boxes) {
+      if (x.key !== null) sizes[x.index] = boardLayoutRef.current.frames.get(x.key)?.textSize ?? "m";
+      const id = x.key === null ? duplicateFrameId(x.index) : boardFrameId(x.key);
+      shapes[x.index] = b.children.get(id)?.length ?? 0;
+      parts[x.index] = shapes[x.index] + (b.lines.get(id) ?? 0);
+      centres[x.index] = { x: x.x + x.w / 2, y: x.y + x.h / 2 };
+    }
+    return { sizes, shapes, parts, centres };
+  };
+  /**
+   * The swap budget by animation frame (Task 9 fix 3, `swapBudget`): read once a frame from how long the frame before
+   * took, by the frames' step and the sketch layer's alike. A step after a pause (no step for 100 ms) starts afresh.
+   */
+  const swapClock = useRef({ t: -1, last: 0, next: SWAP_BUDGET_SHAPES, now: SWAP_BUDGET_SHAPES });
+  const swapBudgetAt = (t: number): number => {
+    const c = swapClock.current;
+    if (t === c.t) return c.now;
+    const dt = c.last > 0 && t - c.last < 100 ? t - c.last : 16;
+    const b = swapBudget(c.next, dt, SWAP_BUDGET_SHAPES);
+    swapClock.current = { t, last: t, next: b.next, now: b.now };
+    return b.now;
+  };
+  /** One step of the drawn forms toward `target` (Decision 7); the same object when nothing changes. */
+  const stepDrawn = (target: FrameDrawPlan, from: DrawnForms | null, budget = swapClock.current.next): DrawnForms | null => {
+    const b = boardRef.current;
+    const v = viewRef.current;
+    if (!b || !v) return from;
+    const facts = frameFacts(b);
+    // Before the first plan every static frame was a picture, and the live one real.
+    const live = b.live?.index ?? null;
+    // The live frame is always real in the drawn forms (`withLiveReal`): when it stops being live it waits for a new
+    // picture, never keeping one from before it went live.
+    const base = withLiveReal(from ?? { form: new Map(b.boxes.map((x) => [x.index, x.index === live ? ("real" as const) : ("picture" as const)])), mounted: new Map() }, live);
+    // A frame turns into a picture once its picture is built (asked for here when it is not).
+    const ready = (i: number) => {
+      const want = target.form.get(i);
+      return want === undefined || want === "real" || scene.pictureReady(i, want, pictures);
+    };
+    const next = stepForms(target, base, ready, facts.parts, facts.centres, pointerRef.current ?? { x: v.x + v.w / 2, y: v.y + v.h / 2 }, budget);
+    return sameForms(next, base) ? base : next;
+  };
+  /** The wheel's pointer only steers the swap the wheel started: once the drawn forms are the plan, it is let go (Decision 7). */
+  const letGoPointerWhenSettled = () => {
+    const { plan, drawn } = frameDrawRef.current;
+    if (!plan || (drawn && drawn.mounted.size === 0 && sameFormMap(drawn.form, plan.form))) pointerRef.current = null;
+  };
+  /** What the last plan was made from. */
+  const planned = useRef<{ boxes: readonly FrameBox[]; view: CanvasView; live: number | null; sizes: readonly TextSize[]; shapes: readonly number[] } | null>(null);
+  /** Plans again for the view and the board's boxes now; kept only when its key changes (Decision 8). */
+  const replan = () => {
+    const b = boardRef.current;
+    const v = viewRef.current;
+    if (!b || !v) return;
+    // A build that only changed what is drawn hands back the same frames at the same places, with the same text sizes
+    // and shape counts: nothing to plan. A text size changed alone (a box clamped to FRAME_MIN keeps its size) plans.
+    const facts = frameFacts(b);
+    const last = planned.current;
+    planned.current = { boxes: b.boxes, view: v, live: b.live?.index ?? null, sizes: facts.sizes, shapes: facts.shapes };
+    if (
+      last &&
+      last.view === v &&
+      last.live === planned.current.live &&
+      sameBoxes(last.boxes, b.boxes) &&
+      sameList(last.sizes, facts.sizes) &&
+      sameList(last.shapes, facts.shapes)
+    )
+      return;
+    const was = frameDrawRef.current;
+    // A frame dragged by its tab keeps the form it has, and is never culled while dragged (Decision 6).
+    const dragging = frameDrag.current?.index ?? null;
+    const next = frameDraw({
+      boxes: b.boxes,
+      sizes: facts.sizes,
+      shapes: facts.shapes,
+      live: b.live?.index ?? null,
+      dragging,
+      dragForm: dragging === null ? null : (was.drawn?.form.get(dragging) ?? null),
+      view: v,
+      wasFar: was.plan?.far ?? NO_SIZES,
+    });
+    if (was.plan && was.plan.key === next.key) return;
+    // The first step now, with the plan, so a crossing builds the scene once.
+    const state = { plan: next, drawn: stepDrawn(next, was.drawn) };
+    frameDrawRef.current = state;
+    formStepAt.current = performance.now();
+    setFrameDrawState(state);
+  };
+  // An edit can grow a frame into view, and a live drag tick moves the live box: the plan is made again (Decision 6).
+  useLayoutEffect(() => {
+    replan();
+    // replan reads the board through its ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board?.boxes]);
+  // While the drawn forms differ from the plan, they step toward it once per animation frame (Decision 7).
+  useEffect(() => {
+    const { plan: target, drawn } = frameDrawState;
+    if (!target || (drawn && drawn.mounted.size === 0 && sameFormMap(drawn.form, target.form))) return;
+    let id = 0;
+    const tick = (t: number) => {
+      const cur = frameDrawRef.current;
+      if (!cur.plan) return;
+      const budget = swapBudgetAt(t);
+      const next = stepDrawn(cur.plan, cur.drawn, budget);
+      // A frame that mounts nothing to let the WebView catch up steps again at the next.
+      if (next === cur.drawn) {
+        if (budget === 0) id = requestAnimationFrame(tick);
+        return;
+      }
+      const state = { plan: cur.plan, drawn: next };
+      frameDrawRef.current = state;
+      formStepAt.current = performance.now();
+      setFrameDrawState(state);
+      letGoPointerWhenSettled();
+    };
+    id = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(id);
+    // stepDrawn reads the board and the view through refs; a slice of pictures may let a frame turn into one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frameDrawState, pictureTick]);
+  // The sketch layer steps toward its wanted form once per animation frame, as the frames do (Task 9 fix 2): into its
+  // pictures once they are built, real over them by the swap budget the frames leave (none while a frame turns real),
+  // and real at once for a sketch picked or a sketch tool armed.
+  useEffect(() => {
+    if (!sketchForm.pictured && !wantSketchPictures) return;
+    if (sketchForm.pictured && !wantSketchPictures && sketchBusy) {
+      setSketchForm(SKETCHES_REAL);
+      return;
+    }
+    let id = 0;
+    const tick = (t: number) => {
+      const ready = wantSketchPictures ? sketchTileImages().ready : true;
+      const framesTurning = (frameDrawRef.current.drawn?.mounted.size ?? 0) > 0;
+      const was = sketchFormRef.current;
+      const budget = framesTurning ? 0 : swapBudgetAt(t);
+      const next = stepSketches(wantSketchPictures, was, ready, doc.board.sketches.length, budget, false);
+      if (next !== was) setSketchForm(next);
+      // A frame that mounts nothing for the WebView to catch up steps again at the next (frames turning real step
+      // the frames' effect, which runs this one again).
+      else if (budget === 0 && !framesTurning && !wantSketchPictures && was.pictured) id = requestAnimationFrame(tick);
+    };
+    id = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(id);
+    // sketchTileImages reads the board's sketches; a slice of pictures may let the layer turn into them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantSketchPictures, sketchBusy, sketchForm, frameDrawState, pictureTick, doc.board.sketches]);
+  // The live frame's `at`, where the scene hangs its anchor (the same entry and key the scene read).
+  liveAtRef.current = (board?.live?.key != null ? doc.board.frames.get(board.live.key)?.at : undefined) ?? ORIGIN0;
+  // The board Ask's board (Plan D Decision 1): every frame's outline and problems of the text as it is now, each box in
+  // board units, the sketches as notes, and the selection. The focus is the composer's chips (Task 14), so it is left empty here.
+  readBoard.current = async () => {
+    for (let i = 0; i < 3; i++) {
+      const cur = await doc.current();
+      if (!cur) break;
+      const o = await client.boardOutline(doc.docId, cur.result.version).catch(() => ({ stale: true as const }));
+      if (o.stale) continue;
+      const scene = boardRef.current;
+      const boxes = scene ? onBoard(scene) : [];
+      // The live frame's shapes are FlowTab's own nodes: the scene's `nodes` leave them out.
+      const parts = scene ? boardNodeBoxes({ ...scene, nodes: [...scene.nodes, ...graphRef.current.nodes] }) : new Map<string, PartBox[]>();
+      const sel = doc.selected;
+      const live = scene?.live && sel && scene.live.index === sel.index ? selectedRef.current : [];
+      const shapes = live.flatMap((id) => {
+        const n = partName(id);
+        return n === null ? [] : [n];
+      });
+      const { followUp: _f, attachment: _a, create: _c, ...board } = boardInput({
+        frames: o.frames,
+        boxes,
+        focus: [],
+        selected: { frame: sel?.title ?? null, shapes, sketches: sketchSelRef.current },
+        notes: sketchNotes(doc.board.sketches, boxes, parts),
+        create: null,
+        followUp: null,
+        attachment: null,
+      });
+      return board;
+    }
+    throw new Error("The text changed while the board was read.");
+  };
   /** Publish is on when some frame has something drawn (B4 Decision 4): Ctrl+Shift+E, the menus and the strip button. */
   const publishable = useMemo(
     () => !!parsed && anyFrameDrawn({ frames: parsed.result.frames, board: doc.board, keys: parsed.keys, frameIndex: board?.live?.index ?? null, liveLayout: board?.live ? layout : null }),
@@ -1779,14 +2332,26 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (!liveBox || liveBox.index !== a.sel.index || !parsed) return;
     a.run(liveBox);
   }, [frameSel, liveBox, kind, parsed, board]);
+  // Keys held while the switch waited for its paint go to the frame now live, after the action waiting for it.
+  useEffect(() => {
+    if (pendingFrame !== null || !replayDue.current) return;
+    replayDue.current = false;
+    const keys = heldKeys.current;
+    heldKeys.current = [];
+    void replayHeldKeys(keys);
+    // Only the landing of a switch replays.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingFrame]);
   const frameCount = board?.boxes.length ?? 0;
   /** The live frame's shapes and lines in the live band, set in this one place (Decision 5, C15). */
   const liveBase = useMemo(
     () => ({
-      nodes: graph.nodes.map((n) => ({ ...n, zIndex: liveZ(n.zIndex ?? 0) })),
+      // Each carries its frame's text size, so flow-board.css fades its text at that size's zoom (Plan F Decision 4).
+      // Each hangs from the live anchor at the frame's `at`, so its position stays frame-local (Plan F Decision 11).
+      nodes: graph.nodes.map((n) => ({ ...n, parentId: LIVE_ANCHOR_ID, zIndex: liveZ(n.zIndex ?? 0), className: n.className ? `${n.className} board-ts-${textSize}` : `board-ts-${textSize}` })),
       edges: graph.edges.map((e) => ({ ...e, zIndex: liveZ(e.zIndex ?? 0) })),
     }),
-    [graph],
+    [graph, textSize],
   );
   // Manual z drops React Flow's own lift of a selected shape: it is lifted here, above the live band's own levels and
   // still under the sketches.
@@ -1796,12 +2361,15 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     return liveBase.nodes.map((n) => (picked.has(n.id) ? { ...n, zIndex: LIVE_LIFT } : n));
   }, [liveBase, selected]);
   const paneOpen: FramePane | null = side.hidden ? null : side.tab === "assistant" ? "assistant" : "editor";
-  const frameActs = useRef({ select: (_b: FrameBox) => {}, pane: (_t: FramePane) => {}, problems: (_b: FrameBox) => {}, zoom: (_b: FrameBox) => {} });
+  const frameActs = useRef({ select: (_b: FrameBox) => {}, pane: (_t: FramePane, _b?: FrameBox) => {}, problems: (_b: FrameBox) => {}, zoom: (_b: FrameBox) => {} });
   /**
    * Each frame's wrapped box node as last made, by id: the same object while the scene's box node and what its tab
    * shows are the same, so a keystroke in one frame hands React Flow 49 unchanged frame nodes (Task 15).
    */
-  const frameNodeMemo = useRef(new Map<string, { src: Node; selected: boolean; pane: FramePane | null; pending: typeof ai.pending; draggable: boolean; node: Node }>());
+  const frameNodeMemo = useRef(
+    new Map<string, { src: Node; selected: boolean; pane: FramePane | null; pending: number; draggable: boolean; near: string; node: Node }>(),
+  );
+  const pendingByKey = ai.pendingByKey;
   /** Each frame's box node with what its tab needs; its title tab drags it. */
   const frameNodes = useMemo(() => {
     const memo = frameNodeMemo.current;
@@ -1810,22 +2378,33 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       return [];
     }
     const seen = new Set<string>();
+    // The boxes by their left edge, once per build: each frame's tab neighbours are read from it (`tabNeighbours`).
+    const byX = byLeft(board.boxes);
     const out = board.nodes.map((n) => {
       if (n.type !== "boardFrame") return n;
       seen.add(n.id);
       const box = (n.data as { box: FrameBox }).box;
-      const selected = !!frameSel && frameSel.index === box.index && frameSel.title === box.title;
+      // A frame picked and waiting for its paint is drawn selected at once (Decision 12).
+      const shown = pendingFrame ?? frameSel;
+      const selected = !!shown && shown.index === box.index && shown.title === box.title;
       // The only frame of a sequence, mind map or timeline keeps no positions: a drag would move nothing.
       const draggable = !ai.locked && box.key !== null && !(board.boxes.length === 1 && !!box.kind && FIXED_KINDS.has(box.kind));
+      // The tabs to its right, which end its strip's room (coordinator ruling on F1); kept while they stay put.
+      const neighbours = tabNeighbours(box, byX);
+      const near = neighbours.map((t) => `${t.dx},${t.dy}`).join(" ");
+      // Each frame's own waiting count on its AI Chat tab: a board frame's by its key, a new frame's from the scene.
+      const pending = box.key !== null ? (pendingByKey.get(box.key) ?? 0) : ((n.data as { pending?: number }).pending ?? 0);
       const was = memo.get(n.id);
-      if (was && was.src === n && was.selected === selected && was.pane === paneOpen && was.pending === ai.pending && was.draggable === draggable) return was.node;
+      if (was && was.src === n && was.selected === selected && was.pane === paneOpen && was.pending === pending && was.draggable === draggable && was.near === near)
+        return was.node;
       const data: FrameNodeData = {
         ...(n.data as { box: FrameBox; faded?: boolean }),
         selected,
         pane: paneOpen,
-        pending: ai.pending,
+        pending,
+        neighbours: was?.near === near ? (was.node.data as FrameNodeData).neighbours : neighbours,
         onSelect: () => frameActs.current.select(box),
-        onPane: (tab) => frameActs.current.pane(tab),
+        onPane: (tab) => frameActs.current.pane(tab, box),
         onProblems: () => frameActs.current.problems(box),
         onZoom: () => frameActs.current.zoom(box),
       };
@@ -1837,12 +2416,53 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
         // The box takes no clicks; its tab does (FrameNode). FlowTab says which frame a click on the canvas is for.
         style: { ...n.style, pointerEvents: "none" as const },
       };
-      memo.set(n.id, { src: n, selected, pane: paneOpen, pending: ai.pending, draggable, node });
+      memo.set(n.id, { src: n, selected, pane: paneOpen, pending, draggable, near, node });
       return node;
     });
     if (memo.size > seen.size) for (const id of memo.keys()) if (!seen.has(id)) memo.delete(id);
     return out;
-  }, [board, frameSel, paneOpen, ai.pending, ai.locked]);
+  }, [board, frameSel, pendingFrame, paneOpen, pendingByKey, ai.locked]);
+  /**
+   * The review bar's frames (Decision 11): the touched frames' titles in text order, their union on the board (the bar
+   * adds their tabs at the live zoom, Plan F Decision 5), and the sum of their counts, which Ask shows. Null when nothing
+   * would land.
+   */
+  const reviewed = useMemo(() => {
+    const review = ai.review;
+    if (!review) return null;
+    const titles = [...review].filter(([, r]) => r.count > 0).map(([t]) => t);
+    const sum = [...review.values()].reduce((n, r) => n + r.count, 0);
+    const boxes = frameNodes.flatMap((n) => (n.type === "boardFrame" && (n.data as FrameNodeData).pending > 0 ? [(n.data as FrameNodeData).box] : []));
+    if (boxes.length === 0) return { titles, sum, rect: null };
+    const x = Math.min(...boxes.map((b) => b.x));
+    const y = Math.min(...boxes.map((b) => b.y));
+    const rect = { x, y, w: Math.max(...boxes.map((b) => b.x + b.w)) - x, h: Math.max(...boxes.map((b) => b.y + b.h)) - y };
+    return { titles, sum, rect };
+  }, [ai.review, frameNodes]);
+  const reviewSum = reviewed?.sum ?? null;
+  // The review bar's words, announced once as a review starts, in a polite region that stays in the page (one put in
+  // with its words is often missed); cleared after a while so browse mode does not read them twice (react-aria's
+  // announcer).
+  const [reviewSaid, setReviewSaid] = useState("");
+  const reviewedRef = useRef(reviewed);
+  reviewedRef.current = reviewed;
+  const reviewStart = ai.waiting?.step === "review" && (reviewed?.sum ?? 0) > 0 ? ai.waiting.messageAt : null;
+  useEffect(() => {
+    const r = reviewedRef.current;
+    if (reviewStart === null || !r) {
+      setReviewSaid("");
+      return;
+    }
+    setReviewSaid(reviewText(r.titles, r.sum));
+    const t = setTimeout(() => setReviewSaid(""), REVIEW_SAID_MS);
+    return () => clearTimeout(t);
+  }, [reviewStart]);
+  /** Accept or Reject from the bar: the focused button goes with the bar, so focus goes back to the canvas (Figma). */
+  const fromBar = (act: () => void) => () => {
+    const back = !!(document.activeElement as Element | null)?.closest?.(".board-review");
+    act();
+    if (back) canvasEl.current?.focus({ preventScroll: true });
+  };
   const canvasNodes = useMemo(() => (liveBox ? [...frameNodes, ...liveNodes] : frameNodes), [frameNodes, liveNodes, liveBox]);
   const canvasEdges = useMemo(() => (liveBox ? [...(board?.edges ?? []), ...liveBase.edges] : (board?.edges ?? [])), [board, liveBase, liveBox]);
 
@@ -1859,7 +2479,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const b = boardRef.current;
     if (!p || !b) return;
     const mine = ++publishInkSeq.current;
-    // The visible part of the canvas, in canvas units.
+    // The visible part of the canvas, in board units.
     let screenBox: SceneBox = { x: 0, y: 0, w: 0, h: 0 };
     const r = canvasEl.current?.getBoundingClientRect();
     const f = instance.current;
@@ -1878,13 +2498,11 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
         board,
         keys: p.keys,
         boxes: b.boxes,
-        origin: b.origin,
         frameIndex: b.live?.index ?? null,
         live: live ? { layout: lay, folded, textScale: TEXT_SCALE[frameSettingsRef.current.textSize], notation: frameSettingsRef.current.notation } : null,
         shapes: live ? selectedRef.current : [],
         sketchIds: sketchSelRef.current,
-        // Canvas units to board units (Decision 7).
-        onScreen: { x: screenBox.x + b.origin.x, y: screenBox.y + b.origin.y, w: screenBox.w, h: screenBox.h },
+        onScreen: screenBox,
       });
       if (input.frames.length === 0 && input.sketches.length === 0) return;
       const iconSketches = [...new Set(input.sketches.flatMap((k) => (k.kind === "icon" && k.icon ? [k.icon] : [])))];
@@ -1899,7 +2517,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const d = drawnRef.current;
     let build: (icons: Awaited<ReturnType<typeof loadSceneIcons>>) => Scene;
     let names: string[];
-    let onScreen = screenBox;
+    // The scene is in the live frame's own units (Plan F Decision 11).
+    let onScreen = { ...screenBox, ...toLive(screenBox) };
     if (d && b.live) {
       const { nodes, style, axes } = layoutRef.current;
       const shut = folded;
@@ -1920,9 +2539,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       const opts = { ...(k !== 1 ? { textScale: k } : {}), ...(e?.notation === "arrow" ? { notation: "arrow" as const } : {}) };
       build = (icons) => flowScene(d0, view.nodes, view.style, icons, view.axes, undefined, opts);
       names = sceneIconNames(d0);
-      // The scene is in the frame's own units: canvas, plus the origin, less the frame's place.
+      // The scene is in the frame's own units: the board less the frame's place.
       const at = e?.at ?? { x: 0, y: 0 };
-      onScreen = { ...screenBox, x: screenBox.x + b.origin.x - at.x, y: screenBox.y + b.origin.y - at.y };
+      onScreen = { ...screenBox, x: screenBox.x - at.x, y: screenBox.y - at.y };
     }
     const icons = await loadSceneIcons(names, "light");
     if (mine !== publishInkSeq.current) return;
@@ -2147,8 +2766,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     r?.pickWhileLinking(nodes);
     // A pick of nothing or of several ends "Make a relationship from here"; one table's press is the card's to take.
     if (r?.pick && nodes.length !== 1) r.endModes(true);
-    // A Shapes item waiting for its shape takes this pick (step 6, draw.io's connect mode).
-    pickForShapeRef.current(nodes);
+    // A Shapes item waiting for its shape takes this pick (step 6, draw.io's connect mode); a card the pointer began to
+    // drag selects itself at the drag's start, and that is a move, not a pick (the click that ends it is swallowed).
+    if (!erDragged.current) pickForShapeRef.current(nodes);
     const pm = pickedMemberRef.current();
     if (pm && !(nodes.length === 1 && nodes[0] === pm.node)) setKindEditRef.current(null);
     setSelected((prev) => {
@@ -2280,7 +2900,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   function viewCentre(kindOfNode: FlowNodeKind, nodeName: string): { x: number; y: number } {
     const s = nodeSize(drawnKind(kindOfNode, kind), look, nodeName);
     const rect = canvasEl.current?.getBoundingClientRect();
-    const at = instance.current && rect ? instance.current.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }) : { x: 0, y: 0 };
+    const at = instance.current && rect ? toLive(instance.current.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })) : { x: 0, y: 0 };
     return { x: snap(at.x - s.w / 2), y: snap(at.y - s.h / 2) };
   }
 
@@ -2311,10 +2931,10 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     return addShape(toolKind(tool), at);
   }
 
-  /** The middle of the view on the board, in flow positions. */
+  /** The middle of the view, in the live frame's units. */
   function viewMiddleFlow(): Point {
     const rect = canvasEl.current?.getBoundingClientRect();
-    return instance.current && rect ? instance.current.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }) : { x: 0, y: 0 };
+    return instance.current && rect ? toLive(instance.current.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })) : { x: 0, y: 0 };
   }
 
   /**
@@ -2643,7 +3263,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
           }
           const start = { x: e.clientX, y: e.clientY };
           let dragging = false;
-          const toFlow = (x: number, y: number) => instance.current?.screenToFlowPosition({ x, y }) ?? { x, y };
+          // In the live frame's units: the pending line draws in its overlay, and the drop adds there.
+          const toFlow = (x: number, y: number) => (instance.current ? toLive(instance.current.screenToFlowPosition({ x, y })) : { x, y });
           const move = (ev: PointerEvent) => {
             if (!dragging && Math.abs(ev.clientX - start.x) + Math.abs(ev.clientY - start.y) < 5) return;
             dragging = true;
@@ -2774,7 +3395,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   /** A free spot near the middle of the view for a new shape of `size`, in flow coordinates. */
   function freeSpotInView(size: { w: number; h: number }): Point {
     const rect = canvasEl.current?.getBoundingClientRect();
-    const mid = instance.current && rect ? instance.current.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }) : { x: 0, y: 0 };
+    const mid = instance.current && rect ? toLive(instance.current.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })) : { x: 0, y: 0 };
     // Room for a name typed longer than the first one (board: 190 px). Clear of the group frames too, as of the shapes
     // (step 11 board note: a new shape had landed on a frame it was not added to).
     const frames = graphRef.current.nodes.filter((n) => isArea(n.id)).map(boxOfNode);
@@ -3056,6 +3677,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   function erLinePickClick(e: ReactMouseEvent): boolean {
     if (kind !== "er") return false;
     const cur = shapePick.current ?? toolPick(armedRef.current);
+    erDragged.current = false;
     if (cur?.p.what !== "line" || !(e.target instanceof Element)) return false;
     const id = liveShapeAt(e.target);
     if (id === null) return false;
@@ -3783,14 +4405,19 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
 
   // ----- step 8: the sequence (board DiagramSequence)
 
-  /** Screen to flow coordinates with the view as it is now, as two plain functions (no object per pointer frame). */
+  /**
+   * Screen to the live frame's own units with the view as it is now, as two plain functions (no object per pointer
+   * frame). Every caller is live-frame work against its frame-local graph (the mind map's topic drag, the sequence's
+   * gestures), so the live frame's place on the board comes off (`toLive`, Plan F Decision 11).
+   */
   function flowMapper(): { x(cx: number): number; y(cy: number): number } {
     const v = instance.current?.getViewport() ?? { x: 0, y: 0, zoom: 1 };
     const r = canvasEl.current?.querySelector(".react-flow")?.getBoundingClientRect();
     const zoom = v.zoom || 1;
+    const at = liveAtRef.current;
     const left = (r?.left ?? 0) + v.x;
     const top = (r?.top ?? 0) + v.y;
-    return { x: (cx) => (cx - left) / zoom, y: (cy) => (cy - top) / zoom };
+    return { x: (cx) => (cx - left) / zoom - at.x, y: (cy) => (cy - top) / zoom - at.y };
   }
 
   /** "row 3", the row a slot puts a message on. */
@@ -3848,7 +4475,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (!frame) return;
     const name = frame.label.slice(frame.kind.length).trim();
     setNotice(null);
-    openField({ kind: "loop", index: f.index, was: frame.label, name, at: { x: frame.tab?.x ?? frame.box?.x ?? 0, y: (frame.tab?.y ?? frame.box?.y ?? 0) - 2 } });
+    // On the caption (Plan E Task 6): the field's left edge on the caption's, its middle on the caption's middle.
+    const cap = frame.tab ?? frame.box;
+    openField({ kind: "loop", index: f.index, was: frame.label, name, at: { x: cap?.x ?? 0, y: (cap ? cap.y + cap.h / 2 : 0) - LOOP_FIELD_H / 2 } });
   }
 
   /** Delete on a selected loop: its frame goes, its messages stay (an unwrap). One undo step. */
@@ -3884,11 +4513,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       return;
     }
     setNotice(null);
-    // On the loop: at its first message's row, by the participant it starts from (Visio's combined fragment).
-    const edge = graphRef.current.edges.find((g) => g.id === `edge:${from}`);
-    const src = edge ? graphRef.current.nodes.find((n) => n.id === edge.source) : undefined;
-    const ed = edge?.data as { row?: number; y?: number } | undefined;
-    const at = src && ed ? { x: Math.round(src.position.x), y: Math.round(src.position.y + (ed.y ?? SEQ_HEAD + ((ed.row ?? 0) + 0.5) * SEQ_ROW) - 22) } : viewCentre("participant", "every item");
+    // On the caption the loop will have (Plan E Task 6): its field's middle on the caption's middle (18 px chip, 3 down).
+    const cap = d ? newLoopCaption(d, seqGeometry(), from, to) : null;
+    const at = cap ? { x: cap.x, y: cap.y + 3 + 9 - LOOP_FIELD_H / 2 } : viewCentre("participant", "every item");
     openField({ kind: "newloop", from, to, name: "every item", at });
   }
 
@@ -3947,7 +4574,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const geo = seqGeometry();
     const picking = shapePick.current?.p.what === "message" ? (shapePick.current.p as Extract<ShapePick, { what: "message" }>) : null;
     const within = (b: Box | null) => !!b && p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
-    const tab = picking ? undefined : geo.frames.find((f) => within(f.tab));
+    const tab = picking ? undefined : geo.frames.find((f) => within(f.tab) || within(f.side));
     if (tab) {
       e.stopPropagation();
       e.preventDefault();
@@ -3967,7 +4594,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const nodeId = t.closest(".react-flow__node")?.getAttribute("data-id");
     const part = geo.parts.find((x) => x.name === nodeId);
     if (!part) return;
-    const onHead = p.y <= part.box.y + SEQ_HEAD;
+    const onHead = onParticipantBox(part.box, p.y);
     if (!picking && onHead) return startParticipantDrag(e, part, geo, map);
     e.stopPropagation();
     e.preventDefault();
@@ -4272,15 +4899,17 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     else bandWritten(r?.at);
   }
 
-  /** A flow released on empty canvas: within 24 px of a node it goes there; else "Add and connect" opens. */
-  function onConnectRelease(from: Port, at: Point) {
+  /** A flow released on empty canvas (board point `flow`): within 24 px of a node it goes there; else "Add and connect" opens. */
+  function onConnectRelease(from: Port, flow: Point) {
     clearDrawGhost();
     if (isArea(from.node)) return;
+    // The live frame's shapes and overlay are frame-local; the frames' boxes and the screen are the board's.
+    const at = toLive(flow);
     if (kind === "er") {
       // A column's drag: its row, header or nothing under the release decides (B3 Task 7).
       if (rel.onPortRelease(from, at)) return;
       // Over another frame nothing is added, before the magnet search: no "Add and connect" there (R12).
-      if (staticFrameAt(at)) {
+      if (staticFrameAt(toBoard(flow))) {
         setNotice(RELATE_MESSAGES.otherFrame);
         return;
       }
@@ -4300,7 +4929,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (magnetTarget(at, [{ id: source.id, box: lineBoxOf(source) }], RELEASE_ON_SELF_PX)) return;
     stopPull.current();
     overlay.set({ pending: { d: routeOrthogonal(lineBoxOf(source), { ...at, w: 0, h: 0 }, { toPoint: true }).d, pulling: false } });
-    const screen = instance.current?.flowToScreenPosition(at) ?? at;
+    const screen = instance.current?.flowToScreenPosition(toBoard(flow)) ?? flow;
     setQuick({ from: from.node, at, screen });
   }
 
@@ -4618,6 +5247,13 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     }
     return false;
   }
+  /** A8: a selected ER column or a picked class member, which takes Ctrl+Enter as its Duplicate (B3 decision 10, CL1). */
+  function ownsCtrlEnter(): boolean {
+    const sel = selectedRef.current;
+    if (sel.length !== 1) return false;
+    if (kind === "er") return er.selected()?.table === sel[0];
+    return kind === "class" && pickedMember()?.node === sel[0];
+  }
   const pickedMemberRef = useRef(pickedMember);
   pickedMemberRef.current = pickedMember;
   const setKindEditRef = useRef(setKindEdit);
@@ -4797,13 +5433,13 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     return c.text;
   }
 
-  /** The pointer while it is over the canvas, else the middle of the view, in flow coordinates. */
+  /** The pointer while it is over the canvas, else the middle of the view, in the live frame's units. */
   function pasteAnchor(): Point {
     const f = instance.current;
     const rect = canvasEl.current?.getBoundingClientRect();
     if (!f) return { x: 0, y: 0 };
-    if (pointer.current) return f.screenToFlowPosition(pointer.current);
-    return rect ? f.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }) : { x: 0, y: 0 };
+    if (pointer.current) return toLive(f.screenToFlowPosition(pointer.current));
+    return rect ? toLive(f.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })) : { x: 0, y: 0 };
   }
 
   const shifted = (at: Positions, d: number): Positions => {
@@ -5012,12 +5648,12 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   }
 
   /** From my database (decision 9, R23): the schema's ER frame in the middle of the view, selected, with an Undo toast. */
-  async function addDatabaseFrame(frame: ErFromModel): Promise<string | null> {
+  async function addDatabaseFrame(frame: ErFromModel, source: FrameSource): Promise<string | null> {
     if (aiLock.current) {
       setNote({ text: EDIT_MESSAGES.locked, key: Date.now() });
       return EDIT_MESSAGES.locked;
     }
-    const r = await doc.addFrames([{ text: frame.text }], viewMiddle());
+    const r = await doc.addFrames([{ text: frame.text, source }], viewMiddle());
     if ("refused" in r) return r.refused || EDIT_MESSAGES.changed;
     // The title it got: a taken one is made free ("shop 2").
     addedFrame.current = { titles: r.titles, boxes: r.boxes, toast: addedDatabaseText({ ...frame, title: r.titles[0] }), depth: historyDepth() };
@@ -5048,15 +5684,16 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const rect = canvasEl.current?.getBoundingClientRect();
     return boardPointAt(rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : { x: 0, y: 0 });
   }
+  viewMiddleRef.current = viewMiddle;
 
   /**
    * Opens the Shelf (Add, More shapes, `/` off the canvas, Tab in the Space box with its search): an armed tool is
    * disarmed and the Space box closes (Figma's insert).
    */
-  function openShelf(from: "add" | "more" | "slash", tab: "diagrams" | "shapes" = "diagrams", query = "") {
+  function openShelf(from: "add" | "more" | "slash" | "template", tab: "diagrams" | "shapes" = "diagrams", query = "", side?: "right") {
     setSpaceBox(null);
     arm("select");
-    setShelf({ tab, query, from });
+    setShelf({ tab, query, from, side });
   }
 
   /** Closes the Shelf. If it held focus, focus goes back to what opened it (R16); a press elsewhere keeps its own. */
@@ -5064,7 +5701,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const from = shelf?.from;
     if (reason !== "outside") {
       // After an add the keys go to the canvas (a text or note field opened by it takes them next).
-      const opener = reason === "add" || from === "slash" ? canvasEl.current : from === "more" ? toolbarSlot.current?.querySelector<HTMLElement>('[data-tool="more"]') : addButton.current;
+      const opener = reason === "add" || from === "slash" ? canvasEl.current : from === "more" ? toolbarSlot.current?.querySelector<HTMLElement>('[data-tool="more"]') : from === "template" ? templateOpener.current : addButton.current;
       refocusAfterMenu(opener);
     }
     setShelf(null);
@@ -5074,25 +5711,6 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     setShelfDrag(undefined);
   }
 
-  /** Frames from text through `addFrames`, centred on `at` (decisions 8 and 9). */
-  async function addShelfFrames(frames: { text: string }[], at: Point, name: (titles: string[]) => string): Promise<ShelfOutcome> {
-    const r = await doc.addFrames(frames, at);
-    // "" is a silent no-op (the tab closed, the text kept changing): nothing to say (T1).
-    if ("refused" in r) return r.refused ? { refused: r.refused } : "none";
-    const said = `Added ${name(r.titles)}.`;
-    addedFrame.current = { titles: r.titles, boxes: r.boxes, toast: said, depth: historyDepth() };
-    return { added: said, later: true };
-  }
-
-  /** A Shelf add's end: an add closes the Shelf with its Undo toast; a refusal keeps it open with its note, no Undo (R10). */
-  function finishShelf(outcome: ShelfOutcome) {
-    if (outcome === "none") return;
-    if (outcome === "field") return closeShelf("add");
-    if ("refused" in outcome) return void setNote({ text: outcome.refused, key: Date.now() });
-    if (!outcome.later) undoableToast(outcome.added);
-    closeShelf("add");
-  }
-
   /** Why a Shelf item cannot be added now: a shape of the live frame that needs a selection (as the old Shapes list showed). */
   function shelfDisabled(item: ShelfItem): string | null {
     if (item.kind !== "shape" || !kind || item.frameKind !== kind) return null;
@@ -5100,185 +5718,6 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (kind === "er" && parsed?.frame?.oldEr) return ER_NOTES.oldForm;
     const sh = shapesOf(kind).find((x) => x.label === item.label);
     return sh ? shapeDisabled(sh) : null;
-  }
-
-  /** One sketch from the Shelf; a full board's refusal goes to the toast (R10). */
-  function shelfSketch(s: NewSketch | null, word: string): ShelfOutcome {
-    if (!s) return "none";
-    let why: string | null = null;
-    const id = addOneSketch(s, (w) => (why = w));
-    if (id) return { added: `Added ${word}.` };
-    return why ? { refused: why } : "none";
-  }
-
-  /**
-   * An icon as a node of the live frame (decision 7): named by its title, unique; at `at` (flow) or, without it, where
-   * a new shape goes. A mind map's goes under the selected topic or the central idea.
-   */
-  async function iconNode(title: string, icon: string, at?: Point): Promise<ShelfOutcome> {
-    if (aiLock.current || !kind || !ICON_NODE_KINDS.has(kind)) return "none";
-    const known = parsedRef.current?.result.doc ?? drawnRef.current;
-    const nodes = known?.nodes ?? [];
-    const name = known ? freeName(title, namesOf(known)) : title;
-    // A data flow node needs its kind said (R28); the other kinds leave it unsaid.
-    let nodeKind: FlowNodeKind | null = kind === "dfd" ? "process" : null;
-    let under: string | undefined;
-    if (kind === "mindmap") {
-      const root = nodes.find((n) => n.kind === "root");
-      nodeKind = root ? "topic" : "root";
-      const sel = selectedRef.current.length === 1 ? nodes.find((n) => n.name === selectedRef.current[0]) : undefined;
-      under = sel && (sel.kind === "topic" || sel.kind === "root") ? sel.name : root?.name;
-    }
-    const size = newSize(nodeKind ?? ICON_NODE_SHAPE[kind] ?? "process", name);
-    const spot = at ? { x: Math.round(at.x - size.w / 2), y: Math.round(at.y - size.h / 2) } : freeSpotInView(size);
-    const group = at && kind !== "mindmap" ? groupUnder(at) : null;
-    const fixed = FIXED_KINDS.has(kind);
-    let why: string | null = null;
-    const started = doc.frameIdNow();
-    const run = doc.run(
-      { op: "addNode", name, kind: nodeKind, attrs: { icon }, unique: true, ...(group ? { group } : {}), ...(under !== undefined && nodeKind === "topic" ? { under } : {}) },
-      { frame: started, ...(fixed ? {} : { move: { [name]: spot } }), onRefused: (w) => (why = w) },
-    );
-    // An awaited commit (as C1): a frame switch meanwhile waits for it, so the node lands in its own frame.
-    trackCommit(run);
-    const r = await run;
-    if (!r?.name) return why ? { refused: why } : "none";
-    // `unique` chose another name after all: place that one.
-    if (!fixed && r.name !== name) doc.place({ [r.name]: spot }, true, r.frame ?? null);
-    // Selected unless another frame was selected meanwhile.
-    if (doc.frameIdNow() === started) {
-      setSketchSel([]);
-      setLines([]);
-      setSelected([r.name]);
-    }
-    return { added: `Added ${title}.` };
-  }
-
-  /** An icon from the Shelf: a node in the frame under the point (or the selected frame, for a click) when its kind takes icons, else an icon sketch. */
-  async function shelfIcon(icon: string, p: Point, dropped: boolean): Promise<ShelfOutcome | null> {
-    const title = await iconTitleOf(icon);
-    // The frame may have changed while the title loaded: the rest is this render's (`lateActs`).
-    return lateActs.current.placeIcon(title, icon, p, dropped);
-  }
-
-  /** `shelfIcon` once the icon's title is known. */
-  async function placeIcon(title: string, icon: string, p: Point, dropped: boolean): Promise<ShelfOutcome | null> {
-    if (aiLock.current) return { refused: EDIT_MESSAGES.locked };
-    const live = liveBoxRef.current;
-    const b = boardRef.current;
-    const o = originNow();
-    const hit = dropped ? (b ? frameAtPoint(b.boxes, o, p, live?.key ?? null) : null) : live;
-    const remember = (r: ShelfOutcome) => {
-      if (typeof r === "object" && "added" in r) shelfIconSource.remember(icon);
-      return r;
-    };
-    if (hit && hit.kind && ICON_NODE_KINDS.has(hit.kind) && !hit.clash) {
-      if (live && hit.index === live.index) return remember(await iconNode(title, icon, dropped ? { x: p.x - o.x, y: p.y - o.y } : undefined));
-      // Another frame: it is selected, and the node goes in once it is live, at the same board point (R24).
-      switchFrame(
-        { title: hit.title, index: hit.index },
-        [],
-        () => {
-          const now = originNow();
-          void lateActs.current.iconNode(title, icon, { x: p.x - now.x, y: p.y - now.y }).then((r) => lateActs.current.finishShelf(remember(r)));
-        },
-        true,
-      );
-      return null;
-    }
-    const size = ICON_SKETCH_SIZE;
-    return remember(shelfSketch({ kind: "icon", x: Math.round(p.x - size.w / 2), y: Math.round(p.y - size.h / 2), w: size.w, h: size.h, icon }, title));
-  }
-
-  /** A kind shape from the Shelf (decision 7, B1 decision 19). */
-  function shelfShape(item: Extract<ShelfItem, { kind: "shape" }>, at?: Point): ShelfOutcome | Promise<ShelfOutcome> {
-    const live = liveBoxRef.current;
-    const sh = shapesOf(item.frameKind).find((x) => x.label === item.label);
-    if (!sh) return "none";
-    const refuse = { refused: `Drop ${item.label} inside its diagram.` };
-    let local: Point | undefined;
-    if (at) {
-      const b = boardRef.current;
-      const o = originNow();
-      const hit = b ? frameAtPoint(b.boxes, o, at, live?.key ?? null) : null;
-      if (!hit) return refuse;
-      // Another frame: it is selected, and nothing is added (B1 decision 19).
-      if (!live || hit.index !== live.index) {
-        switchFrame({ title: hit.title, index: hit.index });
-        return "none";
-      }
-      local = { x: at.x - o.x, y: at.y - o.y };
-    }
-    if (!live || kind !== item.frameKind) return refuse;
-    const why = shapeDisabled(sh);
-    if (why) return { refused: `${sh.label}: ${why.charAt(0).toLowerCase()}${why.slice(1)}.` };
-    const r = local ? runShape(sh, local, { group: groupUnder(local) }) : runShape(sh);
-    // A shape opens with its name ready, written once the name is kept: no Added toast until then (as R9's fields).
-    if (r === true) return "field";
-    if (r === false) return "none";
-    return r.then((ok) => (ok ? { added: `Added ${sh.label}.` } : "none"));
-  }
-
-  /**
-   * Adds a Shelf item (decisions 7 and 9): `at` is a board point (a drop); without it the add lands in the middle of
-   * the view. Under the Assistant's lock every add is refused (R23).
-   */
-  async function addFromShelf(item: ShelfItem, at?: Point) {
-    if (aiLock.current) return setNote({ text: EDIT_MESSAGES.locked, key: Date.now() });
-    if (item.kind === "fromDatabase" || item.kind === "fromMermaid") {
-      // Not draggable: a drop of one does nothing.
-      if (at) return;
-      const open = item.kind === "fromDatabase" ? openFromDatabase.current : openFromMermaid.current;
-      closeShelf("add");
-      open?.();
-      return;
-    }
-    // One add at a time: a double-click or a held Enter while the Shelf or the Space box is still open adds once.
-    if (shelfAdding.current) return;
-    shelfAdding.current = true;
-    try {
-      await addShelfItem(item, at);
-    } finally {
-      shelfAdding.current = false;
-    }
-  }
-
-  async function addShelfItem(item: Exclude<ShelfItem, { kind: "fromDatabase" | "fromMermaid" }>, at?: Point) {
-    const p = at ?? viewMiddle();
-    let outcome: ShelfOutcome | null = "none";
-    switch (item.kind) {
-      case "diagram":
-        outcome = await addShelfFrames([{ text: blankText(item.diagram, DIAGRAM_KIND_WORD[item.diagram]) }], p, (t) => t[0]);
-        break;
-      case "template": {
-        const t = templateById(item.id);
-        if (!t) break;
-        outcome = await addShelfFrames("frames" in t ? t.frames.map((text) => ({ text })) : [{ text: t.text }], p, () => t.name);
-        break;
-      }
-      case "icon":
-        outcome = await shelfIcon(item.name, p, !!at);
-        break;
-      case "sketch":
-        if (item.sketch === "text" || item.sketch === "note") {
-          // Nothing is added until text is typed (R9).
-          setSketchField({ mode: "new", kind: item.sketch, at: p });
-          outcome = "field";
-        } else outcome = shelfSketch(draftSketch(item.sketch, p, p, { click: true, all: sketchList.current }), SKETCH_WORD[item.sketch]);
-        break;
-      case "shape":
-        outcome = await shelfShape(item, at);
-        break;
-    }
-    if (outcome) lateActs.current.finishShelf(outcome);
-  }
-
-  /** A drop on the board's canvas (R11): only a Shelf item, at the flow point plus the live origin; a bad payload does nothing. */
-  function dropShelf(data: DataTransfer, flowAt: Point) {
-    const item = shelfItemOf(data.getData(SHELF_DRAG_TYPE));
-    if (!item || !Number.isFinite(flowAt.x) || !Number.isFinite(flowAt.y)) return;
-    const o = originNow();
-    void addFromShelf(item, { x: flowAt.x + o.x, y: flowAt.y + o.y });
   }
 
   /**
@@ -5480,15 +5919,17 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
    */
   function paneDoubleClick(p: { screen: Point; flow: Point }) {
     // A static ERD card's table or column: its frame is selected and that field opens there (R2).
-    const hit = staticErHit(p.flow);
+    const hit = staticErHit(toBoard(p.flow));
     if (hit) return void editStaticEr(hit);
     // A static frame's space is not the live frame's: its clicks select it, nothing is added there.
-    if (staticFrameAt(p.flow)) return;
-    const group = groupTitleAt(p.flow);
+    if (staticFrameAt(toBoard(p.flow))) return;
+    // The rest is the live frame's, in its own units.
+    const local = toLive(p.flow);
+    const group = groupTitleAt(local);
     if (group !== null) return startGroupRename(group);
     // With an ERD live, a double-click adds a table at the pointer, in its frame or outside every frame (R14).
-    if (kind === "er") return void openNewTable(p.flow, null);
-    setPaneAdd(p);
+    if (kind === "er") return void openNewTable(local, null);
+    setPaneAdd({ screen: p.screen, flow: local });
   }
 
   /**
@@ -5521,7 +5962,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const row = Math.floor((y - rowsTop) / m.row);
     // The card's empty space below its rows adds a column there, as on the live card (row null, a new name).
     if (row < 0 || row >= rows.length || y > h) return { frame, table, row: null, field: "name" };
-    // The field under the pointer, from the card as drawn (below BOX_BELOW there is none: the frame is one preview).
+    // The field under the pointer, from the card as drawn (a pictured frame has none: it is one image).
     const card = [...(canvasEl.current?.querySelectorAll<HTMLElement>(".react-flow__node") ?? [])].find((e) => e.getAttribute("data-id") === id);
     const s = instance.current?.flowToScreenPosition(p);
     let field: "name" | "type" = "name";
@@ -5535,8 +5976,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   /** Selects a static ERD frame with its table, then opens the field the double-click meant on the now-live card (R3). */
   function editStaticEr(hit: NonNullable<ReturnType<typeof staticErHit>>) {
     const sel = { title: hit.frame.title, index: hit.frame.index };
-    // In the overview the frame is one preview with no card drawn: the frame and the table are only selected.
-    if (overview) return switchFrame(sel, [hit.table]);
+    // A pictured frame is one image with no card drawn: the frame and the table are only selected (B2 C3).
+    if (boardRef.current?.pictured.has(frameNodeId(hit.frame))) return switchFrame(sel, [hit.table]);
     return switchFrame(
       sel,
       [hit.table],
@@ -5681,9 +6122,10 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       const b = l ? centreOf(l.to) : null;
       flowAt = a && b ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : null;
     }
-    const screen = flowAt && f ? f.flowToScreenPosition(flowAt) : middle;
+    // The shape's centre is frame-local: on the board it is that plus the live frame's place.
+    const screen = flowAt && f ? f.flowToScreenPosition(fromLive(flowAt)) : middle;
     menuFromKeys.current = true;
-    openMenu({ ...target, screen, flow: f ? f.screenToFlowPosition(screen) : { x: 0, y: 0 }, fit: () => void f?.fitView({ padding: 0.1, ...glideOptions() }) });
+    openMenu({ ...target, screen, flow: f ? f.screenToFlowPosition(screen) : { x: 0, y: 0 }, fit: () => void canvasFit.current() });
   }
 
   /**
@@ -5779,7 +6221,23 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
    */
   function switchFrame(sel: FrameSelection | null, pick: string[] = [], then?: (box: FrameBox) => void, live = false, typed = false): boolean {
     const cur = doc.selection();
-    const same = cur === sel || (!!cur && !!sel && cur.index === sel.index && cur.title === sel.title);
+    const waiting = pendingRef.current;
+    // The frame already picked and waiting for its paint: the last pick on it wins, and its action (one slot).
+    if (waiting && sel && sameFrame(waiting.sel, sel)) {
+      waiting.pick = pick;
+      afterSwitch.current = then ? { sel, run: then, live } : null;
+      return true;
+    }
+    // Another frame, none, or back to the live one: the waiting switch goes. Keys held for it go with it unless another
+    // frame takes its place (they were meant for the frame picked, never the one left).
+    // A header typed in the pane switches at once (the canvas gains nothing from two paints while you type there).
+    if (waiting) dropPendingSwitch(sel === null || typed || sameFrame(cur, sel));
+    const same = sameFrame(cur, sel);
+    /** A refused switch: no key held for the frame it named may ever replay on another frame. */
+    const refuse = () => {
+      heldKeys.current = [];
+      return false;
+    };
     // The Assistant's run is one frame's from Ask to its last step (pick, broken and review included): the canvas, a
     // tab or a right-click cannot leave it. Typing always wins (the text is free in pick and broken): a header typed in
     // the pane switches, and the waiting changes go stale.
@@ -5787,7 +6245,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (!same && typed && held) ai.frameLeft();
     else if (!same && (aiLock.current || held)) {
       setNote({ text: EDIT_MESSAGES.lockedSwitch, key: Date.now() });
-      return false;
+      return refuse();
     }
     // Picking a frame or its shapes lets the sketches go (a sketch picked outside every frame lets the frame go).
     if (sel !== null && sketchSelRef.current.length > 0) setSketchSel([]);
@@ -5805,14 +6263,24 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const refused = blurField();
     if (refused !== null) {
       setNotice(refused);
-      return false;
+      return refuse();
     }
     flushMove();
     endNudge();
     afterSwitch.current = then && sel ? { sel, run: then, live } : null;
+    // Decision 12: a frame picked is drawn selected now; it goes live after that paint. None selected, or a header typed
+    // in the pane, goes at once.
+    const entry = sel && !typed ? { sel, pick } : null;
+    if (entry) {
+      pendingRef.current = entry;
+      perfMark("select_pick");
+      setPendingFrameState(sel);
+    }
     const go = () => {
-      pendingPick.current = pick;
-      doc.select(sel);
+      if (!entry) {
+        pendingPick.current = pick;
+        doc.select(sel);
+      } else if (pendingRef.current === entry) schedulePendingSwitch();
     };
     const pending = commitRef.current;
     if (pending)
@@ -5822,6 +6290,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
         const late = refusedSince(was);
         if (late !== null) {
           if (afterSwitch.current?.sel === sel) afterSwitch.current = null;
+          if (entry && pendingRef.current === entry) dropPendingSwitch(true);
+          heldKeys.current = [];
           setNotice(late);
           return;
         }
@@ -5829,6 +6299,94 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       });
     else go();
     return true;
+  }
+
+  /**
+   * A press on the live frame's own shapes or lines while another frame waits for its paint (Decision 12): the frame
+   * left takes no gesture, so it is swallowed whole (press, click, double-click). True when it was.
+   */
+  function pressOnLeftFrame(e: { target: EventTarget; preventDefault(): void; stopPropagation(): void }): boolean {
+    if (!pendingRef.current || !(e.target instanceof Element)) return false;
+    const el = e.target.closest(".react-flow__node, .react-flow__edge");
+    // Only the live frame's own shapes, group areas and lines (its graph); frames, static shapes and sketches pass.
+    const id = el?.getAttribute("data-id") ?? null;
+    const g = graphRef.current;
+    if (id === null || !(g.nodes.some((n) => n.id === id) || g.edges.some((x) => x.id === id))) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    return true;
+  }
+
+  /** Drops the switch waiting for its paint (Decision 12): the frame drawn selected is `frameSel` again. */
+  function dropPendingSwitch(dropKeys: boolean) {
+    // Keys kept here are only for the switch that takes this one's place at once; a refusal there clears them.
+    pendingRef.current = null;
+    pendingScheduled.current = false;
+    pendingSeq.current++;
+    setPendingFrameState(null);
+    if (dropKeys) heldKeys.current = [];
+  }
+
+  /**
+   * After the paint that shows the picked frame selected (an animation frame, then a task), it goes live: `doc.select`
+   * with the picked shapes, the last frame picked meanwhile winning. One schedule at a time, so quick picks land together.
+   */
+  function schedulePendingSwitch() {
+    if (pendingScheduled.current) return;
+    pendingScheduled.current = true;
+    const n = ++pendingSeq.current;
+    const land = () => {
+      if (pendingSeq.current !== n || !mounted.current) return;
+      pendingScheduled.current = false;
+      const p = pendingRef.current;
+      if (!p) return;
+      pendingPick.current = p.pick;
+      if (!sameFrame(doc.selection(), p.sel)) {
+        doc.select(p.sel);
+        return;
+      }
+      // Already the selected frame (a header typed meanwhile): no switch to wait for.
+      pendingPick.current = null;
+      pendingRef.current = null;
+      setSelected(p.pick);
+      replayDue.current = heldKeys.current.length > 0;
+      setPendingFrameState(null);
+    };
+    const later = () => void setTimeout(land, 0);
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(later);
+    else later();
+  }
+
+  /**
+   * Waits until a replayed key's work has landed: a delete's fade and write, a field's commit, a paste, a duplicate, a
+   * group or any other canvas write (`doc.busy`). Bounded at KEY_SETTLE_MS.
+   */
+  async function keySettled() {
+    await new Promise<void>((r) => setTimeout(r, 0));
+    const busy = () => deleting.current || commitRef.current !== null || pastePending.current || keyWork.current > 0 || doc.busy();
+    for (let i = 0; i < KEY_SETTLE_MS / 16 && mounted.current && busy(); i++) await new Promise<void>((r) => setTimeout(r, 16));
+  }
+
+  /**
+   * The keys held while a switch waited, pressed again in order on the frame now live (Decision 12), each once the one
+   * before has landed. A key goes to the field it opened (F2 then a letter), else where it was pressed, else the canvas.
+   * A switch elsewhere meanwhile drops the rest.
+   */
+  async function replayHeldKeys(keys: HeldKey[]) {
+    const frame = doc.frameIdNow();
+    for (const k of keys) {
+      await keySettled();
+      const root = canvasEl.current;
+      if (!mounted.current || !root || doc.frameIdNow() !== frame || pendingRef.current) return;
+      const active = document.activeElement;
+      const field = (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) && root.contains(active) ? active : null;
+      if (field && k.key.length === 1 && !k.ctrlKey && !k.metaKey && !k.altKey) {
+        typeInto(field, k.key);
+        continue;
+      }
+      const at = field ?? (k.target instanceof Element && k.target.isConnected && root.contains(k.target) ? k.target : root);
+      at.dispatchEvent(new KeyboardEvent("keydown", { key: k.key, code: k.code, ctrlKey: k.ctrlKey, shiftKey: k.shiftKey, altKey: k.altKey, metaKey: k.metaKey, bubbles: true, cancelable: true }));
+    }
   }
 
   /** The open fields as they are now, to tell a refusal that comes back later (`refusedSince`). */
@@ -5865,7 +6423,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const f = instance.current;
     const r = canvasEl.current?.getBoundingClientRect();
     if (!f || !r) return;
-    const a = f.flowToScreenPosition({ x: box.x, y: box.y - FRAME_TAB_H });
+    // The tab strip keeps its screen height (Decision 5): in board units it is taller below 100 percent.
+    const a = f.flowToScreenPosition({ x: box.x, y: box.y - tabHeight(f.getViewport().zoom) });
     const b = f.flowToScreenPosition({ x: box.x + box.w, y: box.y + box.h });
     const inside = r.width > 0 && r.height > 0 && a.x >= r.left && a.y >= r.top && b.x <= r.right && b.y <= r.bottom;
     if (!inside) glideToFrame(box);
@@ -5873,9 +6432,23 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
 
   /** Zooms to a frame with its title tab, as Shift+2 does with no shape selected (Decision 28). */
   function zoomToFrame(box: FrameBox) {
-    const f = instance.current;
-    if (!f) return;
-    void f.fitBounds({ x: box.x, y: box.y - FRAME_TAB_H, width: box.w, height: box.h + FRAME_TAB_H }, { padding: 0.1, ...glideOptions() });
+    // The tab at the zoom the fit lands on (Plan F Decision 5): taller in board units below 100 percent.
+    const tab = tabHeight(fitZoomOf(box));
+    // React Flow's fit (padding 0.1); bounds too big for the least zoom open at their start (`fitFromStart`).
+    glideView({ bounds: { x: box.x, y: box.y - tab, width: box.w, height: box.h + tab }, padding: 0.1 });
+  }
+
+  /**
+   * The zoom a fit of a frame and its tab lands on (React Flow's `fitBounds` with padding 0.1, within the canvas's zoom
+   * range), the tab sized at that zoom; 1 while the canvas has no size.
+   */
+  function fitZoomOf(box: { w: number; h: number }): number {
+    const r = canvasEl.current?.getBoundingClientRect();
+    if (!r || r.width <= 0 || r.height <= 0) return 1;
+    let z = 1;
+    // The tab grows as the zoom falls: a few steps settle it.
+    for (let i = 0; i < 3; i++) z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, r.width / (box.w * 1.1), r.height / ((box.h + tabHeight(z)) * 1.1)));
+    return z;
   }
 
   /**
@@ -5887,8 +6460,10 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (!f) return;
     const { zoom } = f.getViewport();
     const r = canvasEl.current?.getBoundingClientRect();
-    const fits = r && r.width > 0 && r.height > 0 ? Math.min(r.width / (box.w * 1.2), r.height / ((box.h + FRAME_TAB_H) * 1.2)) : zoom;
-    void f.setCenter(box.x + box.w / 2, box.y + box.h / 2, { zoom: Math.min(zoom, fits), ...glideOptions() });
+    const fitsAt = (tab: number) => (r && r.width > 0 && r.height > 0 ? Math.min(r.width / (box.w * 1.2), r.height / ((box.h + tab) * 1.2)) : zoom);
+    // The tab at the zoom it lands on (Plan F Decision 5).
+    const fits = fitsAt(tabHeight(Math.min(zoom, fitsAt(FRAME_TAB_H))));
+    glideView({ center: { x: box.x + box.w / 2, y: box.y + box.h / 2 }, zoom: Math.min(zoom, fits) });
   }
 
   // ----- the toolbar: arming, the add menu, Space and Ask (Decisions 18, 24 and 26)
@@ -5953,26 +6528,21 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   const livePositions = useMemo(() => (sketchLive ? { ...(glide ?? {}), ...sketchLive } : glide), [glide, sketchLive]);
   /** Only sketches are selected: the bottom bar is theirs, with Colour alone. */
   const onlySketches = sketchSel.length > 0 && selected.length === 0 && lines.length === 0;
-  /** Where the sketch field sits, in flow coordinates, and what it opens with. */
+  /** Where the sketch field sits, in board units (the canvas's), and what it opens with. */
   const sketchFieldAt = useMemo(() => {
     const f = sketchField;
     if (!f) return null;
-    const o = board?.origin ?? ORIGIN0;
-    if (f.mode === "new") return { at: { x: f.at.x - o.x, y: f.at.y - o.y - (f.kind === "note" ? NOTE_BOX.h / 2 : 14) }, width: f.kind === "note" ? NOTE_BOX.w : 200, value: "" };
+    if (f.mode === "new") return { at: { x: f.at.x, y: f.at.y - (f.kind === "note" ? NOTE_BOX.h / 2 : 14) }, width: f.kind === "note" ? NOTE_BOX.w : 200, value: "" };
     const s = doc.board.sketches.find((x) => x.id === f.id);
     if (!s) return null;
     const y = f.kind === "section" ? s.y - 28 : s.y;
-    return { at: { x: s.x - o.x, y: y - o.y }, width: Math.max(f.kind === "section" ? 160 : 120, s.w), value: s.text ?? (f.kind === "section" ? "Section" : "") };
-  }, [sketchField, doc.board.sketches, board]);
+    return { at: { x: s.x, y }, width: Math.max(f.kind === "section" ? 160 : 120, s.w), value: s.text ?? (f.kind === "section" ? "Section" : "") };
+  }, [sketchField, doc.board.sketches]);
 
-  /** Where the canvas's flow coordinates start on the board (the live frame's origin). */
-  const originNow = (): Point => boardRef.current?.origin ?? { x: 0, y: 0 };
   /** A screen point on the board. */
   function boardPointAt(p: Point): Point {
     const f = instance.current;
-    const o = originNow();
-    const at = f ? f.screenToFlowPosition(p) : p;
-    return { x: at.x + o.x, y: at.y + o.y };
+    return f ? toBoard(f.screenToFlowPosition(p)) : p;
   }
 
   /** Sketch changes as one undo entry; a refusal's note goes to the strip. */
@@ -6223,9 +6793,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (list.length === 0) return null;
     const shapes = selectedRef.current.length > 0 ? selectionClip() : null;
     // The shapes' top lefts on the board, so a paste keeps them where they were beside the sketches.
-    const o = originNow();
     const at: Record<string, { x: number; y: number }> = {};
-    if (shapes) for (const k of Object.keys(shapes.at)) at[k] = { x: shapes.at[k].x + o.x, y: shapes.at[k].y + o.y };
+    if (shapes) for (const k of Object.keys(shapes.at)) at[k] = fromLive(shapes.at[k]);
     const text = sketchClipText(list, shapes?.text, shapes ? at : undefined);
     lastClip = { text, diagram: name, at: shapes?.at ?? emptyPositions(), pastes: cut ? -1 : 0 };
     return text;
@@ -6277,11 +6846,10 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (clip.text) {
       // The shapes at their copied places moved by the same step, in the live frame's coordinates; the sketches ride
       // the paste's run.
-      const o = originNow();
       const at = emptyPositions();
-      for (const k of Object.keys(shapeAt)) at[k] = { x: shapeAt[k].x + dx - o.x, y: shapeAt[k].y + dy - o.y };
+      for (const k of Object.keys(shapeAt)) at[k] = toLive({ x: shapeAt[k].x + dx, y: shapeAt[k].y + dy });
       // A shape with no place (a clip from before Task 12, or a shape not drawn when copied) goes at the group's anchor.
-      const rest = anchor ? { x: anchor.x - o.x, y: anchor.y - o.y } : undefined;
+      const rest = anchor ? toLive(anchor) : undefined;
       void pasteText(clip.text, { at, sketches: changes, frame, ...(rest ? { rest } : {}) }).then((r) => {
         const made = r?.sketchIds ?? ids;
         if (r && made.length > 0) setSketchSel(made);
@@ -6304,11 +6872,97 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     return !!f && frameAt(f.screenToFlowPosition({ x: e.clientX, y: e.clientY })) !== null;
   }
 
-  /** The Section whose inside is at a flow point, the one drawn last on top; null with none. */
+  /**
+   * The sketch at a flow point while the layer is pictured (Task 9 fix 2), of those its pictures stand for: the last
+   * drawn on top, a pen, text, note, line or arrow over every frame first, then a box sketch outside every frame (a
+   * frame wins over it, ruling C14), by its box and 4 screen px around it. A Section is `sectionAt`'s.
+   */
+  function pictureSketchAt(p: Point): string | null {
+    const form = sketchFormRef.current;
+    if (!form.pictured) return null;
+    const { x, y } = toBoard(p);
+    const slack = 4 / (instance.current?.getViewport().zoom || 1);
+    const all = sketchList.current;
+    const on = (s: Sketch) => x >= s.x - slack && x <= s.x + s.w + slack && y >= s.y - slack && y <= s.y + s.h + slack;
+    for (let i = all.length - 1; i >= form.mounted; i--) if (!drawsUnder(all[i].kind) && on(all[i])) return all[i].id;
+    if (frameAt(p)) return null;
+    for (let i = all.length - 1; i >= form.mounted; i--) if (drawsUnder(all[i].kind) && all[i].kind !== "section" && on(all[i])) return all[i].id;
+    return null;
+  }
+
+  /** The press that picked a pictured sketch: its click picks nothing more. */
+  const pressedPictured = useRef(false);
+  /**
+   * A press on a pictured sketch (Task 9 fix 3): it is picked at once (the layer turns real for it), with the sketches
+   * already picked when it is one of them, and a drag from there moves them (draw.io, Figma: a press on a shape and a
+   * drag move it). The move shows on the real sketches as a drag's does, and is written once when the press ends (one
+   * undo entry). True when the press was on one.
+   */
+  function pressPicturedSketch(e: { clientX: number; clientY: number }): boolean {
+    const f = instance.current;
+    if (!f) return false;
+    const start = f.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    const id = pictureSketchAt(start);
+    if (id === null) return false;
+    pressedPictured.current = true;
+    if (!frameAt(start)) switchFrame(null);
+    const picked = sketchSelRef.current.includes(id) ? sketchSelRef.current : [id];
+    if (picked !== sketchSelRef.current) setSketchSel(picked);
+    const want = new Set(picked);
+    const base = new Map(sketchList.current.filter((s) => want.has(s.id)).map((s) => [s.id, s] as const));
+    let moved = false;
+    let dx = 0;
+    let dy = 0;
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) <= 3) return;
+      moved = true;
+      const q = f.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
+      dx = Math.round(q.x - start.x);
+      dy = Math.round(q.y - start.y);
+      const live: LivePositions = {};
+      for (const [k, s] of base) live[sketchNodeId(k)] = { x: s.x + dx, y: s.y + dy };
+      setSketchLive(live);
+    };
+    const end = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      if (ev.type === "pointerup") move(ev);
+      if (!moved) return;
+      setSketchLive(null);
+      if (ev.type === "pointerup") sketchOp(moveSketches(sketchList.current, base.keys(), dx, dy));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    return true;
+  }
+
+  /**
+   * A box drawn on the canvas while the sketch layer is pictured (Task 9 fix 2): the sketches its pictures stand for
+   * that the box meets are picked too, as React Flow's partial box picks sketch nodes.
+   */
+  function boxPicksPictured(e: { clientX: number; clientY: number }) {
+    const from = boxFrom.current;
+    boxFrom.current = null;
+    const f = instance.current;
+    const form = sketchFormRef.current;
+    if (!from || !f || !form.pictured || Math.hypot(from.x - e.clientX, from.y - e.clientY) <= 3) return;
+    const a = toBoard(f.screenToFlowPosition(from));
+    const b = toBoard(f.screenToFlowPosition({ x: e.clientX, y: e.clientY }));
+    const box = { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) };
+    const all = sketchList.current;
+    const hits: string[] = [];
+    for (let i = form.mounted; i < all.length; i++) {
+      const r = sketchExtent(all[i]);
+      if (r.x <= box.x + box.w && box.x <= r.x + r.w && r.y <= box.y + box.h && box.y <= r.y + r.h) hits.push(all[i].id);
+    }
+    if (hits.length > 0) setSketchSel((sel) => [...sel, ...hits.filter((id) => !sel.includes(id))]);
+  }
+
+  /** The Section whose inside is at a flow (board) point, the one drawn last on top; null with none. */
   function sectionAt(p: Point): string | null {
-    const o = originNow();
-    const x = p.x + o.x;
-    const y = p.y + o.y;
+    const { x, y } = toBoard(p);
     const all = sketchList.current;
     for (let i = all.length - 1; i >= 0; i--) {
       const s = all[i];
@@ -6435,7 +7089,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const tool = kind ? KIND_TOOLS[kind].find((x) => x.id === id) : undefined;
     if (!tool && !SKETCH_TOOLS.has(id)) return false;
     const from = { x: e.clientX, y: e.clientY };
-    const at = f.screenToFlowPosition(from);
+    const at = toBoard(f.screenToFlowPosition(from));
     const other = staticFrameAt(at);
     if (tool) {
       // A selected frame that is not live (a title an earlier frame has) takes no drawing: it is fixed in the code.
@@ -6533,8 +7187,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (!f || !kind || aiLock.current) return;
     const shape = KIND_TOOLS[kind].find((x) => x.id === id)?.shape ?? genericInFrame(kind, id);
     if (!shape || shape.act.kind !== "node") return;
-    const a = f.screenToFlowPosition(from);
-    const b = f.screenToFlowPosition(to);
+    // In the live frame's units: its graph and the add are frame-local.
+    const a = toLive(f.screenToFlowPosition(from));
+    const b = toLive(f.screenToFlowPosition(to));
     let box: Box | undefined;
     // An ER table is sized by its columns (drawSQL, dbdiagram): its drag is a click at the press (R13).
     const table = kind === "er" && isErTable({ kind: shape.act.node });
@@ -6553,7 +7208,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     toolUsedIf(runShape(shape, at, { ...(box ? { box } : {}), group: groupUnder(at) }));
   }
 
-  /** The innermost group of the live frame under a flow point, or null. */
+  /** The innermost group of the live frame under a point in its own units, or null. */
   function groupUnder(p: Point): string | null {
     const d = drawnRef.current;
     if (!d || d.groups.length === 0) return null;
@@ -6571,7 +7226,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   function lineEndAt(from: string, to: Point): { at: Point; lock: { id: string; side: Side; box: Box } | null } | null {
     const f = instance.current;
     if (!f) return null;
-    const at = f.screenToFlowPosition(to);
+    const at = toLive(f.screenToFlowPosition(to));
     const nodes = graphRef.current.nodes.filter((n) => !isArea(n.id) && n.id !== from);
     const hit = magnetTarget(
       at,
@@ -6586,7 +7241,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     // The Relationship tool's line leaves at the pressed row and aims the row or header under the pointer (B3 Task 7).
     if (kind === "er" && armedRef.current === ER_RELATIONSHIP) {
       const f = instance.current;
-      return f ? rel.toolMove(f.screenToFlowPosition(to)) : null;
+      return f ? rel.toolMove(toLive(f.screenToFlowPosition(to))) : null;
     }
     const src = graphRef.current.nodes.find((n) => n.id === from);
     const end = lineEndAt(from, to);
@@ -6617,7 +7272,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       const press = erPress.current;
       const f = instance.current;
       setShapePick(null);
-      if (press && f) rel.relateAt(press.table, press.column, f.screenToFlowPosition(to));
+      if (press && f) rel.relateAt(press.table, press.column, toLive(f.screenToFlowPosition(to)));
       toolUsed();
       return;
     }
@@ -6687,6 +7342,18 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const said = why ?? EDIT_MESSAGES.changed;
     setNote({ text: said, key: Date.now() });
     return said;
+  }
+
+  /**
+   * The Numbering toggle's state: read from the document the frame will have, so a waiting proposal that removes the last
+   * messages still shows numbering on (the drawn copy ends it there). Off while the text has an error or the proposal waits.
+   */
+  function numberingFromBar(kind: DiagramKind, title: string): { on: boolean; why: string | null } | undefined {
+    if (kind !== "sequence") return undefined;
+    const proposed = aiReview?.get(title);
+    if (proposed) return { on: proposed.numbering, why: EDIT_MESSAGES.locked };
+    const d = parsed?.result.doc ?? null;
+    return { on: d ? numberingOn(d) : false, why: d ? (ai.locked ? EDIT_MESSAGES.locked : null) : "Fix the problems in this diagram first." };
   }
 
   /** A setting from the bar on the selected frame: one undo entry each (Task 4). */
@@ -6796,13 +7463,20 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
 
   frameActs.current = {
     select: (box) => void switchFrame({ title: box.title, index: box.index }),
-    pane: (tab) => {
+    pane: (tab, box) => {
+      // AI Chat on a frame that is not selected adds that frame's chip by hand. It cannot select it: the Assistant's
+      // review holds the frame it asked from, and a frame has AI Chat unselected only while it has changes waiting.
+      if (tab === "assistant" && box && !(frameSel && frameSel.index === box.index && frameSel.title === box.title)) {
+        setFrameChip({ title: box.title, index: box.index });
+        setSide({ hidden: false, tab });
+        return;
+      }
       if (!side.hidden && side.tab === tab) setSide({ hidden: true });
       else setSide({ hidden: false, tab });
     },
     // A frame's problem count opens the Code Editor on it, once it is selected (Decision 17).
     problems: (box) => void switchFrame({ title: box.title, index: box.index }, [], () => setSide({ hidden: false, tab: "editor" })),
-    // The box as drawn now: a switch since the tab was drawn has moved the origin.
+    // The box as drawn now: an edit since the tab was drawn may have moved or grown it.
     zoom: (box) => {
       const now = boardRef.current?.boxes.find((b) => b.index === box.index && b.title === box.title);
       if (now) zoomToFrame(now);
@@ -6810,6 +7484,43 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   };
 
   latestActs.current = { drawShape, glideToFrame, fitFrame: zoomToFrame, showFrameBox };
+  const { iconNode, placeIcon, finishShelf, addFromShelf, dropShelf } = useShelfAdd({
+    doc,
+    kind,
+    aiLock,
+    shelfAdding,
+    addedFrame,
+    historyDepth,
+    setNote,
+    closeShelf,
+    undoableToast,
+    viewMiddle,
+    openFromDatabase,
+    openFromMermaid,
+    lateActs,
+    boardRef,
+    liveBoxRef,
+    parsedRef,
+    drawnRef,
+    selectedRef,
+    sketchList,
+    setLines,
+    setSelected,
+    setSketchSel,
+    setSketchField,
+    addOneSketch,
+    freeName,
+    namesOf,
+    freeSpotInView,
+    groupUnder,
+    newSize,
+    runShape,
+    shapeDisabled,
+    switchFrame,
+    toBoard,
+    toLive,
+    trackCommit,
+  });
   /** This render's actions for a run made in an earlier one (a Shelf add or a menu waiting for its frame to go live). */
   lateActs.current = {
     openMenu,
@@ -6817,17 +7528,109 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     placeIcon,
     finishShelf,
     fitBoard(boxes) {
-      // The union of board boxes on the canvas now, with the frames' tabs (as `zoomToFrame`).
-      const f = instance.current;
-      if (!f || boxes.length === 0) return;
-      const o = originNow();
+      // The union of board boxes, with the frames' tabs at the zoom the fit lands on (as `zoomToFrame`, Plan F Decision
+      // 5); the canvas is in board units.
+      if (boxes.length === 0) return;
       const x0 = Math.min(...boxes.map((b) => b.x));
       const y0 = Math.min(...boxes.map((b) => b.y));
       const x1 = Math.max(...boxes.map((b) => b.x + b.w));
       const y1 = Math.max(...boxes.map((b) => b.y + b.h));
-      void f.fitBounds({ x: x0 - o.x, y: y0 - o.y - FRAME_TAB_H, width: x1 - x0, height: y1 - y0 + FRAME_TAB_H }, { padding: 0.1, ...glideOptions() });
+      const tab = tabHeight(fitZoomOf({ w: x1 - x0, h: y1 - y0 }));
+      glideView({ bounds: { x: x0, y: y0 - tab, width: x1 - x0, height: y1 - y0 + tab }, padding: 0.1 });
     },
   };
+
+  // The assistant's glide: one fit of the union of the frames' boxes and the rectangles of frames not drawn yet. This is
+  // the one place the board Ask moves the view, so it is the one call to route through the canvas's glide.
+  /** Rings `parts` now, for `AIRING_MS` (a part the user asked to be shown, or the ones an answer named). */
+  function ringNow(parts: Airing) {
+    clearTimeout(ringTimer.current);
+    setRinged(parts);
+    ringTimer.current = setTimeout(() => setRinged(NO_RING), AIRING_MS);
+  }
+  // When an answer ends, the parts it named that are on screen ring once (Miro and Figma AI mark what they name); a
+  // frame whose title an earlier frame has (no layout key) is drawn faded and never rings.
+  ringRef.current = (parts) => {
+    const f = instance.current;
+    const el = canvasEl.current;
+    const b = boardRef.current;
+    if (!f || !el || !b || parts.size === 0) return;
+    const { x, y, zoom } = f.getViewport();
+    const view = { x: -x / zoom, y: -y / zoom, w: el.offsetWidth / zoom, h: el.offsetHeight / zoom };
+    const seen = new Map<string, ReadonlySet<string>>();
+    for (const box of b.boxes) {
+      const names = box.key === null ? undefined : parts.get(box.key);
+      if (box.key === null || !names) continue;
+      if (box.x < view.x + view.w && box.x + box.w > view.x && box.y - FRAME_TAB_H < view.y + view.h && box.y + box.h > view.y) seen.set(box.key, names);
+    }
+    if (seen.size > 0) ringNow(seen);
+  };
+
+  /**
+   * A part button in an answer was pressed (Decision 17): the frame is selected, the view glides to it and the part
+   * rings, by the frame's layout key (a title may repeat). A frame whose title an earlier frame has is not selectable,
+   * so the view only goes to it.
+   */
+  function showPart(frame: string, name: string, column: string | null) {
+    const p = parsed;
+    const index = p ? p.keys.indexOf(frame) : -1;
+    if (!p || index < 0) return;
+    if (isDup(frame)) {
+      const box = boardRef.current?.boxes.find((x) => x.index === index);
+      if (box) latestActs.current.glideToFrame(box);
+      return;
+    }
+    const parts: Airing = new Map([[frame, new Set([column === null ? name : columnRing(name, column)])]]);
+    switchFrame({ title: p.result.frames[index].title, index }, [], () => {
+      canvasApi.glideTo([frame]);
+      ringNow(parts);
+    });
+  }
+  const showPartRef = useRef(showPart);
+  showPartRef.current = showPart;
+  const onShowPart = useCallback((l: PartLink) => {
+    const key = parsedRef.current?.keys[l.at];
+    if (key !== undefined) showPartRef.current(key, l.name, l.column);
+  }, []);
+
+  // The assistant's glide fits the frames as the canvas draws them once what moved them is laid out (live check L2): a
+  // proposal's review shapes drawn in its frames, a landing's text parsed with its shapes in place. Fitting at the call
+  // fitted the frames at their old size, so a part placed at a frame's growing edge landed off screen. One glide per
+  // call: a call made while another still waits (Auto-apply lands in the tick its proposal arrives) runs that one first,
+  // on the frames as they are, and then waits itself.
+  const pendingGlide = useRef<{ keys: readonly string[]; extra: readonly Rect[] } | null>(null);
+  const [glideAsked, setGlideAsked] = useState(0);
+  const fitGlide = (g: { keys: readonly string[]; extra: readonly Rect[] }) => {
+    // The canvas is in board units (Plan F Decision 11), and `fitBoard` glides through the canvas's `glideView`.
+    const rects: Rect[] = (boardRef.current?.boxes ?? []).filter((x) => x.key !== null && g.keys.includes(x.key)).map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h }));
+    lateActs.current.fitBoard([...rects, ...g.extra]);
+  };
+  glideKeysRef.current = (keys, extra = []) => {
+    const was = pendingGlide.current;
+    pendingGlide.current = { keys, extra };
+    if (was) fitGlide(was);
+    setGlideAsked((n) => n + 1);
+  };
+  useEffect(() => {
+    const g = pendingGlide.current;
+    // Wait for the parse of the text the editor holds: until then the boxes are the old text's.
+    const text = doc.view()?.state.doc.toString();
+    if (!g || !boardRef.current || !parsed || (text !== undefined && parsed.text !== text)) return;
+    // And for every shape of the frames to have its place: a shape with none is not drawn, so its frame is not grown
+    // yet (the live frame's places come from the worker, another frame's from its layout, both after the parse).
+    for (const key of g.keys) {
+      const i = parsed.keys.indexOf(key);
+      const f = i < 0 ? undefined : parsed.result.frames[i];
+      const places = doc.board.frames.get(key)?.nodes;
+      const d = i === liveSel?.index ? shown : (f?.doc ?? f?.lastValid ?? null);
+      if (!f || !places || isDup(key) || !d || FIXED_KINDS.has(d.kind)) continue;
+      if (d.nodes.some((n) => !hasOwn(places, n.name))) return;
+    }
+    pendingGlide.current = null;
+    fitGlide(g);
+    // fitGlide reads the refs of this render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [glideAsked, board, parsed, doc, shown, liveSel]);
 
   /** The pane following the canvas and the canvas following the pane (Decisions 14 and 16). */
   const paneFollow: PaneFollow = {
@@ -6864,7 +7667,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
           return;
         }
       }
-      d = { id, key: box.key, index: box.index, start: { x: box.x + b.origin.x, y: box.y + b.origin.y }, at: doc.board.frames.get(box.key)?.at ?? { x: 0, y: 0 }, live: node.zIndex === Z_LIVE_BOX, ...(was ? { was } : {}) };
+      d = { id, key: box.key, index: box.index, start: { x: box.x, y: box.y }, at: doc.board.frames.get(box.key)?.at ?? { x: 0, y: 0 }, live: node.zIndex === Z_LIVE_BOX, ...(was ? { was } : {}) };
       frameDrag.current = d;
       if (d.live) {
         flushMove();
@@ -6901,9 +7704,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
 
   /** A frame let go by its tab at `at`: it moves there, as one edit; a live frame is live again. */
   function moveDragged(d: NonNullable<typeof frameDrag.current>, at: Point, b: NonNullable<typeof boardRef.current>) {
-    // `at` is in the canvas's positions as they are now: the origin they were drawn with is the newest board's.
-    const dx = Math.round(at.x + b.origin.x - d.start.x);
-    const dy = Math.round(at.y + b.origin.y - d.start.y);
+    // The box node is in board units, as `start` is: a live frame drawn static meanwhile stays where it was drawn.
+    const dx = Math.round(toBoard(at).x - d.start.x);
+    const dy = Math.round(toBoard(at).y - d.start.y);
     if (dx !== 0 || dy !== 0) {
       if (b.boxes.length === 1) {
         // Moving the only frame shifts its shapes and leaves `at` alone, so the file stays version 1 (Decision 6). Its
@@ -6919,6 +7722,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
 
   /** Where the last press on the canvas was, so a click that ends a drag or a box selection is not a pick. */
   const pressAt = useRef<Point | null>(null);
+  /** Where a press on the bare canvas with Select armed began: a box drawn from there may pick pictured sketches. */
+  const boxFrom = useRef<Point | null>(null);
 
   /**
    * A click on the empty canvas (Decision 3, Review Focus 5): it is for the frame on top there, the live one, else the
@@ -6936,10 +7741,21 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (!t?.classList.contains("react-flow__pane") && !t?.closest(".board-static") && !onSketch) return;
     const down = pressAt.current;
     pressAt.current = null;
+    if (pressedPictured.current) {
+      pressedPictured.current = false;
+      return;
+    }
     if (down && Math.hypot(down.x - e.clientX, down.y - e.clientY) > 3) return;
     const f = instance.current;
     if (!f) return;
     const p = f.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    // The sketch layer pictured (Task 9 fix 2): a click on a sketch there picks it, as a click on its node does.
+    const pictured = onSketch ? null : pictureSketchAt(p);
+    if (pictured !== null) {
+      if (!frameAt(p)) switchFrame(null);
+      setSketchSel([pictured]);
+      return;
+    }
     if (onSketch) {
       // A sketch outside every frame is picked alone: the frames let go, as a click on the canvas there does.
       if (!frameAt(p)) switchFrame(null);
@@ -6974,13 +7790,45 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     return d?.live && hit.key === d.key ? null : hit;
   }
 
+  /**
+   * The frame whose title tab is at a flow position, off every frame's box; the later in text order on top. The tab keeps
+   * its screen size (Plan F Decision 5), so below 100 percent its title pill is larger in board units.
+   */
+  function tabAt(p: Point): FrameBox | null {
+    const b = boardRef.current;
+    const f = instance.current;
+    if (!b || !f) return null;
+    const h = tabHeight(f.getViewport().zoom);
+    const k = h / FRAME_TAB_H;
+    let hit: FrameBox | null = null;
+    const byX = byLeft(b.boxes);
+    for (const box of b.boxes) {
+      // A frame with no kind yet says "Diagram" on its tab; a flowchart's word is as long. Never past its room: the
+      // strip ends before the next tab in its row (coordinator ruling on F1).
+      const w = Math.min(tabWidth(box.title, box.kind ?? "flow") * k, tabRoom(box.w, tabNeighbours(box, byX), f.getViewport().zoom) * k * Math.min(f.getViewport().zoom, 1));
+      if (p.x >= box.x && p.x <= box.x + w && p.y >= box.y - h && p.y < box.y) hit = box;
+    }
+    return hit;
+  }
+
   /** What a click at a flow position picks (Decision 3), as `onBoardClick` says. */
   function pickAt(p: Point) {
     if (!boardRef.current) return;
     const live = liveBoxRef.current;
     const hit = frameAt(p);
+    // A click on a frame's title tab picks the frame, as its title button does.
+    const tab = hit ? null : tabAt(p);
+    if (tab) {
+      // Back on the live frame's tab while another waits for its paint: the waiting switch goes.
+      if (live?.index !== tab.index || pendingRef.current) switchFrame({ title: tab.title, index: tab.index }, []);
+      return;
+    }
     if (!hit) {
       switchFrame(null);
+      return;
+    }
+    if (live && hit.index === live.index && pendingRef.current) {
+      switchFrame({ title: live.title, index: live.index }, []);
       return;
     }
     if (live && hit.index === live.index) {
@@ -6992,7 +7840,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     switchFrame({ title: hit.title, index: hit.index }, shape === null ? [] : [shape]);
   }
 
-  /** The shape on top of static frame `hit` at a flow position, as built (drawn or not: below BOX_BELOW the frame is one preview); null on empty frame space. */
+  /** The shape on top of static frame `hit` at a flow position, as built (drawn or not: a pictured frame is one image); null on empty frame space. */
   function staticShapeAt(hit: FrameBox, p: Point): string | null {
     const b = boardRef.current;
     if (!b) return null;
@@ -7020,22 +7868,13 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
    * menu opens once the frame is live, at the same board point; on empty frame space it only selects the frame.
    */
   function menuInStaticFrame(hit: FrameBox, screen: Point, flow: Point) {
-    // In the overview a static frame is one preview, its shapes not drawn one by one: the frame alone is selected.
-    const shape = overview ? null : staticShapeAt(hit, flow);
+    // A pictured frame is one image, its shapes not drawn one by one: the frame alone is selected (B2 C3).
+    const shape = boardRef.current?.pictured.has(frameNodeId(hit)) ? null : staticShapeAt(hit, flow);
     const sel = { title: hit.title, index: hit.index };
     if (shape === null) return void switchFrame(sel);
-    const o = originNow();
-    const board = { x: flow.x + o.x, y: flow.y + o.y };
-    switchFrame(
-      sel,
-      [shape],
-      () => {
-        const now = originNow();
-        const f = instance.current;
-        lateActs.current.openMenu({ node: shape, screen, flow: { x: board.x - now.x, y: board.y - now.y }, fit: () => void f?.fitView({ padding: 0.1, ...glideOptions() }) });
-      },
-      true,
-    );
+    // The same board point once the frame is live: a switch moves nothing on the canvas (Plan F Decision 11).
+    const board = toBoard(flow);
+    switchFrame(sel, [shape], () => lateActs.current.openMenu({ node: shape, screen, flow: board, fit: () => void canvasFit.current() }), true);
   }
 
   const onCanvasKey = (e: KeyboardEvent) => {
@@ -7044,6 +7883,17 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if ((e.target as Element).closest?.(".flow-space-box, .flow-shelf")) return;
     // Esc drops a drawing still waiting for its frame.
     if (e.key === "Escape") afterSwitch.current = null;
+    // A switch waiting for its paint (Decision 12): the key is for the frame picked, never the one still live. It is
+    // held, in order, and pressed again once that frame is live. Space (the hand, held across frames) and a key in a
+    // field pass.
+    const into = e.target as HTMLElement;
+    if (pendingRef.current && e.key !== " " && !(into.isContentEditable || into.tagName === "INPUT" || into.tagName === "TEXTAREA")) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (heldKeys.current.length < HELD_KEYS_MAX)
+        heldKeys.current.push({ key: e.key, code: e.code, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey, target: e.target });
+      return;
+    }
     // Esc leaves "Add relationship to..." first.
     if (e.key === "Escape" && rel.linking !== null) {
       e.preventDefault();
@@ -7070,6 +7920,12 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
         zoomToFrame(box);
         return;
       }
+    }
+    // A8: under the lock a selected ER column (B3 decision 10) and a picked class member (CL1) still own Ctrl+Enter.
+    // Neither writes while the assistant holds the text, but the key is theirs, so the review does not land on it.
+    if (aiLock.current && e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && ownsCtrlEnter()) {
+      e.preventDefault();
+      return;
     }
     // While the assistant holds the text the canvas takes no edits; undo works once it lets go. Copy still copies.
     if (aiLock.current && !((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "a" || e.key.toLowerCase() === "c"))) return;
@@ -7126,15 +7982,34 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
         // The paste event that follows brings the clipboard's text. With none, the system clipboard is read, and
         // the last copy made here is pasted only when that gives no text (I1).
         pastePending.current = true;
+        // Until the paste is written, a key replayed after a switch waits for it (`keySettled`), and never longer than
+        // a key ever waits: a clipboard that never answers lets go after KEY_SETTLE_MS.
+        keyWork.current++;
+        let held = true;
+        const letGo = () => {
+          if (!held) return;
+          held = false;
+          keyWork.current--;
+        };
+        const cap = setTimeout(letGo, KEY_SETTLE_MS);
         setTimeout(() => {
-          if (!pastePending.current) return;
+          if (!pastePending.current) {
+            clearTimeout(cap);
+            letGo();
+            return;
+          }
           pastePending.current = false;
           const g = gestureFrame();
-          void readClipboard().then((t) => {
-            const text = t || lastClip?.text;
-            // The paste was for the frame shown when Ctrl+V was pressed.
-            if (text && g.still()) void pasteFromKeys(text, g.frame);
-          });
+          void readClipboard()
+            .then(async (t) => {
+              const text = t || lastClip?.text;
+              // The paste was for the frame shown when Ctrl+V was pressed.
+              if (text && g.still()) await pasteFromKeys(text, g.frame);
+            })
+            .finally(() => {
+              clearTimeout(cap);
+              letGo();
+            });
         });
       } else if (k === "d" && !e.shiftKey) {
         e.preventDefault();
@@ -7313,7 +8188,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (!d?.nodes.some((n) => n.name === name) || isArea(name)) return;
     const n = instance.current?.getNode(name);
     const w = n?.measured?.width ?? n?.width ?? n?.initialWidth ?? 0;
-    const flowAt = n ? { x: n.position.x + w + 12, y: n.position.y } : { x: 0, y: 0 };
+    // The node's position is frame-local (it hangs from the live anchor): on the board it is that plus the frame's place.
+    const flowAt = n ? fromLive({ x: n.position.x + w + 12, y: n.position.y }) : { x: 0, y: 0 };
     const screen = instance.current?.flowToScreenPosition(flowAt) ?? { x: 120, y: 120 };
     const left = Math.max(8, Math.min(screen.x, window.innerWidth - 300));
     const top = Math.max(8, Math.min(screen.y, window.innerHeight - 280));
@@ -7598,9 +8474,11 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (at.node !== null && isSketchNodeId(at.node)) at = { ...at, node: null };
     // A right-click on a static frame selects it; its menu is the frame bar's (Task 9), never the live frame's.
     if (!at.line && !at.selection && (at.node === null || isStaticId(at.node))) {
-      const hit = staticFrameAt(at.flow);
+      const hit = staticFrameAt(toBoard(at.flow));
       if (hit) return menuInStaticFrame(hit, at.screen, at.flow);
     }
+    // Paste and Add here land in the live frame, in its own units.
+    const local = toLive(at.flow);
     if (aiLock.current) return;
     if (!kind) {
       // No frame selected: the canvas's own actions, with nothing to add, select or tidy; Publish opens on the board
@@ -7616,7 +8494,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
           empty: true,
           drawn: publishableRef.current,
           add: () => {},
-          paste: () => void pasteFromMenu(at.flow),
+          paste: () => void pasteFromMenu(local),
           selectAll: () => {},
           tidy: () => {},
           fit: at.fit,
@@ -7825,8 +8703,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
         keyOf: (t) => (kind ? keyOfAddTool(kind, t.label) : undefined),
         empty: names.length === 0,
         drawn: publishableRef.current,
-        add: (t) => add(t, at.flow),
-        paste: () => void pasteFromMenu(at.flow),
+        add: (t) => add(t, local),
+        paste: () => void pasteFromMenu(local),
         selectAll: () => setSelected(names),
         tidy: () => void tidy(),
         fit: at.fit,
@@ -7854,7 +8732,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const a = graph.nodes.find((n) => n.id === `\u0000group:${groupAsk}`);
     if (!c || !a) return null;
     const f = instance.current;
-    const p = f ? f.flowToScreenPosition({ x: a.position.x + 8, y: a.position.y + 28 }) : { x: a.position.x + 8, y: a.position.y + 28 };
+    const p = f ? f.flowToScreenPosition(fromLive({ x: a.position.x + 8, y: a.position.y + 28 })) : { x: a.position.x + 8, y: a.position.y + 28 };
     const r = canvasEl.current?.getBoundingClientRect();
     const left = r ? Math.max(4, Math.min(p.x - r.left, r.width - 304)) : p.x;
     const top = r ? Math.max(4, Math.min(p.y - r.top, r.height - 176)) : p.y;
@@ -7949,8 +8827,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       return { x: box.x, y: box.y + box.h / 2, w: Math.max(box.w, 120), box, note: field.node === "note", value: field.name };
     }
     if (field.kind === "newloop" || field.kind === "newsection" || field.kind === "loop") {
-      const box = { x: field.at.x, y: field.at.y, w: 200, h: 24 };
-      return { x: box.x, y: box.y + 12, w: 200, box, note: false, value: field.name };
+      const box = { x: field.at.x, y: field.at.y, w: 200, h: LOOP_FIELD_H };
+      return { x: box.x, y: box.y + LOOP_FIELD_H / 2, w: 200, box, note: false, value: field.name };
     }
     // The shapes it takes, and the groups it takes (Ctrl+G on a selected group nests it).
     const ids = [...field.members, ...(field.subgroups ?? []).map((g) => `\u0000group:${g}`)];
@@ -8070,9 +8948,10 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     return n && !isArea(id) ? boxOfNode(n) : null;
   };
 
-  /** F8: a line's end let go at `at`: onto the shape there (within the 24 px magnet), as one edit; elsewhere nothing. */
+  /** F8: a line's end let go at board point `flow`: onto the shape there (within the 24 px magnet), as one edit; elsewhere nothing. */
   const reattach = useCallback(
-    (edge: string, end: "from" | "to", at: Point) => {
+    (edge: string, end: "from" | "to", flow: Point) => {
+      const at = toLive(flow);
       const index = linkIndex(edge);
       if (aiLock.current || index === null) return;
       // A relationship between columns keeps the rules of a new drop (fix round 1, ruling 5).
@@ -8125,9 +9004,13 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
           if (publishableRef.current) void openPublish();
           return;
         }
-        if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.defaultPrevented && ai.waiting?.step === "review") {
+        // A8: Ctrl+Enter lands the changes waiting and Ctrl+Backspace drops them, on an event no canvas key took and
+        // not while typing; the review bar handles its own.
+        const review = ai.waiting?.step === "review" ? reviewKeys(e, { inBar: false, typing: typingIn(e.target) }) : null;
+        if (review) {
           e.preventDefault();
-          ai.acceptAll();
+          if (review === "accept") ai.acceptAll();
+          else ai.rejectAll();
           return;
         }
         // Ctrl+J opens the Assistant on the selected frame, as Ask does (Decision 24).
@@ -8143,6 +9026,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
         }
       }}
     >
+      <span className="visually-hidden" aria-live="polite" data-review-said="">
+        {reviewSaid}
+      </span>
       <SidePanel
         tab={side.tab}
         hidden={side.hidden}
@@ -8184,22 +9070,6 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
               <button type="button" className="btn pbtn2" onClick={ai.stop}>
                 Stop
               </button>
-            </div>
-          )}
-          {ai.waiting && ai.pending > 0 && (
-            <div className="flow-ebar" role="status">
-              <span className="flow-ebar-text">
-                {ai.pending === 1 ? "1 change from the assistant is marked below." : `${ai.pending.toLocaleString("en-US")} changes from the assistant are marked below.`}
-              </span>
-              <button type="button" className="btn pbtn2" onClick={ai.rejectAll}>
-                Reject all
-              </button>
-              {/* The remove question answers for itself in the Assistant; here only Reject all stands for Cancel. */}
-              {ai.waiting.step === "review" && (
-                <button type="button" className="btn pbtn2 pri" onClick={ai.acceptAll}>
-                  {acceptLabel(ai.waiting.proposal.changes, ai.waiting.rejected)}
-                </button>
-              )}
             </div>
           )}
           <div className={ai.working ? "schema-text is-locked" : "schema-text"}>
@@ -8264,6 +9134,12 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
             name={name}
             kind={kind}
             selected={selected}
+            sketches={sketchSel}
+            frames={assistFrames}
+            parts={assistParts}
+            onShowPart={onShowPart}
+            selectedFrame={assistFrame}
+            frameChip={frameChip}
             mode={assistMode}
             onMode={setAssistMode}
             onShowText={(lines) => {
@@ -8285,6 +9161,11 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
             }}
             active={active && side.tab === "assistant" && !side.hidden}
             onOpenSettings={onOpenSettings}
+            onTemplate={() => {
+              // The board Shelf on its templates side (Plan D A11); Esc gives focus back to the Template button.
+              templateOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+              openShelf("template", "diagrams", "", "right");
+            }}
           />
         }
       />
@@ -8359,23 +9240,43 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
           ref={canvasEl}
           className={`flow-canvas${armed === "hand" ? " is-hand" : ""}${spaceHeld ? " is-space-held" : ""}${stale ? " is-stale" : ""}${ai.working ? " is-ai-working" : ""}${kind && FIXED_KINDS.has(kind) ? " is-fixed" : ""}${fade ? ` is-frame-switch is-switch-${fade.n % 2}` : ""}`}
           data-switch-ms={fade ? String(fade.ms) : undefined}
+          // The text sizes drawn as soft lines (Plan F Decisions 2 and 4): flow-board.css keys on it with board-ts-*.
+          data-far={farKey}
           style={fade ? ({ "--board-switch-ms": `${fade.ms}ms` } as CSSProperties) : undefined}
           onAnimationEnd={(e) => {
             if (fade && e.animationName.startsWith("board-frame-switch")) setFade(null);
           }}
           onClick={onBoardClick}
+          onPointerUp={boxPicksPictured}
           tabIndex={-1}
           onKeyDown={onCanvasKey}
           onKeyUp={(e) => {
             if (e.key.startsWith("Arrow")) endNudge();
           }}
-          onBlur={endNudge}
+          onFocus={() => {
+            if (lastByKey.current) setKeyFocus(true);
+          }}
+          onBlur={(e) => {
+            endNudge();
+            if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) setKeyFocus(false);
+          }}
           onCopy={onClipboardCopy}
           onCut={onClipboardCopy}
           onPaste={onClipboardPaste}
           onPointerDownCapture={(e) => {
+            if (pressOnLeftFrame(e)) return;
             pressAt.current = { x: e.clientX, y: e.clientY };
+            pressedPictured.current = false;
+            boxFrom.current =
+              armedRef.current === "select" && !space.current && e.button === 0 && e.target instanceof Element && e.target.classList.contains("react-flow__pane") ? { x: e.clientX, y: e.clientY } : null;
+            // A press on a pictured sketch picks it and a drag moves it, as on a real one (Task 9 fix 3): no box.
+            if (boxFrom.current && pressPicturedSketch(e)) {
+              boxFrom.current = null;
+              e.stopPropagation();
+              return;
+            }
             erPress.current = erHitOf(e.target);
+            erDragged.current = false;
             // A press while Space is held is a pan, never a tap.
             if (space.current) space.current.moved = true;
             // A new press ends a drawing still waiting for its frame; an armed shape or line tool draws (Decision 19).
@@ -8395,6 +9296,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
             startSeqGesture(e);
           }}
           onContextMenuCapture={(e) => {
+            // The frame left takes no right-click while another waits for its paint (Decision 12).
+            if (pressOnLeftFrame(e)) return;
             // F9: a right-click on a group's title opens the group's own menu, not the canvas's.
             const t = e.target instanceof Element ? e.target : null;
             // Inside a static frame: no menu of the live frame's; the right-click selects that frame.
@@ -8414,7 +9317,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
             e.stopPropagation();
             openGroupMenu(name, { x: e.clientX, y: e.clientY });
           }}
+          onDoubleClickCapture={(e) => void pressOnLeftFrame(e)}
           onClickCapture={(e) => {
+            if (pressOnLeftFrame(e)) return;
             if (drawClick.current) {
               drawClick.current = false;
               e.stopPropagation();
@@ -8443,18 +9348,21 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
             }
           }}
           onMouseDownCapture={(e) => {
+            if (pressOnLeftFrame(e)) return;
             // No drag of a sketch a frame covers (React Flow drags on mousedown).
             if (frameWinsAt(e)) e.stopPropagation();
           }}
           onPointerMove={(e) => {
             pointer.current = { x: e.clientX, y: e.clientY };
+            const down = pressAt.current;
+            if (erPress.current && down && Math.hypot(down.x - e.clientX, down.y - e.clientY) > 3) erDragged.current = true;
             const sp = space.current;
             if (sp && !sp.p) sp.p = pointer.current;
             else if (sp?.p && Math.hypot(e.clientX - sp.p.x, e.clientY - sp.p.y) >= SPACE_MOVE_PX) sp.moved = true;
             // The shape under the pointer shows its handles; on a handle it stays, elsewhere they go after a moment.
             const t = e.target instanceof Element ? e.target : null;
             // N3: over a group's title the cursor says it can be renamed by a double-click (draw.io's text cursor).
-            const onTitle = !!t?.closest(".react-flow__pane") && !t.closest(".react-flow__node") && !!instance.current && groupTitleAt(instance.current.screenToFlowPosition({ x: e.clientX, y: e.clientY })) !== null;
+            const onTitle = !!t?.closest(".react-flow__pane") && !t.closest(".react-flow__node") && !!instance.current && groupTitleAt(toLive(instance.current.screenToFlowPosition({ x: e.clientX, y: e.clientY }))) !== null;
             if (canvasEl.current && canvasEl.current.classList.contains("is-on-group-title") !== onTitle) canvasEl.current.classList.toggle("is-on-group-title", onTitle);
             if (t?.closest(".flow-hot")) hot.keep();
             else {
@@ -8478,27 +9386,28 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
           <ErScrollContext.Provider value={erScroll}>
           <ErSoleContext.Provider value={erSole}>
           <FlowGroupSelContext.Provider value={groupSel}>
+          <BoardFarContext.Provider value={far}>
           <DiagramCanvas
+            fitRef={canvasFit}
             nodes={canvasNodes}
             edges={canvasEdges}
             nodeTypes={BOARD_NODE_TYPES}
             edgeTypes={FLOW_EDGE_TYPES}
-            // The board (Decisions 2, 5 and 27): fixed z bands, the live frame's origin, its shapes alone for the level of
-            // detail, and the overview only while the board has one frame.
+            // The board (Decisions 2, 5 and 27): fixed z bands, one origin for the whole board (Plan F Decision 11), real
+            // shapes at every zoom and count (Plan F Decision 1), and the overview only while the board has one frame.
             zIndexMode="manual"
-            origin={board?.origin}
-            onOverview={setOverview}
             // Only a drag from the Shelf rings and drops (R11, controller question 3).
             onDropObject={dropShelf}
             dropType={SHELF_DRAG_TYPE}
-            // The live frame draws fast in the overview too (Task 18b ruling): a switch at the fit paints in time.
-            overview={overview}
-            detailCount={liveBox || frameDragLive ? liveNodes.length : 0}
+            detailPolicy="board"
             showMiniMap={frameCount < 2}
+            mapSlot={
+              frameCount > 1 && board ? <BoardMap boxes={board.boxes} live={board.live?.index ?? null} glide={(to) => canvasHandle.current?.glideView(to) ?? Promise.resolve()} cancelGlide={() => canvasHandle.current?.cancelGlide()} /> : undefined
+            }
             onFrameDrag={onFrameDrag}
             connectionMode="loose"
             // A timeline has no lines between items: its order is the dates.
-            onConnectPorts={kind === "timeline" ? undefined : (from, to, _shift, at) => void connect(from, to, at)}
+            onConnectPorts={kind === "timeline" ? undefined : (from, to, _shift, at) => void connect(from, to, at && toLive(at))}
             onConnectRelease={kind === "timeline" ? undefined : onConnectRelease}
             onDragCancel={onDragCancel}
             connectionLineComponent={connectionLine}
@@ -8532,28 +9441,47 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
             panKey="Space"
             livePositions={livePositions}
             // The first shape the assistant just added comes into view, so its ring is seen (P11-34).
-            reveal={firstOf(airing)}
+            reveal={firstOf(landedNames)}
             onInit={(i) => {
               instance.current = i;
             }}
+            onCanvasReady={(h) => {
+              canvasHandle.current = h;
+            }}
+            smoothWheel
+            onViewChange={(v, _landing, pointer) => {
+              viewRef.current = v;
+              pointerRef.current = pointer ?? null;
+              replan();
+              letGoPointerWhenSettled();
+            }}
             overlay={
-              <CanvasOverlay store={overlay}>
-                <SketchDraw ref={sketchDraw} origin={board?.origin ?? ORIGIN0} {...sketchDrawProps} />
-                {sketchFieldAt && sketchField && (
-                  <SketchField
-                    key={sketchField.mode === "edit" ? `edit:${sketchField.id}` : `new:${sketchField.at.x},${sketchField.at.y}`}
-                    kind={sketchField.kind}
-                    value={sketchFieldAt.value}
-                    at={sketchFieldAt.at}
-                    width={sketchFieldAt.width}
-                    fresh={sketchField.mode === "new"}
-                    onCommit={(v) => commitSketchField(v)}
-                    onCancel={() => {
-                      setSketchField(null);
-                      canvasEl.current?.focus({ preventScroll: true });
-                    }}
-                  />
-                )}
+              <CanvasOverlay
+                store={overlay}
+                // The live frame's overlay hangs from its place on the board; the sketches' are the board's (Plan F
+                // Decision 11).
+                at={liveAtRef.current}
+                board={
+                  <>
+                    <SketchDraw ref={sketchDraw} {...sketchDrawProps} />
+                    {sketchFieldAt && sketchField && (
+                      <SketchField
+                        key={sketchField.mode === "edit" ? `edit:${sketchField.id}` : `new:${sketchField.at.x},${sketchField.at.y}`}
+                        kind={sketchField.kind}
+                        value={sketchFieldAt.value}
+                        at={sketchFieldAt.at}
+                        width={sketchFieldAt.width}
+                        fresh={sketchField.mode === "new"}
+                        onCommit={(v) => commitSketchField(v)}
+                        onCancel={() => {
+                          setSketchField(null);
+                          canvasEl.current?.focus({ preventScroll: true });
+                        }}
+                      />
+                    )}
+                  </>
+                }
+              >
                 {lineDraw && (
                   <svg className="flow-overlay-svg" width="1" height="1" aria-hidden="true">
                     <g className={lineDraw.ring ? "flow-drawing is-locked" : "flow-drawing"}>
@@ -8646,10 +9574,10 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
                 )}
                 {newTable && (
                   <div
-                    className={`fnode fnode-kind fnode-${newTable.kind === "weak" ? "erWeak" : "erTable"} fnode-${look} fnode-selected fkind-new-table`}
+                    className={`fnode fnode-kind fnode-${newTable.kind === "weak" ? "erWeak" : "erTable"} fnode-${look} fnode-selected fkind-new-table${labelScale(textScale).cls}`}
                     role="group"
                     aria-label="New table"
-                    style={{ ...kindStyle(newTable.kind === "weak" ? "erWeak" : "erTable"), left: `${newTable.at.x}px`, top: `${newTable.at.y}px`, width: "184px", height: `${ER_CARD_CHROME + KIND_ROW}px` }}
+                    style={{ ...kindStyle(newTable.kind === "weak" ? "erWeak" : "erTable"), ...labelScale(textScale).style, left: `${newTable.at.x}px`, top: `${newTable.at.y}px`, width: `${Math.round(184 * textScale)}px`, height: `${erCardH(1, textScale)}px` }}
                   >
                     <span className="fkind-inside">
                       <span className="fkind-head">
@@ -8673,7 +9601,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
                       <div className="fkind-er-body">
                         <ul className="fkind-rows fkind-er-rows">
                           {/* A picture of the row to come: a screen reader hears the field's name only (Minor 5). */}
-                          <li className="fkind-row fkind-er-row is-new" style={{ height: KIND_ROW }} aria-hidden="true">
+                          <li className="fkind-row fkind-er-row is-new" style={{ height: KIND_ROW * textScale }} aria-hidden="true">
                             <span className="fkind-gut" aria-hidden="true" />
                             <span className="fkind-col fkind-placeholder">column_name</span>
                             <span className="fkind-type fkind-placeholder">type</span>
@@ -8717,7 +9645,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
               <BoardToolbar
                 kind={kind}
                 armed={armed}
-                pending={ai.pending}
+                pending={reviewSum ?? ai.pending}
                 onArm={(id, pointer) => {
                   // The Note button in a frame with notes adds that diagram's note, as N does there (Decision 18).
                   if (id === NOTE_TOOL_ID && kind && NOTE_KINDS.has(kind) && !aiLock.current) addShape("note");
@@ -8735,6 +9663,18 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
                 shelfId={shelf ? shelfId : undefined}
               />
             </div>
+            {/* After the board toolbar, so it is the next tab stop while it shows; hidden while the remove question is open. */}
+            {ai.waiting?.step === "review" && reviewed?.rect && reviewed.sum > 0 && (
+              <ReviewBarOnCanvas
+                key={ai.waiting.messageAt}
+                rect={reviewed.rect}
+                titles={reviewed.titles}
+                count={reviewed.sum}
+                label={acceptLabel(ai.waiting.proposal.changes, ai.waiting.rejected)}
+                onAccept={fromBar(ai.acceptAll)}
+                onReject={fromBar(ai.rejectAll)}
+              />
+            )}
             {ai.working && (
               <div className="flow-aipres" role="status">
                 <span className="live" aria-hidden="true" />
@@ -8771,6 +9711,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
               </p>
             )}
           </DiagramCanvas>
+          </BoardFarContext.Provider>
           </FlowGroupSelContext.Provider>
           </ErSoleContext.Provider>
           </ErScrollContext.Provider>
@@ -8819,6 +9760,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
                 layout={{ direction: layout.direction, style: layout.style, notation, textSize }}
                 selectedShapes={selected.length}
                 frames={frameCount}
+                numbering={numberingFromBar(kind, liveBox.title)}
+                onNumbering={(on) => void doc.run({ op: "setNumbering", on })}
                 onReset={() => void tidy("frame")}
                 onRename={renameFromBar}
                 onSetting={settingFromBar}
@@ -8850,11 +9793,12 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
             // A layer the canvas's size, so the Shelf's height can leave the zoom control clear (flow-shelf.css).
             <div className="flow-shelf-layer">
               <Shelf
-                key={`${shelf.from}:${shelf.tab}`}
+                key={`${shelf.from}:${shelf.tab}:${shelf.side ?? "left"}`}
                 id={shelfId}
                 host="board"
                 frameKind={shelfDrag !== undefined ? shelfDrag : (kind ?? null)}
                 initialTab={shelf.tab}
+                initialSide={shelf.side}
                 initialQuery={shelf.query}
                 onAdd={(item, at) => void addFromShelf(item, at)}
                 // While a drag runs, its Shapes list holds still (a drop may select another frame).

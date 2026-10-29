@@ -36,7 +36,7 @@ export function contrastRatio(a: string, b: string): number {
 }
 
 /** Below this contrast with the canvas a logo's own colour is too faint to see. */
-const FAINT = 1.5;
+export const FAINT = 1.5;
 
 /** The ink an icon is asked for in, and whether it draws with a hairline in the text colour. */
 export interface IconInk {
@@ -120,6 +120,11 @@ export function iconUrl(name: string, t: IconTheme = getIconTheme()): string | n
  */
 export function iconOutline(name: string, t: IconTheme = getIconTheme()): boolean {
   return inkFor(logos?.get(name), t).outline;
+}
+
+/** Logo `name`'s brand colour from the index, or null for an icon with none or before the index is read. */
+export function logoHex(name: string): string | null {
+  return logos?.get(name)?.hex ?? null;
 }
 
 /** How many icons are in memory (tests). */

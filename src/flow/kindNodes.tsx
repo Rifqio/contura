@@ -3,14 +3,18 @@
 // cards with their rows, state pills and markers, sequence participants with their lifelines, mind map topics,
 // timeline items and notes. The lines of these kinds are here too: sequence messages along their rows and the
 // curved branches of a mind map.
-import { labelScale } from "./textScale";
-import { BaseEdge, type EdgeProps, EdgeLabelRenderer, Handle, type NodeProps, Position, useInternalNode, useNodeId, useUpdateNodeInternals } from "@xyflow/react";
-import { type MouseEvent, memo, type ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { textSizeOf } from "./textScale";
+import { BaseEdge, type EdgeProps, Handle, type NodeProps, Position, useInternalNode, useNodeId, useUpdateNodeInternals } from "@xyflow/react";
+import { type CSSProperties, type MouseEvent, memo, type ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Icon from "../components/Icon";
+import { ER_FAR_ROW, SOFT_CHAR_W } from "../diagram/canvasView";
+import { useTextFar } from "./board/BoardFar";
 import type { DrawnKind } from "../diagram/types";
-import { ER_MAX_ROWS, ER_ROW_OVERSCAN, erFits, erMetrics, erRowWindow, erViewH, isMethod, KIND_ROW, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
-import { type NodeLook, NodeShell, type NodeState, type ShapeColour } from "./nodes/parts";
+import { perfMeasure, perfOn } from "../perf/perfRecorder";
+import { ER_MAX_ROWS, ER_ROW_OVERSCAN, erFits, erMetrics, erRowWindow, erViewH, isMethod, KIND_ROW } from "./kindLayout";
+import { type NodeLook, NodeShell, type NodeState, type ShapeColour, STATE_NOTE, stateClass } from "./nodes/parts";
 import InlineEdit from "./interactions/InlineEdit";
+import { SeqParticipant } from "./seqNodes";
 import DateEdit from "./interactions/DateEdit";
 import { type KindEdit, KindEditContext, useKindEdit } from "./kindEdit";
 import { type ColumnFlag, needsQuotes, splitRow } from "../lang/flow/model";
@@ -38,16 +42,31 @@ export type KindNodeData = {
   sized?: { w: number; h: number };
   /** The frame's text size (Decision 22); unset at 1. An ER card's rows and header scale with it (B4 fix round 1). */
   textScale?: number;
-  /** A participant's activation bars, by message row. */
-  activations?: { top: number; height: number }[];
   state?: NodeState;
+  /**
+   * Plan D Task 8: an ER table's rows under review, one per row in `rows` (missing or undefined: unmarked). A static
+   * card's are its first ER_MAX_ROWS only (A9); the live card scrolls its first marked row into view.
+   */
+  rowStates?: readonly (RowState | undefined)[];
   /** Step 11: the words it shows (its `label:`) when they are not its name, and its palette colour. */
   shows?: string;
   color?: ShapeColour;
+  /** Plan E: a participant's or actor's icon, as a service's (`FlowNodeData.iconName`). */
+  iconName?: string;
+  /** Plan E: a sequence participant or actor, drawn by `SeqParticipant`. */
+  seq?: true;
+  /** Plan E: a participant's own colour, which only the sequence variables read (never `color`, so no preset fill). */
+  seqColour?: ShapeColour;
 };
 
+/** An ER row's review mark: new, gone or changed in the waiting proposal, or just added by it. */
+export type RowState = "suggested" | "removed" | "changed" | "airing" | "ringed";
+
+/** What a row's review mark adds to its hint: the shapes' notes ("removal suggested by AI" for a removed row). */
+const ROW_NOTE: Partial<Record<RowState, string>> = STATE_NOTE;
+
 /** The words a shape shows: its label, else its name. */
-const wordsOf = (d: KindNodeData) => d.shows ?? d.name;
+export const wordsOf = (d: KindNodeData) => d.shows ?? d.name;
 
 /** The shape in words, for its accessible name ("Table orders", "State Draft"). */
 export const KIND_WORD: Partial<Record<DrawnKind, string>> = {
@@ -179,6 +198,11 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
   const [hot, setHot] = useState(false);
   const cool = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(cool.current), []);
+  // A field open asked for on a card is measured at the paint after it mounts (the opt-in recorder; one mark, spent once).
+  const fieldOpen = edit !== null;
+  useEffect(() => {
+    if (fieldOpen && perfOn()) requestAnimationFrame(() => perfMeasure("er_field_open", "er_field_open_req"));
+  }, [fieldOpen]);
   const enter = er
     ? () => {
         clearTimeout(cool.current);
@@ -204,6 +228,8 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
   // The card's geometry at its frame's text size: header, padding and row pitch scale with the card (B4 fix round 1).
   const textK = d.textScale ?? 1;
   const m = erMetrics(textK);
+  // Far text (Plan F Decision 3): the rows draw as bars, unless a field is open on the card (what is typed stays).
+  const far = useTextFar(textSizeOf(d.textScale));
   const fits = erFits(d.sized?.h, textK);
   const viewH = erViewH(d.sized?.h, textK);
   const scrolling = live && count > fits;
@@ -234,15 +260,20 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
   const shownK = (i: number | null | undefined) => (i === null || i === undefined || i < 0 ? -1 : at >= 0 && i >= at ? i + 1 : i);
   const selK = shownK(view?.selected);
   const aimK = shownK(view?.aim);
+  // Plan D Task 8: the first row the waiting proposal marks, scrolled into view as a selected row is (A9).
+  const markK = shownK(d.rowStates?.findIndex((st) => st !== undefined));
   useLayoutEffect(() => {
     if (!scrolling || !bodyRef.current) return;
-    for (const k of [editK, aimK, selK]) if (k >= 0 && k < count) return scrollRowIntoView(bodyRef.current, k, fits, m.row);
+    for (const k of [editK, aimK, selK, markK]) if (k >= 0 && k < count) return scrollRowIntoView(bodyRef.current, k, fits, m.row);
     // When one of them moves or the card starts to scroll; a scroll by the wheel leaves the selected row where it put it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editK, aimK, selK, scrolling, fits, m.row]);
+  }, [editK, aimK, selK, markK, scrolling, fits, m.row]);
   const spacer = (key: string, n: number) => n > 0 && <li key={key} className="fkind-er-spacer" aria-hidden="true" style={{ height: n * m.row }} />;
+  // A card of no known width (no size and no natural size) keeps its rows: a 0-wide picture would draw nothing.
+  const cardW = d.sized?.w ?? d.naturalW ?? 0;
+  const bars = far && editK < 0 && cardW > 0;
   const ks: number[] = [];
-  for (let k = from; k < to; k++) ks.push(k);
+  if (!bars) for (let k = from; k < to; k++) ks.push(k);
   if (pin >= 0 && pin < from) ks.unshift(pin);
   else if (pin >= 0) ks.push(pin);
   const drawn: ReactNode[] = [];
@@ -279,10 +310,13 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
     const pk = flags.includes("pk");
     const nn = pk || flags.includes("not null");
     // The row's hover hint, which is also its one accessible description (M13).
-    const tip = `${name}${type ? ` ${type}` : ""} (${[pk ? "primary key" : "", flags.includes("unique") && !pk ? "unique" : "", nn ? "not null" : "nullable"].filter(Boolean).join(", ")})`;
+    // Its review mark (Plan D Task 8), on the class and in the hint: ", changed by AI".
+    const mark = d.rowStates?.[i];
+    const markCls = mark ? ` is-ai-${stateClass(mark)}` : "";
+    const tip = `${name}${type ? ` ${type}` : ""} (${[pk ? "primary key" : "", flags.includes("unique") && !pk ? "unique" : "", nn ? "not null" : "nullable"].filter(Boolean).join(", ")})${(mark && ROW_NOTE[mark]) ?? ""}`;
     if (!er) {
       drawn.push(
-        <li key={`${i}:${name}`} className="fkind-row fkind-er-row" style={{ height: m.row }} title={tip} data-er-row={i}>
+        <li key={`${i}:${name}`} className={`fkind-row fkind-er-row${markCls}`} style={{ height: m.row }} title={tip} data-er-row={i}>
           <span className={pk ? "fkind-gut is-pk" : "fkind-gut"} aria-hidden="true">
             {pk && <Icon name="key" size={14} className="fkind-key" />}
           </span>
@@ -305,7 +339,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
     drawn.push(
       <li
         key={`${i}:${name}`}
-        className={`fkind-row fkind-er-row${picked ? " is-selected" : ""}${aimed ? " is-pick" : ""}`}
+        className={`fkind-row fkind-er-row${picked ? " is-selected" : ""}${aimed ? " is-pick" : ""}${markCls}`}
         aria-current={aimed ? true : undefined}
         style={{ height: m.row }}
         title={tip}
@@ -356,7 +390,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
       {ports && <PortsSync table={d.name} />}
       <span
         // A header aimed by "Make a relationship from here" stands for its table's key (fix round 3).
-        className={headAimed ? "fkind-head is-pick" : "fkind-head"}
+        className={`fkind-head${headAimed ? " is-pick" : ""}${bars ? " is-far" : ""}`}
         style={textK !== 1 ? { height: m.head } : undefined}
         aria-current={headAimed ? true : undefined}
         onPointerEnter={enter}
@@ -371,7 +405,8 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
             : undefined
         }
       >
-        <Icon name="table" size={14} />
+        {/* A far card's icon is the header's ::before (flow-board.css), with no <svg> root (Plan F milestone fix 3). */}
+        {!bars && <Icon name="table" size={14} />}
         {edit?.kind === "table" ? (
           field(edit, edit.typed ?? d.name, "Table name", "fkind-ed fkind-ed-head")
         ) : (
@@ -382,7 +417,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
       </span>
       {/* Rows that scroll take the wheel (I3); a card that fits lets the canvas pan, as draw.io and Figma do. */}
       <div
-        className={scrolling ? "fkind-er-body nowheel is-scroll" : "fkind-er-body"}
+        className={`fkind-er-body${scrolling ? " nowheel is-scroll" : ""}${bars ? " is-far" : ""}`}
         ref={bodyRef}
         onPointerEnter={enter}
         onPointerLeave={leave}
@@ -407,17 +442,76 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
             : undefined
         }
       >
-        <ul className="fkind-rows fkind-er-rows" style={textK !== 1 ? { padding: `${m.pad}px 0` } : undefined}>
-          {drawn}
-          {spacer("below", count - (pin >= to ? pin + 1 : to))}
-        </ul>
+        {bars ? (
+          <ErBars rows={rows} flags={d.rowFlags} from={from} to={to} count={count} w={cardW} k={textK} ports={ports} />
+        ) : (
+          <ul className="fkind-rows fkind-er-rows" style={textK !== 1 ? { padding: `${m.pad}px 0` } : undefined}>
+            {drawn}
+            {spacer("below", count - (pin >= to ? pin + 1 : to))}
+          </ul>
+        )}
       </div>
-      {editable && (
+      {editable && !bars && (
         <button type="button" className="fkind-addcol nodrag" aria-label="Add column" onClick={() => er.addColumn(d.name)} onDoubleClick={(ev) => ev.stopPropagation()}>
           <Icon name="plus" size={14} />
           column
         </button>
       )}
+    </>
+  );
+}
+
+// A far ER row's bars and key mark (canvasView.ts `ER_FAR_ROW`, shared with a frame picture's far ER card).
+const { h: BAR_H, from: BAR_FROM, to: BAR_TO, key: KEY_MARK, keyMid: KEY_MID } = ER_FAR_ROW;
+const BAR = "linear-gradient(var(--far-bar), var(--far-bar))";
+const KEY = "linear-gradient(var(--far-key), var(--far-key))";
+
+/**
+ * An ER card's rows when its text is far (Plan F Decision 3, Figma and Miro draw far text as grey bars): one block the
+ * height of every row whose backgrounds are the bars, a name bar then a type bar for each row in the window, and a
+ * key row's mark in the gutter; no row element and no `<svg>` (milestone fix 3: WebKit gives each `<svg>` root its own
+ * memory, and 705 cards at the fit had one each where main's fast box had none). The ports stay on each row in the
+ * window while they show, so a line can still be drawn from a column.
+ */
+export function ErBars({ rows, flags, from, to, count, w, k, ports }: { rows: string[]; flags?: ColumnFlag[][]; from: number; to: number; count: number; w: number; k: number; ports: boolean }) {
+  const m = erMetrics(k);
+  const h = BAR_H * k;
+  const images: string[] = [];
+  const sizes: string[] = [];
+  const places: string[] = [];
+  const keys: [string, string, string][] = [];
+  const handles: ReactNode[] = [];
+  const bar = (x: number, y: number, bw: number) => {
+    images.push(BAR);
+    sizes.push(`${bw}px ${h}px`);
+    places.push(`${x}px ${y}px`);
+  };
+  for (let i = from; i < Math.min(to, rows.length); i++) {
+    const { name, type } = splitRow(rows[i]);
+    const top = m.pad + i * m.row;
+    const y = top + (m.row - h) / 2;
+    const typeW = Math.min(type.length * SOFT_CHAR_W * k, 0.3 * w);
+    bar(BAR_FROM, y, Math.min(name.length * SOFT_CHAR_W * k, 0.55 * w));
+    bar(w - BAR_TO - typeW, y, typeW);
+    if (flags?.[i]?.includes("pk")) keys.push([KEY, `${KEY_MARK}px ${KEY_MARK}px`, `${KEY_MID - KEY_MARK / 2}px ${top + (m.row - KEY_MARK) / 2}px`]);
+    if (ports)
+      handles.push(
+        <span key={`${i}:${name}`} className="fkind-er-farport" style={{ top, height: m.row }}>
+          <ColumnPorts column={name} />
+        </span>,
+      );
+  }
+  for (const [image, size, place] of keys) {
+    images.push(image);
+    sizes.push(size);
+    places.push(place);
+  }
+  const style: CSSProperties = { width: w, height: count * m.row + 2 * m.pad };
+  if (images.length > 0) Object.assign(style, { backgroundImage: images.join(", "), backgroundSize: sizes.join(", "), backgroundPosition: places.join(", ") });
+  return (
+    <>
+      <div className="fkind-er-bars" aria-hidden="true" style={style} />
+      {handles}
     </>
   );
 }
@@ -506,23 +600,7 @@ function KindInside({ d, selected }: { d: KindNodeData; selected: boolean }) {
       );
     case "participant":
     case "actor":
-      return (
-        <>
-          <span className="fkind-head fkind-lifehead">
-            {d.kind === "actor" && <Icon name="user" size={14} />}
-            <span className="fnode-name">{d.name}</span>
-          </span>
-          <i className="fkind-lifeline" aria-hidden="true" />
-          {(d.activations ?? []).map((a, i) => (
-            <i
-              key={i}
-              className="fkind-activation"
-              aria-hidden="true"
-              style={{ top: a.top, height: a.height }}
-            />
-          ))}
-        </>
-      );
+      return <SeqParticipant d={d} />;
     case "stateStart":
     case "stateEnd":
     case "fork":
@@ -588,22 +666,6 @@ export function KindNode({ d, selected }: { d: KindNodeData; selected: boolean }
   );
 }
 
-/** A sequence frame (`loop retry 3 times { ... }`): a box over its rows; its label is the SeqFrameTab above it. */
-export const SeqFrame = memo(function SeqFrame({ data }: NodeProps) {
-  const d = data as { label: string; depth: number };
-  return <div className="fkind-frame" role="group" aria-label={`Frame ${d.label}`} />;
-});
-
-/** A frame's label in its tab, drawn over the participants so their lifelines and activation bars pass under it. */
-export const SeqFrameTab = memo(function SeqFrameTab({ data }: NodeProps) {
-  const d = data as { label: string };
-  return (
-    <span className="fkind-frame-tab" aria-hidden="true">
-      {d.label}
-    </span>
-  );
-});
-
 /** A timeline's line with a tick where each item meets it. */
 export const TimeAxis = memo(function TimeAxis({ data }: NodeProps) {
   const d = data as { ticks: { x: number; above: boolean; milestone: boolean }[] };
@@ -626,37 +688,8 @@ export const TimeSection = memo(function TimeSection({ data }: NodeProps) {
   );
 });
 
-export type SeqEdgeData = { row: number; y?: number; label?: string; reply: boolean; textScale?: number };
-
-/** A sequence message: a straight line from lifeline to lifeline along its row; a message to itself loops out right. */
-export const SeqEdge = memo(function SeqEdge(p: EdgeProps) {
-  const a = useInternalNode(p.source);
-  const b = useInternalNode(p.target);
-  if (!a || !b) return null;
-  const d = p.data as SeqEdgeData;
-  const w = (n: typeof a) => n.measured.width ?? n.width ?? n.initialWidth ?? 0;
-  const x1 = a.internals.positionAbsolute.x + w(a) / 2;
-  const x2 = b.internals.positionAbsolute.x + w(b) / 2;
-  const y = a.internals.positionAbsolute.y + (d.y ?? SEQ_HEAD + (d.row + 0.5) * SEQ_ROW);
-  const self = p.source === p.target;
-  const path = self ? `M ${x1} ${y - 8} H ${x1 + 40} V ${y + 8} H ${x1}` : `M ${x1} ${y} H ${x2}`;
-  const mid = self ? { x: x1 + 48, y: y - 8 } : { x: (x1 + x2) / 2, y: y - 10 };
-  return (
-    <>
-      <BaseEdge id={p.id} path={path} markerEnd={p.markerEnd} style={p.style} interactionWidth={p.interactionWidth} />
-      {d.label && (
-        <EdgeLabelRenderer>
-          <div
-            className={(self ? "fkind-msg nodrag nopan is-self" : "fkind-msg nodrag nopan") + labelScale(d.textScale).cls}
-            style={{ transform: `translate(${self ? "0" : "-50%"}, -100%) translate(${mid.x}px, ${mid.y}px)`, ...labelScale(d.textScale).style }}
-          >
-            {d.label}
-          </div>
-        </EdgeLabelRenderer>
-      )}
-    </>
-  );
-});
+// Plan E Task 6 (A3): the sequence's message, block and caption live in seqNodes.tsx; flowNodes imports them from here.
+export { SeqEdge, type SeqEdgeData, SeqFrame, SeqFrameTab } from "./seqNodes";
 
 /** A mind map branch: a curve from the side of the parent that faces the child, with no arrow. */
 export const MindEdge = memo(function MindEdge(p: EdgeProps) {

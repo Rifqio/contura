@@ -123,7 +123,7 @@ const guard = (onDropped?: () => void) => EditorState.transactionFilter.of((tr) 
       sel.ranges.map((r) => EditorSelection.range(clampTo(shown, r.anchor), clampTo(shown, r.head))),
       sel.mainIndex,
     );
-    return [tr, { selection: clamped, sequential: true } as TransactionSpec];
+    return [tr, { selection: clamped, scrollIntoView: true, sequential: true } as TransactionSpec];
   }
   return tr;
 });

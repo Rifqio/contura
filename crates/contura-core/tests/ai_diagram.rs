@@ -3,9 +3,15 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use contura_core::ai::attachment::{Attachment, AttachmentSlot, attachment_for};
+use contura_core::ai::board::{
+    BoardFrameInput, BoardInput, BoardSelected, BoxIn, FollowUpReply, FrameProblem, PointIn,
+    SketchNote,
+};
 use contura_core::ai::context::store::{ContextStore, StoreContext};
 use contura_core::ai::diagram::{
-    DiagramAskRequest, DiagramProposal, diagram_ask_stream, diagram_place, diagram_preview,
+    DiagramAskRequest, DiagramProposal, FrameSourceIn, SourceStanding, diagram_ask_attached,
+    diagram_ask_stream, diagram_place, diagram_preview,
 };
 use contura_core::ai::diagram_tool::{
     ChangeStatus, DiagramOp, DiagramScope, DropReason, FlowOutline, INPUT_CAP, OutlineLink,
@@ -24,7 +30,10 @@ use contura_core::ai::rails::execution::{ToolsAllowed, tool_for};
 use contura_core::ai::request::{AskRequest, ItemKind};
 use contura_core::ai::sent::{AnswerRecord, ToolOutcome, ToolUse, fnv1a64_parts};
 use contura_core::ai::stream::{AiEvent, ask_stream};
-use contura_core::ai::{AiError, AiProviderKind, AiService, AiSettings, KeyChange};
+use contura_core::ai::{
+    AiAccess, AiError, AiMessage, AiProviderKind, AiRole, AiService, AiSettings, AiThread,
+    KeyChange,
+};
 use contura_core::model::{ConnectionConfig, ConnectionId};
 use contura_core::schema_model::SchemaModel;
 use contura_core::secrets::MemorySecretStore;
@@ -229,6 +238,7 @@ fn outline(nodes: usize, links: usize) -> FlowOutline {
                 group: None,
                 line: i as u32 + 2,
                 table: false,
+                columns: None,
             })
             .collect(),
         groups: Vec::new(),
@@ -238,6 +248,8 @@ fn outline(nodes: usize, links: usize) -> FlowOutline {
                 to: format!("n{i}"),
                 label: None,
                 line: i as u32 + 2,
+                from_column: None,
+                to_column: None,
             })
             .collect(),
     }
@@ -254,6 +266,9 @@ fn diagram_req(text: &str, scope: DiagramScope) -> DiagramAskRequest {
         thread_id: None,
         model: None,
         picks: None,
+        board: None,
+        sources: Vec::new(),
+        table_links: Vec::new(),
     }
 }
 
@@ -262,7 +277,16 @@ fn run_preview(
     secrets: &Secrets,
     req: &DiagramAskRequest,
 ) -> Result<Preview> {
-    diagram_preview(settings, &info(&groq()), secrets, req, &mut Log::new())
+    diagram_preview(
+        settings,
+        &info(&groq()),
+        secrets,
+        req,
+        &SourceStanding::default(),
+        None,
+        None,
+        &mut Log::new(),
+    )
 }
 
 fn selection() -> DiagramScope {
@@ -474,6 +498,9 @@ fn tool_off_refuses() {
         &info(&groq()),
         &Secrets::default(),
         &diagram_req(TEXT, DiagramScope::Whole),
+        &SourceStanding::default(),
+        None,
+        None,
         &mut log,
     );
     assert!(matches!(got, Err(Error::Ai(AiError::ToolOff))), "{got:?}");
@@ -499,6 +526,9 @@ fn file_name_with_a_control_character_is_refused() {
             &info(&groq()),
             &Secrets::default(),
             &req,
+            &SourceStanding::default(),
+            None,
+            None,
             &mut log,
         );
         match got {
@@ -648,12 +678,15 @@ fn doc_outline() -> FlowOutline {
         group: None,
         line,
         table: false,
+        columns: None,
     };
     let link = |from: &str, to: &str, line: u32| OutlineLink {
         from: from.into(),
         to: to.into(),
         label: None,
         line,
+        from_column: None,
+        to_column: None,
     };
     FlowOutline {
         kind: Some("flowchart".into()),
@@ -686,6 +719,9 @@ fn doc_req() -> DiagramAskRequest {
         thread_id: None,
         model: None,
         picks: None,
+        board: None,
+        sources: Vec::new(),
+        table_links: Vec::new(),
     }
 }
 
@@ -727,6 +763,18 @@ async fn diagram_run(
     req: &DiagramAskRequest,
     reads: &[Option<&str>],
 ) -> (Vec<AiEvent>, Result<()>, usize) {
+    diagram_run_with(provider, settings, req, reads, None, None).await
+}
+
+/// `diagram_run` with the thread's history and an attachment.
+async fn diagram_run_with(
+    provider: &ScriptedProvider,
+    settings: &AiSettings,
+    req: &DiagramAskRequest,
+    reads: &[Option<&str>],
+    history: Option<&AiThread>,
+    attachment: Option<&Attachment>,
+) -> (Vec<AiEvent>, Result<()>, usize) {
     let events = Mutex::new(Vec::new());
     let emit = |e: AiEvent| events.lock().unwrap().push(e);
     let count = AtomicUsize::new(0);
@@ -744,6 +792,9 @@ async fn diagram_run(
         &info(settings),
         &Secrets::default(),
         req,
+        &SourceStanding::default(),
+        history,
+        attachment,
         &disk,
         &emit,
     )
@@ -835,6 +886,7 @@ async fn proposal_after_text() {
             kind: None,
             id: None,
             group: None,
+            frame: None,
         }
     );
     match events.last() {
@@ -950,6 +1002,7 @@ async fn ambiguous_change_is_to_pick() {
         group: None,
         line: 11,
         table: false,
+        columns: None,
     });
     let input = serde_json::json!({
         "file": "orders",
@@ -1287,6 +1340,9 @@ async fn preview_equals_the_ask() {
         &info(&settings),
         &Secrets::default(),
         &req,
+        &SourceStanding::default(),
+        None,
+        None,
         &mut Log::new(),
     )
     .unwrap();
@@ -1376,6 +1432,146 @@ async fn no_call_no_proposal() {
     assert_eq!(provider.seen.lock().unwrap().len(), 1);
 }
 
+// ---- a board: each change is checked in the frame it names ---------------------------
+
+const BOARD: &str =
+    "flow \"Checkout\"\nCart\nPay\nCart > Pay\n\nflow \"Refund\"\nPay\nRefund\nPay > Refund\n";
+
+fn board_frame(index: u32, title: &str, from: usize, to: usize, line: u32) -> BoardFrameInput {
+    let names: Vec<&str> = BOARD[from..to].lines().skip(1).take(2).collect();
+    let node = |name: &str, line: u32| OutlineNode {
+        name: name.into(),
+        id: None,
+        kind: None,
+        group: None,
+        line,
+        table: false,
+        columns: None,
+    };
+    BoardFrameInput {
+        index,
+        title: title.into(),
+        kind: Some("flow".into()),
+        from: from as u32,
+        to: to as u32,
+        line,
+        outline: FlowOutline {
+            kind: Some("flowchart".into()),
+            kinds: Vec::new(),
+            nodes: vec![node(names[0], line + 1), node(names[1], line + 2)],
+            groups: Vec::new(),
+            links: vec![OutlineLink {
+                from: names[0].into(),
+                to: names[1].into(),
+                label: None,
+                line: line + 3,
+                from_column: None,
+                to_column: None,
+            }],
+        },
+        problems: Vec::new(),
+        r#box: BoxIn {
+            x: 0,
+            y: i32::try_from(index).unwrap() * 400,
+            w: 300,
+            h: 300,
+        },
+        clash: false,
+    }
+}
+
+fn board_req() -> DiagramAskRequest {
+    let split = BOARD.find("flow \"Refund\"").unwrap();
+    let frames = vec![
+        board_frame(0, "Checkout", 0, split, 1),
+        board_frame(1, "Refund", split, BOARD.len(), 6),
+    ];
+    DiagramAskRequest {
+        text: BOARD.into(),
+        outline: frames[0].outline.clone(),
+        question: "Drop Pay from the refund".into(),
+        board: Some(BoardInput {
+            frames,
+            focus: vec!["Refund".into()],
+            selected: BoardSelected::default(),
+            sketches: Vec::new(),
+            create: None,
+            follow_up: None,
+            attachment: None,
+        }),
+        ..doc_req()
+    }
+}
+
+#[tokio::test]
+async fn a_board_ask_checks_each_change_in_its_frame() {
+    let input = serde_json::json!({
+        "file": "orders",
+        "base_hash": base_hash_of(BOARD),
+        "ops": [
+            { "remove_node": { "frame": "Refund", "target": "Pay" } },
+            { "add_flow": { "frame": "checkout", "from": "Pay", "to": "Cart" } },
+            { "add_flow": { "frame": "Refund", "from": "Pay", "to": "Refund" } },
+            { "remove_node": { "frame": "Shipping", "target": "Pay" } }
+        ]
+    })
+    .to_string();
+    let provider = ScriptedProvider::new(vec![
+        said(),
+        Ok(ProviderEvent::ToolCall {
+            name: TOOL_NAME.into(),
+            input,
+        }),
+        end(),
+    ]);
+    let (events, result, _) = diagram_run(&provider, &groq(), &board_req(), &[Some(BOARD)]).await;
+    result.unwrap();
+    let p = proposals(&events)[0];
+    let frames: Vec<Option<&str>> = p.changes.iter().map(|c| c.frame.as_deref()).collect();
+    assert_eq!(
+        frames,
+        vec![Some("Refund"), Some("Checkout"), Some("Refund"), None]
+    );
+    assert_eq!(p.changes[0].status, ChangeStatus::Ok);
+    // Checkout's Pay is its own: Refund's removal does not touch it.
+    assert_eq!(p.changes[1].status, ChangeStatus::Ok);
+    assert_eq!(
+        p.changes[1].op,
+        DiagramOp::AddFlow {
+            from: "Pay".into(),
+            to: "Cart".into(),
+            label: None,
+            frame: Some("Checkout".into()),
+        }
+    );
+    let reasons: Vec<Option<DropReason>> = p
+        .changes
+        .iter()
+        .map(|c| match &c.status {
+            ChangeStatus::Dropped { reason, .. } => Some(*reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reasons,
+        vec![
+            None,
+            None,
+            Some(DropReason::UnknownShape),
+            Some(DropReason::UnknownFrame)
+        ]
+    );
+    let check = step_of(&events, StepKind::ToolCheck).unwrap();
+    assert_eq!(check.value, "4 proposed, 2 dropped");
+    assert_eq!(check.evidence[3][1], "unknown_frame");
+    let drops: Vec<String> = logs(&events)
+        .iter()
+        .filter(|l| l.source == "tool.drop")
+        .map(|l| field(l, "reason").unwrap().to_string())
+        .collect();
+    assert_eq!(drops, vec!["unknown_shape", "unknown_frame"]);
+}
+
 #[test]
 fn record_keeps_tool_use() {
     let proposal = DiagramProposal {
@@ -1437,6 +1633,9 @@ async fn diagram_run_errs(
         &info(&settings),
         &Secrets::default(),
         &doc_req(),
+        &SourceStanding::default(),
+        None,
+        None,
         &disk,
         &emit,
     )
@@ -1555,9 +1754,13 @@ fn tool_record(changes: usize) -> AnswerRecord {
                 changes: (0..changes as u32)
                     .map(|index| ProposedChange {
                         index,
-                        op: DiagramOp::RemoveNode { target: "A".into() },
+                        op: DiagramOp::RemoveNode {
+                            target: "A".into(),
+                            frame: None,
+                        },
                         status: ChangeStatus::Ok,
                         depends_on: Vec::new(),
+                        frame: None,
                     })
                     .collect(),
             },
@@ -1689,4 +1892,1863 @@ async fn ask_is_one_per_place() {
     for t in [&first, &second, &other] {
         t.abort();
     }
+}
+
+// ---- Task 3: the board as Ask items ---------------------------------------------------
+
+/// A board Ask on `text`, one flow frame per title (each from its `flow "<title>"` line to
+/// the blank line before the next), 1,000 apart; shapes are the lines that are not lines.
+fn board_on(text: &str, titles: &[&str]) -> DiagramAskRequest {
+    let starts: Vec<usize> = titles
+        .iter()
+        .map(|t| text.find(&format!("flow \"{t}\"")).unwrap())
+        .collect();
+    let frames: Vec<BoardFrameInput> = titles
+        .iter()
+        .enumerate()
+        .map(|(k, t)| {
+            let from = starts[k];
+            let to = starts.get(k + 1).map_or(text.len(), |&s| s - 1);
+            let body = &text[from..to];
+            let line = text[..from].lines().count() as u32 + 1;
+            let shapes: Vec<OutlineNode> = body
+                .lines()
+                .skip(1)
+                .filter(|l| !l.is_empty() && !l.contains(" > ") && !l.starts_with("//"))
+                .map(|l| OutlineNode {
+                    name: l.into(),
+                    id: None,
+                    kind: None,
+                    group: None,
+                    line,
+                    table: false,
+                    columns: None,
+                })
+                .collect();
+            let links = body
+                .lines()
+                .filter(|l| l.contains(" > "))
+                .map(|l| {
+                    let (a, b) = l.split_once(" > ").unwrap();
+                    OutlineLink {
+                        from: a.into(),
+                        to: b.into(),
+                        label: None,
+                        line,
+                        from_column: None,
+                        to_column: None,
+                    }
+                })
+                .collect();
+            BoardFrameInput {
+                index: k as u32,
+                title: (*t).into(),
+                kind: Some("flow".into()),
+                from: from as u32,
+                to: to as u32,
+                line,
+                outline: FlowOutline {
+                    kind: Some("flowchart".into()),
+                    kinds: Vec::new(),
+                    nodes: shapes,
+                    groups: Vec::new(),
+                    links,
+                },
+                problems: Vec::new(),
+                r#box: BoxIn {
+                    x: k as i32 * 1000,
+                    y: 0,
+                    w: 300,
+                    h: 300,
+                },
+                clash: false,
+            }
+        })
+        .collect();
+    DiagramAskRequest {
+        text: text.into(),
+        outline: frames[0].outline.clone(),
+        question: "What is missing?".into(),
+        board: Some(BoardInput {
+            frames,
+            focus: Vec::new(),
+            selected: BoardSelected::default(),
+            sketches: Vec::new(),
+            create: None,
+            follow_up: None,
+            attachment: None,
+        }),
+        ..doc_req()
+    }
+}
+
+#[test]
+fn secrets_in_frames_problems_and_sketches_are_cleaned() {
+    let text = "flow \"Vault hunter2pass\"\nKey hunter2pass\n\nflow \"Refund\"\nPay\nRefund\nPay > Refund\n";
+    let mut req = board_on(text, &["Vault hunter2pass", "Refund"]);
+    let board = req.board.as_mut().unwrap();
+    board.selected = BoardSelected {
+        frame: Some("Refund".into()),
+        shapes: vec!["Pay hunter2pass".into()],
+        sketches: Vec::new(),
+    };
+    board.frames[1].problems = vec![FrameProblem {
+        line: 2,
+        message: "Pay hunter2pass is odd".into(),
+    }];
+    board.sketches = vec![SketchNote {
+        id: "n1".into(),
+        kind: "note".into(),
+        text: "the key is hunter2pass\u{200B}".into(),
+        at: PointIn { x: 10, y: 10 },
+        from: None,
+        points_at: None,
+        on: Some("Vault".into()),
+        near: None,
+    }];
+    let secrets = Secrets {
+        keys: Vec::new(),
+        passwords: vec!["hunter2pass".into()],
+    };
+    let p = run_preview(&AiSettings::default(), &secrets, &req).unwrap();
+    assert!(!p.exact.contains("hunter2pass"), "{}", p.exact);
+    assert!(!p.exact.contains('\u{200B}'));
+    // The frame, the problem and the note, each cleaned where it is sent.
+    let (_, items) = framed(&p.exact);
+    let texts: Vec<&str> = items.iter().map(|i| i["text"].as_str().unwrap()).collect();
+    assert!(
+        texts.iter().any(|t| t.contains("Key [redacted]")),
+        "{texts:?}"
+    );
+    assert!(texts.iter().any(|t| t.contains("Pay [redacted] is odd")));
+    assert!(texts.iter().any(|t| t.contains("the key is [redacted]")));
+    // A frame title (in the header) and a selected shape name too.
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.contains("\"Vault [redacted]\" (flow,")),
+        "{texts:?}"
+    );
+    assert!(texts.iter().any(|t| t.contains("shapes: Pay [redacted]")));
+    // The hash is of the board as the tab holds it.
+    assert!(
+        p.exact
+            .contains(&format!("base_hash: {}.", base_hash_of(text)))
+    );
+}
+
+#[test]
+fn the_board_preview_lists_each_frame_with_its_fit() {
+    let archive = format!("flow \"Archive\"\n// {}\nOld\n", "x".repeat(40_000));
+    let huge: String = (0..3_000).map(|i| format!("Old storage {i}\n")).collect();
+    let text = format!("{BOARD}\n{archive}\nflow \"Huge\"\n{huge}");
+    let req = board_on(&text, &["Checkout", "Refund", "Archive", "Huge"]);
+    let mut model = info(&groq());
+    model.context_window = 16_384;
+    let p = diagram_preview(
+        &AiSettings::default(),
+        &model,
+        &Secrets::default(),
+        &req,
+        &SourceStanding::default(),
+        None,
+        None,
+        &mut Log::new(),
+    )
+    .unwrap();
+    let lock = Some("The changes are written against this text");
+    let rows: Vec<(ItemKind, &str, Option<&str>, Option<&str>)> = p
+        .items
+        .iter()
+        .map(|i| {
+            (
+                i.kind,
+                i.label.as_str(),
+                i.locked.as_deref(),
+                i.fit.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (ItemKind::Question, "Question", None, None),
+            (ItemKind::Diagram, "Board", lock, None),
+            (
+                ItemKind::Diagram,
+                "\"Checkout\" (flow)",
+                lock,
+                Some("in full")
+            ),
+            (
+                ItemKind::Diagram,
+                "\"Refund\" (flow)",
+                lock,
+                Some("in full")
+            ),
+            (
+                ItemKind::Diagram,
+                "\"Archive\" (flow)",
+                lock,
+                Some("names only: over the budget")
+            ),
+            (
+                ItemKind::Diagram,
+                "\"Huge\" (flow)",
+                lock,
+                Some("left out: over the budget")
+            ),
+        ]
+    );
+    // A left-out frame is a row of 0 bytes; the whole text is never one item.
+    assert_eq!(p.items[5].bytes, 0);
+    assert!((p.total_bytes as usize) < text.len() / 2);
+    let steps: Vec<StepKind> = p.steps.iter().map(|s| s.step).collect();
+    assert_eq!(
+        steps,
+        vec![
+            StepKind::Diagram,
+            StepKind::BoardContext,
+            StepKind::Cleaning
+        ]
+    );
+    let board = &p.steps[1];
+    assert_eq!(board.value, "2 in full, 1 as names, 1 left out");
+    let fits: Vec<&str> = board.evidence.iter().map(|e| e[1].as_str()).collect();
+    assert_eq!(
+        fits,
+        vec![
+            "in full",
+            "in full",
+            "names only: over the budget",
+            "left out: over the budget"
+        ]
+    );
+    // No titles in the Steps row.
+    for cell in board.evidence.iter().flatten().chain([&board.value]) {
+        for title in ["Checkout", "Refund", "Archive", "Huge"] {
+            assert!(!cell.contains(title), "{cell}");
+        }
+    }
+}
+
+/// A5's board at the limit, as `bigBoard.ts` writes it.
+fn big_frame(k: usize) -> String {
+    let mut lines = vec![format!("diagram flow \"Area {k}\""), String::new()];
+    for (g, side) in ["Left", "Right"].iter().enumerate() {
+        lines.push(format!("{side} {k} {{"));
+        for i in 0..99 {
+            lines.push(format!("  Step {}", g * 99 + i));
+        }
+        lines.push("}".into());
+    }
+    for i in 0..300 {
+        lines.push(format!(
+            "Step {} > Step {}: go {i}",
+            i % 198,
+            (i * 7 + 1) % 198
+        ));
+    }
+    format!("{}\n", lines.join("\n"))
+}
+
+fn limit_req() -> DiagramAskRequest {
+    let bodies: Vec<String> = (0..50).map(big_frame).collect();
+    let text = bodies.join("\n");
+    let mut at = 0usize;
+    let frames: Vec<BoardFrameInput> = bodies
+        .iter()
+        .enumerate()
+        .map(|(k, body)| {
+            let from = at;
+            at += body.len() + 1;
+            BoardFrameInput {
+                index: k as u32,
+                title: format!("Area {k}"),
+                kind: Some("flow".into()),
+                from: from as u32,
+                to: (from + body.len()) as u32,
+                line: 1,
+                outline: FlowOutline {
+                    kind: Some("flow".into()),
+                    kinds: Vec::new(),
+                    nodes: (0..198)
+                        .map(|i| OutlineNode {
+                            name: format!("Step {i}"),
+                            id: None,
+                            kind: None,
+                            group: None,
+                            line: 3,
+                            table: false,
+                            columns: None,
+                        })
+                        .collect(),
+                    groups: Vec::new(),
+                    links: (0..300)
+                        .map(|i| OutlineLink {
+                            from: format!("Step {}", i % 198),
+                            to: format!("Step {}", (i * 7 + 1) % 198),
+                            label: Some(format!("go {i}")),
+                            line: 3,
+                            from_column: None,
+                            to_column: None,
+                        })
+                        .collect(),
+                },
+                problems: Vec::new(),
+                r#box: BoxIn {
+                    x: k as i32 * 5200,
+                    y: 0,
+                    w: 4700,
+                    h: 1000,
+                },
+                clash: false,
+            }
+        })
+        .collect();
+    DiagramAskRequest {
+        text,
+        outline: frames[25].outline.clone(),
+        question: "Which areas loop back?".into(),
+        board: Some(BoardInput {
+            frames,
+            focus: vec!["Area 25".into()],
+            selected: BoardSelected::default(),
+            sketches: Vec::new(),
+            create: None,
+            follow_up: None,
+            attachment: None,
+        }),
+        ..doc_req()
+    }
+}
+
+#[tokio::test]
+async fn a_limit_board_at_budget_passes_the_window_check() {
+    let req = limit_req();
+    let mut model = info(&groq());
+    model.context_window = 32_768;
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let events = Mutex::new(Vec::new());
+    let emit = |e: AiEvent| events.lock().unwrap().push(e);
+    let text = req.text.clone();
+    let disk = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
+        let got = Ok(text.clone());
+        Box::pin(async move { got })
+    };
+    let result = diagram_ask_stream(
+        &provider,
+        &groq(),
+        &model,
+        &Secrets::default(),
+        &req,
+        &SourceStanding::default(),
+        None,
+        None,
+        &disk,
+        &emit,
+    )
+    .await;
+    let events = events.into_inner().unwrap();
+    assert!(error_of(&events).is_none(), "{:?}", events.last());
+    result.unwrap();
+    let sent = events
+        .iter()
+        .find_map(|e| match e {
+            AiEvent::Sent(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(sent.tokens + 4_096 <= 32_768, "{}", sent.tokens);
+    let board = step_of(&events, StepKind::BoardContext).unwrap();
+    assert_eq!(board.evidence[25][1], "in full");
+    // The board prompt went as the system prompt.
+    let seen = provider.seen.lock().unwrap();
+    assert!(seen[0].system[0].text.contains("one .flow board file"));
+}
+
+// ---- follow-ups, history and attachments (Task 4) -------------------------------------
+
+fn logged_drops(events: &[AiEvent]) -> Vec<(String, String)> {
+    logs(events)
+        .into_iter()
+        .filter(|l| l.source == "tool.drop")
+        .map(|l| {
+            (
+                field(l, "index").unwrap_or_default().to_string(),
+                field(l, "reason").unwrap_or_default().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn follow_ups(events: &[AiEvent]) -> Vec<&str> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            AiEvent::FollowUp { question } => Some(question.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_follow_up_call_shows_no_proposal() {
+    let call = |base_hash: &str, question: &str| ProviderEvent::ToolCall {
+        name: TOOL_NAME.into(),
+        input: serde_json::json!({
+            "file": "orders",
+            "base_hash": base_hash,
+            "ops": [
+                { "remove_node": { "target": "Ship" } },
+                { "add_node": { "name": "Wrap" } }
+            ],
+            "follow_up": { "question": question }
+        })
+        .to_string(),
+    };
+    let provider = ScriptedProvider::new(vec![
+        said(),
+        Ok(call(
+            &base_hash_of(DOC),
+            " Which\u{200B} step do you mean? ",
+        )),
+        end(),
+    ]);
+    let (events, result, reads) = diagram_run(&provider, &groq(), &doc_req(), &[Some(DOC)]).await;
+    result.unwrap();
+    assert!(proposals(&events).is_empty());
+    assert_eq!(follow_ups(&events), vec!["Which step do you mean?"]);
+    // The ops are ignored and logged by code; the file is not read again.
+    assert_eq!(
+        logged_drops(&events),
+        vec![
+            ("0".to_string(), "asked_first".to_string()),
+            ("1".to_string(), "asked_first".to_string())
+        ]
+    );
+    assert_eq!(reads, 1);
+    assert!(step_of(&events, StepKind::ToolCheck).is_none());
+    // The question comes after the answer text and before Done.
+    let at = |f: &dyn Fn(&AiEvent) -> bool| events.iter().position(f).unwrap();
+    assert!(
+        at(&|e| matches!(e, AiEvent::Delta { .. }))
+            < at(&|e| matches!(e, AiEvent::FollowUp { .. }))
+    );
+    assert!(matches!(events.last(), Some(AiEvent::Done { .. })));
+
+    // A follow-up with only the question (no ops) reads, cut to 300 characters.
+    let long = "q".repeat(400);
+    let only = ProviderEvent::ToolCall {
+        name: TOOL_NAME.into(),
+        input: serde_json::json!({
+            "file": "orders",
+            "base_hash": base_hash_of(DOC),
+            "follow_up": { "question": long }
+        })
+        .to_string(),
+    };
+    let provider = ScriptedProvider::new(vec![Ok(only), end()]);
+    let (events, result, _) = diagram_run(&provider, &groq(), &doc_req(), &[Some(DOC)]).await;
+    result.unwrap();
+    assert_eq!(follow_ups(&events), vec!["q".repeat(300).as_str()]);
+    assert!(logged_drops(&events).is_empty());
+
+    // A blank question asks nothing: the ops are a proposal as usual.
+    let provider = ScriptedProvider::new(vec![Ok(call(&base_hash_of(DOC), " \u{200B} ")), end()]);
+    let (events, result, _) = diagram_run(&provider, &groq(), &doc_req(), &[Some(DOC)]).await;
+    result.unwrap();
+    assert!(follow_ups(&events).is_empty());
+    assert_eq!(proposals(&events).len(), 1);
+
+    // The hash and the file are still checked.
+    let provider = ScriptedProvider::new(vec![Ok(call("0000", "Which one?")), end()]);
+    let (events, _, _) = diagram_run(&provider, &groq(), &doc_req(), &[Some(DOC)]).await;
+    assert_eq!(error_of(&events), Some(&AiError::BadToolInput));
+    assert!(follow_ups(&events).is_empty());
+
+    // The tool offers the follow-up, at most 300 characters.
+    let tool = tool_for(ToolsAllowed::DiagramTool).unwrap();
+    let schema = serde_json::to_value(&tool).unwrap();
+    let text = schema.to_string();
+    assert!(text.contains("\"follow_up\""), "{text}");
+    assert!(text.contains("\"maxLength\":300"), "{text}");
+    // The event as the webview reads it.
+    let e = serde_json::to_value(AiEvent::FollowUp {
+        question: "Which?".into(),
+    })
+    .unwrap();
+    assert_eq!(
+        e,
+        serde_json::json!({ "type": "followUp", "question": "Which?" })
+    );
+}
+
+#[tokio::test]
+async fn a_reply_goes_in_the_turn() {
+    let secrets = Secrets {
+        keys: Vec::new(),
+        passwords: vec!["hunter2pass".into()],
+    };
+    let mut req = board_req();
+    req.board.as_mut().unwrap().follow_up = Some(FollowUpReply {
+        asked: "Which frame\u{200B} do you mean?".into(),
+        reply: "The refund one, key hunter2pass".into(),
+    });
+    let p = run_preview(&AiSettings::default(), &secrets, &req).unwrap();
+    assert!(
+        p.parts.turn.ends_with(
+            "Question: Drop Pay from the refund\n\nYou asked: Which frame do you mean?\nThe user replied: The refund one, key [redacted]"
+        ),
+        "{}",
+        p.parts.turn
+    );
+    assert!(!p.exact.contains("hunter2pass"));
+    // The question row counts the reply: it is what Sends shows.
+    let q = p
+        .items
+        .iter()
+        .find(|i| i.kind == ItemKind::Question)
+        .unwrap();
+    assert!(q.bytes as usize > "Drop Pay from the refund".len());
+
+    // A blank reply leaves the choice to the model.
+    req.board.as_mut().unwrap().follow_up = Some(FollowUpReply {
+        asked: "Which frame?".into(),
+        reply: "  \n ".into(),
+    });
+    let p = run_preview(&AiSettings::default(), &secrets, &req).unwrap();
+    assert!(
+        p.parts
+            .turn
+            .ends_with("You asked: Which frame?\nThe user replied: Choose something sensible."),
+        "{}",
+        p.parts.turn
+    );
+    // The Ask sends the same turn.
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (events, result, _) = diagram_run(&provider, &groq(), &req, &[Some(BOARD)]).await;
+    result.unwrap();
+    assert!(error_of(&events).is_none());
+    let seen = provider.seen.lock().unwrap();
+    assert!(
+        seen[0].messages[0]
+            .text
+            .ends_with("You asked: Which frame?\nThe user replied: Choose something sensible.")
+    );
+    // Without a follow-up the turn ends at the question.
+    let p = run_preview(&AiSettings::default(), &secrets, &board_req()).unwrap();
+    assert!(p.parts.turn.ends_with("Question: Drop Pay from the refund"));
+}
+
+fn history_thread(place: &str) -> AiThread {
+    let m = |role, text: &str, at| AiMessage {
+        role,
+        text: text.into(),
+        context: Vec::new(),
+        at,
+        record: None,
+        topic: None,
+        connection_id: None,
+        database: None,
+        kinds: Vec::new(),
+        tables: Vec::new(),
+        action: None,
+        asked_in: None,
+    };
+    AiThread {
+        id: uuid::Uuid::new_v4(),
+        place: place.into(),
+        title: "Orders".into(),
+        messages: vec![
+            m(AiRole::User, "What does Pack order do?", 1),
+            m(AiRole::Assistant, "It boxes the items.", 2),
+            m(AiRole::User, "Use key hunter2pass\u{200B} to ship", 3),
+            m(AiRole::Assistant, "Noted.", 4),
+        ],
+        updated_at: 4,
+        title_by: Default::default(),
+        title_tries: 0,
+        last_work: None,
+    }
+}
+
+#[tokio::test]
+async fn the_preview_and_the_ask_send_the_same_history() {
+    let settings = AiSettings {
+        keep_exact_text: true,
+        ..groq()
+    };
+    let secrets = Secrets {
+        keys: Vec::new(),
+        passwords: vec!["hunter2pass".into()],
+    };
+    let thread = history_thread("diagram:orders");
+    let req = doc_req();
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let events = Mutex::new(Vec::new());
+    let emit = |e: AiEvent| events.lock().unwrap().push(e);
+    let disk = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
+        Box::pin(async { Ok(DOC.to_string()) })
+    };
+    diagram_ask_stream(
+        &provider,
+        &settings,
+        &info(&settings),
+        &secrets,
+        &req,
+        &SourceStanding::default(),
+        Some(&thread),
+        None,
+        &disk,
+        &emit,
+    )
+    .await
+    .unwrap();
+    let preview = diagram_preview(
+        &settings,
+        &info(&settings),
+        &secrets,
+        &req,
+        &SourceStanding::default(),
+        Some(&thread),
+        None,
+        &mut Log::new(),
+    )
+    .unwrap();
+    let seen = provider.seen.lock().unwrap();
+    let sent_turn = &seen[0].messages[0].text;
+    let (theirs, _) = framed(sent_turn);
+    let (ours, items) = framed(&preview.parts.turn);
+    assert_eq!(preview.parts.turn.replace(&ours, &theirs), *sent_turn);
+    // One framed history item, cleaned, before the diagram.
+    let history: Vec<&serde_json::Value> =
+        items.iter().filter(|i| i["source"] == "history").collect();
+    assert_eq!(history.len(), 1);
+    assert_eq!(
+        history[0]["text"],
+        "Asked: What does Pack order do?\nAnswered: It boxes the items.\nAsked: Use key [redacted] to ship\nAnswered: Noted."
+    );
+    let sources: Vec<&str> = items
+        .iter()
+        .map(|i| i["source"].as_str().unwrap())
+        .collect();
+    assert_eq!(sources, vec!["history", "diagram"]);
+    // Sends shows it as one row; the Sent record and the stamp name it.
+    let row = preview
+        .items
+        .iter()
+        .find(|i| i.kind == ItemKind::History)
+        .unwrap();
+    assert_eq!(row.label, "Thread · 2 turns");
+    assert!(row.bytes > 0);
+    let events = events.into_inner().unwrap();
+    let sent = events
+        .iter()
+        .find_map(|e| match e {
+            AiEvent::Sent(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        sent.kinds,
+        vec![ItemKind::Question, ItemKind::History, ItemKind::Diagram]
+    );
+    assert!(!sent.exact.unwrap().contains("hunter2pass"));
+    assert!(preview.stamp.kinds.contains(&ItemKind::History));
+
+    // Another place's thread sends nothing, in the preview and the Ask alike.
+    let other = history_thread("diagram:refunds");
+    let p = diagram_preview(
+        &settings,
+        &info(&settings),
+        &secrets,
+        &req,
+        &SourceStanding::default(),
+        Some(&other),
+        None,
+        &mut Log::new(),
+    )
+    .unwrap();
+    assert!(p.items.iter().all(|i| i.kind != ItemKind::History));
+    assert!(!p.exact.contains("Pack order do?"));
+}
+
+fn spec(text: &str) -> Attachment {
+    Attachment {
+        name: "spec\u{200B}.md".into(),
+        text: text.into(),
+    }
+}
+
+fn attachment_text(p: &Preview) -> String {
+    let (_, items) = framed(&p.exact);
+    let found: Vec<&serde_json::Value> = items
+        .iter()
+        .filter(|i| i["source"] == "attachment")
+        .collect();
+    assert_eq!(found.len(), 1, "{items:?}");
+    found[0]["text"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn an_attachment_is_cleaned_and_framed() {
+    let secrets = Secrets {
+        keys: Vec::new(),
+        passwords: vec!["hunter2pass".into()],
+    };
+    let req = board_req();
+    let a = spec("Login uses hunter2pass\u{200B}\nThen Pay.\n");
+    let p = diagram_preview(
+        &AiSettings::default(),
+        &info(&groq()),
+        &secrets,
+        &req,
+        &SourceStanding::default(),
+        None,
+        Some(&a),
+        &mut Log::new(),
+    )
+    .unwrap();
+    assert_eq!(attachment_text(&p), "Login uses [redacted]\nThen Pay.\n");
+    assert!(!p.exact.contains("hunter2pass") && !p.exact.contains('\u{200B}'));
+    // Its own Sends row, named by the file, before the board.
+    let row = p
+        .items
+        .iter()
+        .position(|i| i.kind == ItemKind::Attachment)
+        .unwrap();
+    assert_eq!(p.items[row].label, "spec.md");
+    assert!(p.items[row].locked.is_none() && p.items[row].on);
+    let board = p.items.iter().position(|i| i.label == "Board").unwrap();
+    assert!(row < board);
+    assert!(p.stamp.kinds.contains(&ItemKind::Attachment));
+    assert!(p.notes.iter().all(|n| !n.contains("spec")));
+    // The Cleaning row names it.
+    let cleaning = p
+        .steps
+        .iter()
+        .find(|s| s.step == StepKind::Cleaning)
+        .unwrap();
+    assert!(
+        cleaning.evidence.iter().any(|r| r[0] == "spec.md"),
+        "{:?}",
+        cleaning.evidence
+    );
+}
+
+#[test]
+fn an_attachment_past_its_share_is_cut_with_a_note() {
+    let req = board_req();
+    let mut model = info(&groq());
+    model.context_window = 16_384;
+    let lines: String = (0..2_000)
+        .map(|i| format!("Spec line {i} of the checkout\n"))
+        .collect();
+    let a = spec(&lines);
+    let p = diagram_preview(
+        &AiSettings::default(),
+        &model,
+        &Secrets::default(),
+        &req,
+        &SourceStanding::default(),
+        None,
+        Some(&a),
+        &mut Log::new(),
+    )
+    .unwrap();
+    let sent = attachment_text(&p);
+    let (kept, marker) = sent.rsplit_once('\n').unwrap();
+    let kept = format!("{kept}\n");
+    // Cut at a line end, from the start of the file.
+    assert!(lines.starts_with(&kept));
+    assert!(kept.len() < lines.len());
+    let kb = (kept.len() + 512) / 1024;
+    assert_eq!(
+        marker,
+        format!("[cut to fit: the first {kb} KB of spec.md]")
+    );
+    assert!(
+        p.notes
+            .contains(&format!("Sent the first {kb} KB of spec.md.")),
+        "{:?}",
+        p.notes
+    );
+    // Within a third of the board budget, and the board still goes.
+    let budget = contura_core::ai::board::board_budget(16_384, 4_096, 0);
+    let tokens =
+        contura_core::ai::budget::estimate_tokens(&serde_json::to_string(&sent).unwrap(), false);
+    assert!(tokens <= budget / 3, "{tokens} > {}", budget / 3);
+    assert!(
+        p.items
+            .iter()
+            .filter(|i| i.fit.as_deref() == Some("in full"))
+            .count()
+            == 2
+    );
+
+    // A small one is sent whole, with no note.
+    let p = diagram_preview(
+        &AiSettings::default(),
+        &model,
+        &Secrets::default(),
+        &req,
+        &SourceStanding::default(),
+        None,
+        Some(&spec("One line\n")),
+        &mut Log::new(),
+    )
+    .unwrap();
+    assert_eq!(attachment_text(&p), "One line\n");
+    assert!(p.notes.iter().all(|n| !n.starts_with("Sent the first")));
+}
+
+// ---- fix round 1: a held file survives a failed Ask, a stale token says so -------------
+
+/// A board Ask with `token` as its attachment, run with `slot`; the events, the result and
+/// how often the disk was read.
+async fn attached_run(
+    provider: &ScriptedProvider,
+    req: &DiagramAskRequest,
+    slot: &Mutex<AttachmentSlot>,
+    reads: &[&str],
+) -> (Vec<AiEvent>, Result<()>, usize) {
+    let events = Mutex::new(Vec::new());
+    let emit = |e: AiEvent| events.lock().unwrap().push(e);
+    let count = AtomicUsize::new(0);
+    let reads: Vec<String> = reads.iter().map(|r| r.to_string()).collect();
+    let disk = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
+        let n = count.fetch_add(1, Ordering::SeqCst);
+        let got = Ok(reads[n.min(reads.len() - 1)].clone());
+        Box::pin(async move { got })
+    };
+    let settings = groq();
+    let result = diagram_ask_attached(
+        provider,
+        &settings,
+        &info(&settings),
+        &Secrets::default(),
+        req,
+        &SourceStanding::default(),
+        None,
+        slot,
+        &disk,
+        &emit,
+    )
+    .await;
+    (
+        events.into_inner().unwrap(),
+        result,
+        count.load(Ordering::SeqCst),
+    )
+}
+
+fn with_token(token: Option<&str>) -> DiagramAskRequest {
+    let mut req = board_req();
+    req.board.as_mut().unwrap().attachment = token.map(str::to_string);
+    req
+}
+
+#[tokio::test]
+async fn a_stale_token_refuses_the_ask_and_the_preview() {
+    let slot = Mutex::new(AttachmentSlot::default());
+    let old = slot.lock().unwrap().put(spec("Board A notes\n"));
+    // A pick on another board replaces it: the old token is stale.
+    let new = slot.lock().unwrap().put(spec("Board B notes\n"));
+    let gone = |r: Result<Option<Attachment>>| match r {
+        Err(Error::Ai(AiError::AttachmentGone)) => {}
+        other => panic!("{other:?}"),
+    };
+    // The preview's look: refused, never silently empty.
+    gone(attachment_for(&slot.lock().unwrap(), Some(&old), false));
+    assert_eq!(
+        attachment_for(&slot.lock().unwrap(), Some(&new), false).unwrap(),
+        Some(spec("Board B notes\n"))
+    );
+    assert_eq!(
+        attachment_for(&slot.lock().unwrap(), None, false).unwrap(),
+        None
+    );
+    assert_eq!(
+        AiError::AttachmentGone.to_string(),
+        "the attached file is no longer held"
+    );
+    assert_eq!(
+        serde_json::to_value(AiError::AttachmentGone).unwrap(),
+        serde_json::json!({ "kind": "attachmentGone" })
+    );
+
+    // The Ask: refused before anything is built, read or sent.
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (events, result, reads) =
+        attached_run(&provider, &with_token(Some(&old)), &slot, &[BOARD]).await;
+    assert!(matches!(result, Err(Error::Ai(AiError::AttachmentGone))));
+    assert_eq!(error_of(&events), Some(&AiError::AttachmentGone));
+    assert!(provider.seen.lock().unwrap().is_empty());
+    assert_eq!(reads, 0);
+    // The newer file is untouched.
+    assert!(slot.lock().unwrap().peek(&new).is_some());
+}
+
+#[tokio::test]
+async fn a_failed_ask_keeps_the_attachment() {
+    let slot = Mutex::new(AttachmentSlot::default());
+    let token = slot.lock().unwrap().put(spec("Login first\n"));
+    let req = with_token(Some(&token));
+
+    // The provider fails: the file stays under the same token.
+    let provider = ScriptedProvider::new(vec![Err(AiError::BadResponse)]);
+    let (events, result, _) = attached_run(&provider, &req, &slot, &[BOARD]).await;
+    assert!(result.is_err());
+    assert!(error_of(&events).is_some());
+    assert!(slot.lock().unwrap().peek(&token).is_some());
+
+    // The file changed on disk while the model worked: kept too.
+    let call = ProviderEvent::ToolCall {
+        name: TOOL_NAME.into(),
+        input: serde_json::json!({
+            "file": "orders",
+            "base_hash": base_hash_of(BOARD),
+            "ops": [{ "remove_node": { "frame": "Refund", "target": "Pay" } }]
+        })
+        .to_string(),
+    };
+    let provider = ScriptedProvider::new(vec![said(), Ok(call), end()]);
+    let changed = format!("{BOARD}// edited\n");
+    let (events, result, _) =
+        attached_run(&provider, &req, &slot, &[BOARD, changed.as_str()]).await;
+    assert!(result.is_err());
+    assert!(matches!(
+        error_of(&events),
+        Some(AiError::FileChanged { .. })
+    ));
+    assert!(slot.lock().unwrap().peek(&token).is_some());
+
+    // An Ask that ends well sent the file and empties the slot.
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (events, result, _) = attached_run(&provider, &req, &slot, &[BOARD]).await;
+    result.unwrap();
+    assert!(error_of(&events).is_none());
+    assert!(
+        provider.seen.lock().unwrap()[0].messages[0]
+            .text
+            .contains("{\"source\":\"attachment\",\"text\":\"Login first\\n\"}")
+    );
+    assert!(slot.lock().unwrap().peek(&token).is_none());
+
+    // A file picked while that Ask ran is not the one it empties.
+    let first = slot.lock().unwrap().put(spec("One\n"));
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let req = with_token(Some(&first));
+    let events = Mutex::new(Vec::new());
+    let second = Mutex::new(None);
+    let emit = |e: AiEvent| {
+        if matches!(e, AiEvent::Sent(_)) {
+            *second.lock().unwrap() = Some(slot.lock().unwrap().put(spec("Two\n")));
+        }
+        events.lock().unwrap().push(e);
+    };
+    let disk = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
+        Box::pin(async { Ok(BOARD.to_string()) })
+    };
+    let settings = groq();
+    diagram_ask_attached(
+        &provider,
+        &settings,
+        &info(&settings),
+        &Secrets::default(),
+        &req,
+        &SourceStanding::default(),
+        None,
+        &slot,
+        &disk,
+        &emit,
+    )
+    .await
+    .unwrap();
+    let second = second.into_inner().unwrap().unwrap();
+    let held = slot.lock().unwrap();
+    assert!(held.peek(&first).is_none());
+    assert_eq!(held.peek(&second), Some(&spec("Two\n")));
+    drop(held);
+}
+
+// ---- Task 18: a follow-up keeps the attached file for its reply only ------------------------
+
+/// The model's call that asks `question` first, on `BOARD`.
+fn asks_back(question: &str) -> std::result::Result<ProviderEvent, AiError> {
+    Ok(ProviderEvent::ToolCall {
+        name: TOOL_NAME.into(),
+        input: serde_json::json!({
+            "file": "orders",
+            "base_hash": base_hash_of(BOARD),
+            "ops": [],
+            "follow_up": { "question": question }
+        })
+        .to_string(),
+    })
+}
+
+/// `with_token`, as the reply to `asked`.
+fn reply_with_token(token: &str, asked: &str) -> DiagramAskRequest {
+    let mut req = with_token(Some(token));
+    req.board.as_mut().unwrap().follow_up = Some(FollowUpReply {
+        asked: asked.into(),
+        reply: "The checkout one".into(),
+    });
+    req
+}
+
+const ATTACHED: &str = "{\"source\":\"attachment\",\"text\":\"Login first\\n\"}";
+
+#[tokio::test]
+async fn a_follow_up_keeps_the_attachment_for_its_reply_only() {
+    let slot = Mutex::new(AttachmentSlot::default());
+    let token = slot.lock().unwrap().put(spec("Login first\n"));
+
+    // The model asks back: the Ask ended well, but the file is not used up.
+    let provider = ScriptedProvider::new(vec![said(), asks_back("Which flow?"), end()]);
+    let (events, result, _) =
+        attached_run(&provider, &with_token(Some(&token)), &slot, &[BOARD]).await;
+    result.unwrap();
+    assert_eq!(follow_ups(&events), vec!["Which flow?"]);
+    assert!(slot.lock().unwrap().peek(&token).is_some());
+    // It is held for the reply only: a new question, or the preview of one, cannot name it.
+    assert!(matches!(
+        attachment_for(&slot.lock().unwrap(), Some(&token), false),
+        Err(Error::Ai(AiError::AttachmentGone))
+    ));
+    assert_eq!(
+        attachment_for(&slot.lock().unwrap(), Some(&token), true).unwrap(),
+        Some(spec("Login first\n"))
+    );
+
+    // The model asks again: still held for the next reply.
+    let provider = ScriptedProvider::new(vec![said(), asks_back("Which step?"), end()]);
+    let (_, result, _) = attached_run(
+        &provider,
+        &reply_with_token(&token, "Which flow?"),
+        &slot,
+        &[BOARD],
+    )
+    .await;
+    result.unwrap();
+    assert!(
+        provider.seen.lock().unwrap()[0].messages[0]
+            .text
+            .contains(ATTACHED)
+    );
+    assert!(slot.lock().unwrap().peek(&token).is_some());
+
+    // The reply that gets its answer sends the same text, from memory, and uses the file up.
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (events, result, reads) = attached_run(
+        &provider,
+        &reply_with_token(&token, "Which step?"),
+        &slot,
+        &[BOARD],
+    )
+    .await;
+    result.unwrap();
+    assert!(error_of(&events).is_none());
+    let seen = provider.seen.lock().unwrap()[0].messages[0].text.clone();
+    assert!(seen.contains(ATTACHED), "{seen}");
+    assert!(
+        seen.contains("The user replied: The checkout one"),
+        "{seen}"
+    );
+    // Only the diagram is read from disk; the attached file never is.
+    assert_eq!(reads, 1);
+    assert!(slot.lock().unwrap().peek(&token).is_none());
+}
+
+#[tokio::test]
+async fn a_new_question_ends_the_attachment_held_for_a_reply() {
+    let slot = Mutex::new(AttachmentSlot::default());
+    let token = slot.lock().unwrap().put(spec("Login first\n"));
+    let provider = ScriptedProvider::new(vec![said(), asks_back("Which flow?"), end()]);
+    let (_, result, _) = attached_run(&provider, &with_token(Some(&token)), &slot, &[BOARD]).await;
+    result.unwrap();
+    assert!(slot.lock().unwrap().peek(&token).is_some());
+
+    // A new question (no reply) means the follow-up was left: the held file goes.
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (_, result, _) = attached_run(&provider, &with_token(None), &slot, &[BOARD]).await;
+    result.unwrap();
+    assert!(slot.lock().unwrap().peek(&token).is_none());
+    let seen = provider.seen.lock().unwrap()[0].messages[0].text.clone();
+    assert!(!seen.contains("Login first"), "{seen}");
+
+    // A late reply naming it is refused, never sent without its file.
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (events, result, reads) = attached_run(
+        &provider,
+        &reply_with_token(&token, "Which flow?"),
+        &slot,
+        &[BOARD],
+    )
+    .await;
+    assert!(matches!(result, Err(Error::Ai(AiError::AttachmentGone))));
+    assert_eq!(error_of(&events), Some(&AiError::AttachmentGone));
+    assert!(provider.seen.lock().unwrap().is_empty());
+    assert_eq!(reads, 0);
+
+    // A fresh pick is not a reply's: a new question takes it as before.
+    let fresh = slot.lock().unwrap().put(spec("Login first\n"));
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (_, result, _) = attached_run(&provider, &with_token(Some(&fresh)), &slot, &[BOARD]).await;
+    result.unwrap();
+    assert!(
+        provider.seen.lock().unwrap()[0].messages[0]
+            .text
+            .contains(ATTACHED)
+    );
+    assert!(slot.lock().unwrap().peek(&fresh).is_none());
+}
+
+#[test]
+fn the_slot_holds_a_reply_file_until_it_is_taken_or_ended() {
+    let mut slot = AttachmentSlot::default();
+    let token = slot.put(spec("a\n"));
+    // A fresh pick is not ended by a new question.
+    slot.end_reply_hold();
+    assert!(slot.peek(&token).is_some());
+    // Kept for a reply: a stale token marks nothing.
+    slot.keep_for_reply("nope");
+    assert!(
+        attachment_for(&slot, Some(&token), false)
+            .unwrap()
+            .is_some()
+    );
+    slot.keep_for_reply(&token);
+    assert!(attachment_for(&slot, Some(&token), false).is_err());
+    slot.end_reply_hold();
+    assert!(slot.peek(&token).is_none());
+    // Removing the chip (take) drops a reply's file too.
+    let token = slot.put(spec("b\n"));
+    slot.keep_for_reply(&token);
+    assert_eq!(slot.take(&token), Some(spec("b\n")));
+    assert!(slot.peek(&token).is_none());
+}
+
+// ---- Task 18 fix round 1: a reply's record names the file; a held refusal ends a reply hold --
+
+/// A board Ask under `settings` with the file `req`'s token names, from `slot`.
+async fn attached_run_in(
+    provider: &ScriptedProvider,
+    settings: &AiSettings,
+    req: &DiagramAskRequest,
+    slot: &Mutex<AttachmentSlot>,
+) -> (Vec<AiEvent>, Result<()>) {
+    let events = Mutex::new(Vec::new());
+    let emit = |e: AiEvent| events.lock().unwrap().push(e);
+    let disk = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
+        Box::pin(async { Ok(BOARD.to_string()) })
+    };
+    let result = diagram_ask_attached(
+        provider,
+        settings,
+        &info(settings),
+        &Secrets::default(),
+        req,
+        &SourceStanding::default(),
+        None,
+        slot,
+        &disk,
+        &emit,
+    )
+    .await;
+    (events.into_inner().unwrap(), result)
+}
+
+/// The exact text an Ask's Sent record keeps.
+fn kept_exact(events: &[AiEvent]) -> Option<String> {
+    events.iter().find_map(|e| match e {
+        AiEvent::Sent(s) => s.exact.clone(),
+        _ => None,
+    })
+}
+
+#[tokio::test]
+async fn a_reply_record_names_the_attachment_instead_of_repeating_it() {
+    let keep = AiSettings {
+        keep_exact_text: true,
+        ..groq()
+    };
+    let slot = Mutex::new(AttachmentSlot::default());
+    let token = slot.lock().unwrap().put(spec("Login first\n"));
+
+    // The first turn keeps what Task 4 decided: the file's text once, in the exact text
+    // kept with "Keep the exact text sent" on, and nowhere else.
+    let provider = ScriptedProvider::new(vec![said(), asks_back("Which flow?"), end()]);
+    let (events, result) =
+        attached_run_in(&provider, &keep, &with_token(Some(&token)), &slot).await;
+    result.unwrap();
+    assert_eq!(kept_exact(&events).unwrap().matches(ATTACHED).count(), 1);
+    assert_eq!(format!("{events:?}").matches("Login first").count(), 1);
+
+    // The reply sends the file again, but its record names the earlier turn's file.
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (events, result) = attached_run_in(
+        &provider,
+        &keep,
+        &reply_with_token(&token, "Which flow?"),
+        &slot,
+    )
+    .await;
+    result.unwrap();
+    let seen = provider.seen.lock().unwrap()[0].messages[0].text.clone();
+    assert!(seen.contains(ATTACHED), "{seen}");
+    let exact = kept_exact(&events).unwrap();
+    assert!(
+        exact.contains(
+            "{\"source\":\"attachment\",\"text\":\"[the same file as in the earlier turn: spec.md]\"}"
+        ),
+        "{exact}"
+    );
+    assert!(!format!("{events:?}").contains("Login first"));
+
+    // With the exact text not kept, neither turn's record holds the file's text.
+    let slot = Mutex::new(AttachmentSlot::default());
+    let token = slot.lock().unwrap().put(spec("Login first\n"));
+    let provider = ScriptedProvider::new(vec![said(), asks_back("Which flow?"), end()]);
+    let (events, result) =
+        attached_run_in(&provider, &groq(), &with_token(Some(&token)), &slot).await;
+    result.unwrap();
+    assert!(kept_exact(&events).is_none());
+    assert!(!format!("{events:?}").contains("Login first"));
+
+    // A file picked fresh and sent with a reply was never sent before: it is kept whole.
+    let slot = Mutex::new(AttachmentSlot::default());
+    let fresh = slot.lock().unwrap().put(spec("Login first\n"));
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (events, result) = attached_run_in(
+        &provider,
+        &keep,
+        &reply_with_token(&fresh, "Which flow?"),
+        &slot,
+    )
+    .await;
+    result.unwrap();
+    assert!(kept_exact(&events).unwrap().contains(ATTACHED));
+}
+
+#[tokio::test]
+async fn a_held_refusal_ends_an_attachment_held_for_a_reply() {
+    // A reply refused on a held board: the file kept for it goes, and nothing is sent.
+    let slot = Mutex::new(AttachmentSlot::default());
+    let token = slot.lock().unwrap().put(spec("Login first\n"));
+    let provider = ScriptedProvider::new(vec![said(), asks_back("Which flow?"), end()]);
+    let (_, result, _) = attached_run(&provider, &with_token(Some(&token)), &slot, &[BOARD]).await;
+    result.unwrap();
+    assert!(slot.lock().unwrap().peek(&token).is_some());
+    let reply = drawn_from(reply_with_token(&token, "Which flow?"), "Checkout", PROD);
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (_, result, reads) =
+        attached_run_standing(&provider, &reply, &slot, &[BOARD], &standing()).await;
+    assert!(matches!(
+        result,
+        Err(Error::Ai(AiError::DiagramHeld { .. }))
+    ));
+    assert!(provider.seen.lock().unwrap().is_empty());
+    assert_eq!(reads, 0);
+    assert!(slot.lock().unwrap().peek(&token).is_none());
+
+    // A new question refused on a held board ends a reply's hold too.
+    let token = slot.lock().unwrap().put(spec("Login first\n"));
+    let provider = ScriptedProvider::new(vec![said(), asks_back("Which flow?"), end()]);
+    let (_, result, _) = attached_run(&provider, &with_token(Some(&token)), &slot, &[BOARD]).await;
+    result.unwrap();
+    let fresh_question = drawn_from(with_token(None), "Checkout", PROD);
+    let (_, result, _) =
+        attached_run_standing(&provider, &fresh_question, &slot, &[BOARD], &standing()).await;
+    assert!(result.is_err());
+    assert!(slot.lock().unwrap().peek(&token).is_none());
+}
+
+#[test]
+fn the_history_thread_is_slim() {
+    let (_dir, svc) = service();
+    let mut record = tool_record(2);
+    record.thinking = Some("t".repeat(10_000));
+    record.log = vec![LogLine {
+        at_ms: 1,
+        level: Level::Info,
+        source: "diagram".into(),
+        fields: Vec::new(),
+    }];
+    record.tool_use.as_mut().unwrap().input = "x".repeat(10_000);
+    let question = contura_core::ai::AiMessage {
+        role: AiRole::User,
+        text: "Drop Pay".into(),
+        ..answer(1, AnswerRecord::default())
+    };
+    let thread = AiThread {
+        id: uuid::Uuid::new_v4(),
+        place: "diagram:orders".into(),
+        title: "Orders".into(),
+        messages: vec![
+            contura_core::ai::AiMessage {
+                record: None,
+                ..question
+            },
+            answer(2, record),
+        ],
+        updated_at: 2,
+        title_by: Default::default(),
+        title_tries: 0,
+        last_work: None,
+    };
+    svc.save_thread(&thread).unwrap();
+    let got = svc.thread(thread.id).unwrap().unwrap();
+    let r = got.messages[1].record.as_ref().unwrap();
+    // Only what the history reads: the proposal and its outcome.
+    assert!(r.thinking.is_none() && r.log.is_empty() && r.steps.is_empty());
+    let tool = r.tool_use.as_ref().unwrap();
+    assert!(tool.input.is_empty());
+    assert_eq!(tool.proposal.changes.len(), 2);
+    assert_eq!(got.messages[0].text, "Drop Pay");
+    assert_eq!(
+        board_history_of(&got),
+        "Asked: Drop Pay\nAnswered: done\nProposal: Not reviewed: 2 changes."
+    );
+}
+
+fn board_history_of(t: &AiThread) -> String {
+    contura_core::ai::board::board_history(t, "orders").unwrap()
+}
+
+// ---- Task 4b: the diagram Ask is gated by the Connection a frame was drawn from --------
+
+const PROD: u128 = 7;
+const DEV: u128 = 8;
+
+/// `prod` at Never and `dev` at Schema, both on this Ask's provider; `shop.orders` is
+/// prod's table.
+fn standing() -> SourceStanding {
+    let (prod, dev) = (ConnectionId::from_u128(PROD), ConnectionId::from_u128(DEV));
+    SourceStanding {
+        connections: vec![
+            (prod, "prod".into(), AiAccess::Never),
+            (dev, "dev".into(), AiAccess::Schema),
+        ],
+        same_provider: vec![prod, dev],
+        owners: vec![("shop.orders".into(), vec![prod])],
+    }
+}
+
+fn drawn_from(mut req: DiagramAskRequest, frame: &str, conn: u128) -> DiagramAskRequest {
+    req.sources = vec![FrameSourceIn {
+        frame: frame.into(),
+        connection_id: ConnectionId::from_u128(conn),
+        database: "shop".into(),
+        schema: None,
+    }];
+    req
+}
+
+const HELD_FRAME: &str = "The frame \"Checkout\" was drawn from prod, whose AI access is Never, so this Ask was not sent. Remove the frame or change that Connection's AI access.";
+const HELD_NODE: &str = "The node \"Orders\" links to table shop.orders of prod, whose AI access is Never, so this Ask was not sent. Remove the link or change that Connection's AI access.";
+const LINKED: &str = "flowchart\nOrders [table: shop.orders]\nShip\nOrders > Ship\n";
+const UNLINKED: &str = "flowchart\nOrders\nShip\nOrders > Ship\n";
+
+fn preview_with(req: &DiagramAskRequest, s: &SourceStanding, log: &mut Log) -> Result<Preview> {
+    let settings = AiSettings {
+        keep_exact_text: true,
+        ..groq()
+    };
+    diagram_preview(
+        &settings,
+        &info(&settings),
+        &Secrets::default(),
+        req,
+        s,
+        None,
+        None,
+        log,
+    )
+}
+
+fn held_message(r: Result<Preview>) -> String {
+    match r {
+        Err(Error::Ai(AiError::DiagramHeld { message })) => message,
+        other => panic!("not held: {:?}", other.map(|p| p.exact)),
+    }
+}
+
+fn sent_of(events: &[AiEvent]) -> Option<&contura_core::ai::sent::SentRecord> {
+    events.iter().find_map(|e| match e {
+        AiEvent::Sent(s) => Some(s),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_frame_from_a_never_connection_is_refused_in_the_preview() {
+    let req = drawn_from(board_req(), "Checkout", PROD);
+    let mut log = Log::new();
+    assert_eq!(
+        held_message(preview_with(&req, &standing(), &mut log)),
+        HELD_FRAME
+    );
+    // Refused before anything was read or built: not even the diagram's sizes were logged.
+    assert!(log.lines.is_empty(), "{:?}", log.lines);
+    // DiagramHeld goes to the webview as its own kind, with the sentence.
+    let e = AiError::DiagramHeld {
+        message: HELD_FRAME.into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&e).unwrap(),
+        serde_json::json!({"kind": "diagramHeld", "message": HELD_FRAME})
+    );
+}
+
+#[test]
+fn the_held_check_runs_before_the_board_is_built() {
+    // A frame range past the text fails the board build; held, the build never starts.
+    let mut req = board_req();
+    req.board.as_mut().unwrap().frames[1].to = 10_000;
+    assert!(matches!(
+        preview_with(&req, &standing(), &mut Log::new()),
+        Err(Error::InvalidInput(_))
+    ));
+    let req = drawn_from(req, "Checkout", PROD);
+    assert_eq!(
+        held_message(preview_with(&req, &standing(), &mut Log::new())),
+        HELD_FRAME
+    );
+    // So does an outline over the shape cap, and the tool switch stays first.
+    let mut big = drawn_from(board_req(), "Checkout", PROD);
+    big.board.as_mut().unwrap().frames[0].outline = outline(5_001, 0);
+    assert_eq!(
+        held_message(preview_with(&big, &standing(), &mut Log::new())),
+        HELD_FRAME
+    );
+    let off = AiSettings {
+        diagram_tool: false,
+        ..groq()
+    };
+    let got = diagram_preview(
+        &off,
+        &info(&off),
+        &Secrets::default(),
+        &big,
+        &standing(),
+        None,
+        None,
+        &mut Log::new(),
+    );
+    assert!(matches!(got, Err(Error::Ai(AiError::ToolOff))));
+}
+
+#[tokio::test]
+async fn a_frame_from_a_never_connection_is_refused_in_the_ask() {
+    let mut req = drawn_from(board_req(), "Checkout", PROD);
+    // A board the build would refuse: the Ask is held before it gets that far.
+    req.board.as_mut().unwrap().frames[1].to = 10_000;
+    let provider = ScriptedProvider::new(vec![said(), Ok(good_call()), end()]);
+    let (events, result, reads) = diagram_run_standing(
+        &provider,
+        &groq(),
+        &req,
+        &[Some(BOARD)],
+        &standing(),
+        None,
+        None,
+    )
+    .await;
+    match result {
+        Err(Error::Ai(AiError::DiagramHeld { message })) => assert_eq!(message, HELD_FRAME),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(reads, 0, "the disk was read");
+    assert!(provider.seen.lock().unwrap().is_empty());
+    let errors: Vec<&AiEvent> = events
+        .iter()
+        .filter(|e| matches!(e, AiEvent::Error { .. }))
+        .collect();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        error_of(&events),
+        Some(&AiError::DiagramHeld {
+            message: HELD_FRAME.into()
+        })
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AiEvent::Process(_) | AiEvent::Sent(_)))
+    );
+}
+
+#[tokio::test]
+async fn a_flowchart_node_with_a_never_table_link_is_refused_in_the_preview_and_the_ask() {
+    let linked = DiagramAskRequest {
+        text: LINKED.into(),
+        ..doc_req()
+    };
+    assert_eq!(
+        held_message(preview_with(&linked, &standing(), &mut Log::new())),
+        HELD_NODE
+    );
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (events, result, reads) = diagram_run_standing(
+        &provider,
+        &groq(),
+        &linked,
+        &[Some(LINKED)],
+        &standing(),
+        None,
+        None,
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(Error::Ai(AiError::DiagramHeld { .. }))
+    ));
+    assert_eq!(reads, 0);
+    assert!(provider.seen.lock().unwrap().is_empty());
+    assert!(matches!(
+        error_of(&events),
+        Some(AiError::DiagramHeld { .. })
+    ));
+
+    // The same node without its `table:` line builds, and the text goes whole.
+    let unlinked = DiagramAskRequest {
+        text: UNLINKED.into(),
+        ..doc_req()
+    };
+    let p = preview_with(&unlinked, &standing(), &mut Log::new()).unwrap();
+    let (_, items) = framed(&p.parts.turn);
+    let diagram: Vec<&serde_json::Value> =
+        items.iter().filter(|i| i["source"] == "diagram").collect();
+    assert_eq!(diagram.len(), 1);
+    assert_eq!(diagram[0]["text"], UNLINKED);
+}
+
+#[tokio::test]
+async fn a_schema_level_source_passes_and_names_the_count() {
+    let plain = preview_with(&board_req(), &standing(), &mut Log::new()).unwrap();
+    let req = drawn_from(board_req(), "Checkout", DEV);
+    let p = preview_with(&req, &standing(), &mut Log::new()).unwrap();
+    let rule = |p: &Preview| {
+        p.steps
+            .iter()
+            .find(|s| s.step == StepKind::Diagram)
+            .unwrap()
+            .rule
+            .clone()
+    };
+    assert_eq!(
+        rule(&p),
+        "Diagrams are not database data, but frames drawn from a Connection follow its AI access. Passed for 1 frame."
+    );
+    let (ours, _) = framed(&p.parts.turn);
+    let (theirs, _) = framed(&plain.parts.turn);
+    assert_eq!(p.parts.turn.replace(&ours, &theirs), plain.parts.turn);
+    // Two sourced frames are counted with a plural.
+    let mut two = req.clone();
+    two.sources.push(FrameSourceIn {
+        frame: "Refund".into(),
+        ..two.sources[0].clone()
+    });
+    let p2 = preview_with(&two, &standing(), &mut Log::new()).unwrap();
+    assert!(rule(&p2).ends_with("Passed for 2 frames."));
+
+    // The Ask names the Connections it drew on in its Sent record, so its history turn can be
+    // held back once one of them is.
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (events, result, _) = diagram_run_standing(
+        &provider,
+        &groq(),
+        &req,
+        &[Some(BOARD)],
+        &standing(),
+        None,
+        None,
+    )
+    .await;
+    result.unwrap();
+    assert_eq!(
+        sent_of(&events).unwrap().sources,
+        vec![ConnectionId::from_u128(DEV)]
+    );
+}
+
+#[test]
+fn the_text_is_never_cut_when_a_source_passes() {
+    let req = drawn_from(doc_req(), "orders", DEV);
+    let p = preview_with(&req, &standing(), &mut Log::new()).unwrap();
+    let (_, items) = framed(&p.parts.turn);
+    let diagram: Vec<&serde_json::Value> =
+        items.iter().filter(|i| i["source"] == "diagram").collect();
+    assert_eq!(diagram[0]["text"], DOC);
+}
+
+#[test]
+fn a_request_without_sources_still_builds() {
+    let p = preview_with(&doc_req(), &SourceStanding::default(), &mut Log::new()).unwrap();
+    let rule = &p
+        .steps
+        .iter()
+        .find(|s| s.step == StepKind::Diagram)
+        .unwrap()
+        .rule;
+    assert_eq!(
+        rule,
+        "Diagrams are not database data: no AI access level applies."
+    );
+    // The wire form without `sources` or `tableLinks` reads as none, and writes none.
+    let json = serde_json::to_value(doc_req()).unwrap();
+    assert!(json.get("sources").is_none() && json.get("tableLinks").is_none());
+}
+
+#[tokio::test]
+async fn a_held_refusal_leaves_the_attachment_in_its_slot() {
+    let slot = Mutex::new(AttachmentSlot::default());
+    let token = slot.lock().unwrap().put(spec("Board A notes\n"));
+    let req = drawn_from(with_token(Some(&token)), "Checkout", PROD);
+    let provider = ScriptedProvider::new(vec![said(), end()]);
+    let (events, result, reads) =
+        attached_run_standing(&provider, &req, &slot, &[BOARD], &standing()).await;
+    assert!(matches!(
+        result,
+        Err(Error::Ai(AiError::DiagramHeld { .. }))
+    ));
+    assert!(matches!(
+        error_of(&events),
+        Some(AiError::DiagramHeld { .. })
+    ));
+    assert_eq!(reads, 0);
+    assert!(provider.seen.lock().unwrap().is_empty());
+    assert!(
+        slot.lock().unwrap().peek(&token).is_some(),
+        "the file was used up"
+    );
+    // A stale token on a held board says why it was held, not that the file is gone.
+    let stale = drawn_from(with_token(Some("gone")), "Checkout", PROD);
+    let (_, result, _) =
+        attached_run_standing(&provider, &stale, &slot, &[BOARD], &standing()).await;
+    assert!(matches!(
+        result,
+        Err(Error::Ai(AiError::DiagramHeld { .. }))
+    ));
+    assert!(slot.lock().unwrap().peek(&token).is_some());
+}
+
+/// Final review I1: the real path reads the thread back through `AiService::thread`, whose
+/// slim copy must keep the Sent record's `sources` for the history gate to see them.
+#[test]
+fn a_stored_turn_keeps_its_sources_through_the_slim_thread_and_the_gate_leaves_it_out() {
+    use contura_core::ai::board::{board_history, board_history_gated};
+    use contura_core::ai::memory::AppendTurn;
+    use contura_core::ai::sent::SentRecord;
+    let dir = tempfile::tempdir().unwrap();
+    let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
+    let svc = AiService::new(store, Arc::new(MemorySecretStore::new()));
+    let mut t = history_thread("diagram:orders");
+    t.messages[3].text = "orders(id, total) and customers(id, email).".into();
+    t.messages[3].record = Some(AnswerRecord {
+        sent: Some(SentRecord {
+            sources: vec![ConnectionId::from_u128(PROD)],
+            model: "big-model".into(),
+            exact: Some("the whole text sent".into()),
+            ..SentRecord::default()
+        }),
+        thinking: Some("thinking hard".into()),
+        ..AnswerRecord::default()
+    });
+    for turn in [&t.messages[0..2], &t.messages[2..4]] {
+        svc.append_turn(
+            AppendTurn {
+                thread_id: t.id,
+                place: t.place.clone(),
+                title: t.title.clone(),
+                updated_at: turn[0].at,
+                messages: turn.to_vec(),
+                replace_from: None,
+            },
+            None,
+        )
+        .unwrap();
+    }
+    let slim = svc.thread(t.id).unwrap().unwrap();
+    let record = slim.messages[3].record.as_ref().expect("the record");
+    let sent = record.sent.as_ref().expect("the sources stay");
+    assert_eq!(sent.sources, vec![ConnectionId::from_u128(PROD)]);
+    // Only the sources: the slim copy stays small.
+    assert_eq!(
+        sent,
+        &SentRecord {
+            sources: vec![ConnectionId::from_u128(PROD)],
+            ..SentRecord::default()
+        }
+    );
+    assert!(record.thinking.is_none());
+    let all = board_history(&slim, "orders").unwrap();
+    assert!(all.contains("customers(id, email)"), "{all}");
+    let prod = ConnectionId::from_u128(PROD);
+    let gated = board_history_gated(&slim, "orders", &|id| id == prod).unwrap();
+    assert!(!gated.contains("customers(id, email)"), "{gated}");
+    assert!(gated.contains("It boxes the items."), "{gated}");
+}
+
+#[test]
+fn a_history_turn_that_drew_on_a_held_connection_stays_home() {
+    use contura_core::ai::sent::SentRecord;
+    let mut thread = history_thread("diagram:orders");
+    // The second answer drew on prod (since set to Never): the turn quoting its tables goes
+    // nowhere, though the board holds no frame of it now.
+    thread.messages[3].text = "orders(id, total) and customers(id, email).".into();
+    thread.messages[3].record = Some(AnswerRecord {
+        sent: Some(SentRecord {
+            sources: vec![ConnectionId::from_u128(PROD)],
+            ..SentRecord::default()
+        }),
+        ..AnswerRecord::default()
+    });
+    let settings = AiSettings {
+        keep_exact_text: true,
+        ..groq()
+    };
+    let p = diagram_preview(
+        &settings,
+        &info(&settings),
+        &Secrets::default(),
+        &doc_req(),
+        &standing(),
+        Some(&thread),
+        None,
+        &mut Log::new(),
+    )
+    .unwrap();
+    assert!(!p.exact.contains("customers(id, email)"), "{}", p.exact);
+    let (_, items) = framed(&p.parts.turn);
+    let history: Vec<&serde_json::Value> =
+        items.iter().filter(|i| i["source"] == "history").collect();
+    assert_eq!(
+        history[0]["text"],
+        "Asked: What does Pack order do?\nAnswered: It boxes the items."
+    );
+    // A deleted Connection is held too.
+    thread.messages[3]
+        .record
+        .as_mut()
+        .unwrap()
+        .sent
+        .as_mut()
+        .unwrap()
+        .sources = vec![ConnectionId::from_u128(99)];
+    let p = diagram_preview(
+        &settings,
+        &info(&settings),
+        &Secrets::default(),
+        &doc_req(),
+        &standing(),
+        Some(&thread),
+        None,
+        &mut Log::new(),
+    )
+    .unwrap();
+    assert!(!p.exact.contains("customers(id, email)"));
+    // At Schema it goes, as any turn does.
+    thread.messages[3]
+        .record
+        .as_mut()
+        .unwrap()
+        .sent
+        .as_mut()
+        .unwrap()
+        .sources = vec![ConnectionId::from_u128(DEV)];
+    let p = diagram_preview(
+        &settings,
+        &info(&settings),
+        &Secrets::default(),
+        &doc_req(),
+        &standing(),
+        Some(&thread),
+        None,
+        &mut Log::new(),
+    )
+    .unwrap();
+    assert!(p.exact.contains("customers(id, email)"));
+}
+
+/// `diagram_run_with` under `s`.
+async fn diagram_run_standing(
+    provider: &ScriptedProvider,
+    settings: &AiSettings,
+    req: &DiagramAskRequest,
+    reads: &[Option<&str>],
+    s: &SourceStanding,
+    history: Option<&AiThread>,
+    attachment: Option<&Attachment>,
+) -> (Vec<AiEvent>, Result<()>, usize) {
+    let events = Mutex::new(Vec::new());
+    let emit = |e: AiEvent| events.lock().unwrap().push(e);
+    let count = AtomicUsize::new(0);
+    let disk = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
+        let n = count.fetch_add(1, Ordering::SeqCst);
+        let got = match reads[n.min(reads.len() - 1)] {
+            Some(t) => Ok(t.to_string()),
+            None => Err(Error::NotFound("orders.flow".into())),
+        };
+        Box::pin(async move { got })
+    };
+    let result = diagram_ask_stream(
+        provider,
+        settings,
+        &info(settings),
+        &Secrets::default(),
+        req,
+        s,
+        history,
+        attachment,
+        &disk,
+        &emit,
+    )
+    .await;
+    (
+        events.into_inner().unwrap(),
+        result,
+        count.load(Ordering::SeqCst),
+    )
+}
+
+/// `attached_run` under `s`.
+async fn attached_run_standing(
+    provider: &ScriptedProvider,
+    req: &DiagramAskRequest,
+    slot: &Mutex<AttachmentSlot>,
+    reads: &[&str],
+    s: &SourceStanding,
+) -> (Vec<AiEvent>, Result<()>, usize) {
+    let events = Mutex::new(Vec::new());
+    let emit = |e: AiEvent| events.lock().unwrap().push(e);
+    let count = AtomicUsize::new(0);
+    let reads: Vec<String> = reads.iter().map(|r| r.to_string()).collect();
+    let disk = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
+        let n = count.fetch_add(1, Ordering::SeqCst);
+        let got = Ok(reads[n.min(reads.len() - 1)].clone());
+        Box::pin(async move { got })
+    };
+    let settings = groq();
+    let result = diagram_ask_attached(
+        provider,
+        &settings,
+        &info(&settings),
+        &Secrets::default(),
+        req,
+        s,
+        None,
+        slot,
+        &disk,
+        &emit,
+    )
+    .await;
+    (
+        events.into_inner().unwrap(),
+        result,
+        count.load(Ordering::SeqCst),
+    )
 }

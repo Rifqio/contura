@@ -31,6 +31,8 @@ interface Props {
   /** Every change of the search text, for the New diagram catalog's Back (it reopens with the search kept). */
   onQuery?(query: string): void;
   initialTab?: string;
+  /** The side Up, Down and Enter act on first: "right" opens on the templates (the assistant's Template, Plan D A11). */
+  initialSide?: "left" | "right";
   tabs?: readonly ShelfTabDef[];
   /** The one icon source the Icons count, the Icons tab and the search read (decision 6's seam by default). */
   source?: ShelfIconSource;
@@ -201,6 +203,7 @@ export default function Shelf({
   initialQuery = "",
   onQuery,
   initialTab,
+  initialSide = "left",
   tabs = SHELF_TABS,
   source = shelfIconSource,
   onAdd,
@@ -216,7 +219,7 @@ export default function Shelf({
   const [leftActive, setActiveId] = useState<string | undefined>();
   const [rightActive, setRightActive] = useState<string | undefined>();
   /** Which side Up, Down and Enter act on (Tab switches); the search keeps focus either way. */
-  const [side, setSide] = useState<"left" | "right">("left");
+  const [side, setSide] = useState<"left" | "right">(initialSide);
   /** The polite announcement of the side Tab moved to; the search keeps focus, so nothing else says it. */
   const [said, setSaid] = useState("");
   const [filter, setFilter] = useState<TemplateFilter>("all");

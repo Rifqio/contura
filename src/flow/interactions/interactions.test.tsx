@@ -1,7 +1,7 @@
 // Canvas interactions and motion (spec 6+ section 4, the motion design's playground): snap and guides, drawing a
 // flow, the label box, "Add and connect", the pull-back, groups, Tidy, zoom to fit, undo and delete.
 import { invoke } from "@tauri-apps/api/core";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { DiagramCanvasProps } from "../../diagram/DiagramCanvas";
@@ -377,7 +377,8 @@ test("tidy_selection_only_moves_selection", async () => {
   const s = setup();
   await drawn(s);
   act(() => canvas.props!.onSelect!(["Orders", "Card network"]));
-  await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
+  // The canvas strip's status line; the Assistant's selection chip (in its hidden panel) reads "2 selected" too.
+  await waitFor(() => expect(within(s.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement).getByText("2 selected")).toBeTruthy());
   // The frame bar's More menu (Task 9).
   await userEvent.click(screen.getByRole("button", { name: "More" }));
   await userEvent.click(await screen.findByRole("menuitem", { name: "Tidy selection" }));

@@ -3,20 +3,27 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Lineage } from "../../api/types";
 import { flowScene, loadSceneIcons, sceneIconNames } from "../../flow/flowScene";
-import { nodeSize } from "../../flow/flowNodes";
+import { buildFlowGraph, nodeSize } from "../../flow/flowNodes";
 import { resetIcons, setIconTheme } from "../../flow/icons";
 import { parseFlow } from "../../lang/flow/parse";
 import type { FlowDoc } from "../../lang/flow/model";
 import { lineageScene } from "../../lineage/scene";
 import { exampleSvg } from "../../flow/previewScene";
-import { erCardH, ER_CARD_CHROME, erMetrics, ER_ROW_MID, KIND_ROW, SEQ_HEAD } from "../../flow/kindLayout";
+import { erCardH, ER_CARD_CHROME, erMetrics, ER_ROW_MID, KIND_ROW } from "../../flow/kindLayout";
 import flowSceneSource from "../../flow/flowScene.ts?raw";
 import svgSource from "./svg.ts?raw";
 import { callsTo, routeInvoke } from "../../test/invoke";
 import { NODE_TOKENS } from "../types";
 import type { ExportPalette } from "./palette";
 import { sceneBounds, sceneEdges } from "./scene";
-import { sceneToSvg, snapCrop } from "./svg";
+import { iconRefs, sceneBody, sceneToSvg, snapCrop, svgDefs } from "./svg";
+import { PAY } from "../../flow/fixtures/paySequence";
+import { emptyPositions } from "../../flow/layout";
+import { drawnColour } from "../../flow/palette";
+import { seqColours, STRONG_TINT, WASH } from "../../flow/seqColour";
+import { messagePath, type SeqBlock } from "../../flow/seqGeometry";
+import type { SeqEdgeData } from "../../flow/seqNodes";
+import { mixHex } from "../../lang/flow/colours";
 import { plainSvg } from "../../test/plainSvg";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -36,6 +43,8 @@ const PALETTE: ExportPalette = {
   strongBorder: "#131313",
   panel: "#141414",
   muted: "#151515",
+  faint: "#161616",
+  keyMark: "#171718",
 };
 const opts = { padding: 32, background: "theme" as const, mark: false };
 
@@ -441,72 +450,267 @@ const SEQUENCE_TEXT = [
   "note: Cards are charged once",
 ].join("\n");
 
-test("sequence_export_draws_heads_dashed_lifelines_ordered_messages_replies_activations_and_frames", () => {
-  const scene = flowScene(doc(SEQUENCE_TEXT), {}, "modern", new Map());
-  expect(scene.nodes.map((n) => [n.id, n.kind])).toEqual([
-    ["Customer", "actor"],
-    ["Shop", "participant"],
-    ["Payments", "participant"],
-    ["Note 1", "note"],
-  ]);
-  // Messages run along their rows in the order written, from lifeline to lifeline; a message to itself loops out right.
-  const msgs = scene.edges;
-  expect(msgs.map((e) => e.kind)).toEqual(["message", "message", "message", "message", "message"]);
-  const ys = msgs.map((e) => e.points[0].y);
-  expect([...ys].sort((a, b) => a - b)).toEqual(ys);
-  expect(new Set(ys).size).toBe(5);
-  const centre = (id: string) => {
-    const n = scene.nodes.find((x) => x.id === id)!;
-    return n.x + n.w / 2;
-  };
-  expect(msgs[0].points.map((p) => p.x)).toEqual([centre("Customer"), centre("Shop")]);
-  expect(msgs[0].points.every((p) => p.y === ys[0])).toBe(true);
-  expect(msgs[3].points).toHaveLength(4);
-  expect(Math.max(...msgs[3].points.map((p) => p.x))).toBe(centre("Shop") + 40);
-  expect(msgs.map((e) => e.line ?? "solid")).toEqual(["solid", "solid", "dashed", "solid", "dashed"]);
-  expect(scene.frames).toEqual([expect.objectContaining({ label: "loop retry 3 times", depth: 0 })]);
+// Plan E Task 7: the sequence restyle in Publish, from the one drawing the canvas reads (Decision 15). A palette with the
+// presets; the colours a sequence draws besides its raw values are exactly those `seqColours` derives from it.
+const SEQ_PALETTE: ExportPalette = {
+  ...PALETTE,
+  nodes: { ...PALETTE.nodes, participant: { fill: "#1a1a10", stroke: "#2a2a20" }, actor: { fill: "#1b1b10", stroke: "#2b2b20" } },
+  colours: {
+    accent: { fill: "#a10000", stroke: "#a20000", text: "#030303" },
+    info: { fill: "#a30000", stroke: "#a40000", text: "#030303" },
+    success: { fill: "#a50000", stroke: "#a60000", text: "#030303" },
+    warning: { fill: "#a70000", stroke: "#a80000", text: "#030303" },
+    danger: { fill: "#a90000", stroke: "#aa0000", text: "#030303" },
+    muted: { fill: "#ab0000", stroke: "#ac0000", text: "#ad0000" },
+  },
+};
 
-  const svg = sceneToSvg(scene, PALETTE, opts);
+/** Every colour `svg` uses is a raw value of `p` or one `seqColours` derives from it for a colour `doc` names. */
+function onlySeqColours(svg: string, p: ExportPalette, d: FlowDoc) {
+  const raw = new Set([
+    ...Object.values(p).filter((v): v is string => typeof v === "string"),
+    ...Object.values(p.nodes).flatMap((n) => [n.fill, n.stroke]),
+    ...Object.values(p.colours ?? {}).flatMap((c) => [c.fill, c.stroke, c.text]),
+  ]);
+  const derived = new Set<string>();
+  const named = [undefined, ...d.nodes.map((n) => drawnColour(n.attrs.color)), ...(d.frames ?? []).map((f) => drawnColour(f.color))];
+  for (const c of named)
+    for (const who of ["participant", "actor", "block"] as const) {
+      const s = seqColours(p, c, who);
+      // Derived from the palette's line colour, never a literal: the tint over the surface and the wash over the canvas.
+      expect(s.fill).toBe(c && c[0] === "#" ? s.fill : mixHex(s.line, p.surface, STRONG_TINT));
+      expect(s.wash).toBe(mixHex(s.line, p.canvas, WASH));
+      for (const v of Object.values(s)) derived.add(v);
+    }
+  const used = [...svg.matchAll(/(?:fill|stroke)="([^"]+)"/g)].map((m) => m[1]).filter((c) => c !== "none");
+  expect(used.length).toBeGreaterThan(0);
+  expect(used.filter((c) => !raw.has(c) && !derived.has(c))).toEqual([]);
+}
+
+const attrIn = (el: string, name: string) => new RegExp(`\\s${name}="([^"]*)"`).exec(el)?.[1];
+/** Each element of `svg` whose tag matches `tag` and that carries `data-part="p"`. */
+const partsOf = (svg: string, tag: string, p: string) => [...svg.matchAll(new RegExp(`<${tag}\\b[^>]*data-part="${p}"[^>]*>`, "g"))].map((m) => m[0]);
+const n2 = (v: number) => String(Math.round(v * 100) / 100);
+
+test("sequence_export_draws_the_new_look", () => {
+  const d = doc(PAY);
+  const scene = flowScene(d, {}, "modern", new Map());
+  const messages = buildFlowGraph(d, emptyPositions(), "modern").edges.map((e) => (e.data as SeqEdgeData).m);
+  expect(messages).toHaveLength(10);
+  const svg = sceneToSvg(scene, SEQ_PALETTE, opts);
   plainSvg(svg);
-  onlyTokenColours(svg);
-  for (const name of ["Customer", "Shop", "Payments"]) {
+  onlySeqColours(svg, SEQ_PALETTE, d);
+  for (const name of ["Customer", "Web app", "Billing API", "Card provider", "Database"]) {
     const g = part(svg, "data-node", name);
-    // The participant's head is its box at the top, not a box the lifeline's height.
-    expect(g).toMatch(new RegExp(`<rect data-part="lifehead" [^>]*height="${SEQ_HEAD}"`));
-    expect(g).toMatch(/data-part="lifeline"[^>]*stroke-dasharray/);
-    expect(g).toContain(`>${name}<`);
+    // Its head and foot boxes, and one solid lifeline in its colour.
+    expect(count(g, /data-part="lifehead"/g), name).toBe(2);
+    expect(count(g, /data-part="lifeline"/g), name).toBe(1);
+    expect(partsOf(g, "path", "lifeline")[0]).not.toContain("stroke-dasharray");
+    expect(count(g, new RegExp(`>${escRe(name)}<`, "g")), name).toBe(2);
   }
-  // The actor is a person.
+  // Billing API's lifeline, outline and bars in accent; its fill the derived tint.
+  const billing = part(svg, "data-node", "Billing API");
+  const accent = seqColours(SEQ_PALETTE, "accent", "participant");
+  expect(attrIn(partsOf(billing, "path", "lifeline")[0], "stroke")).toBe(accent.line);
+  for (const head of partsOf(billing, "rect", "lifehead")) expect([attrIn(head, "fill"), attrIn(head, "stroke")]).toEqual([accent.fill, accent.line]);
+  expect(count(billing, /data-part="activation"/g)).toBe(1);
+  // Each message's path is the drawing's, its label sized as measured.
+  for (const m of messages) {
+    const e = part(svg, "data-edge", `edge:${m.index}`);
+    expect(attrIn(partsOf(e, "path", "message")[0], "d")).toBe(messagePath(m, 0, 0));
+    if (m.label) {
+      const words = new RegExp(`<text\\b[^>]*>${escRe(m.label.text)}</text>`).exec(e)![0];
+      expect(attrIn(words, "textLength")).toBe(n2(m.label.w));
+      expect(attrIn(words, "lengthAdjust")).toBe("spacingAndGlyphs");
+    }
+  }
+  // Ten numbers, 1 to 10, each on its sender's lifeline.
+  expect([...svg.matchAll(/<text\b[^>]*data-part="number-text"[^>]*>(\d+)<\/text>/g)].map((m) => Number(m[1]))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  // The opt block: its caption on a chip, its kind word turned a quarter.
+  expect(count(svg, /data-frame-tab="/g)).toBe(1);
+  expect(part(svg, "data-frame-tab", "0")).toContain(">card saved<");
+  expect(part(svg, "data-frame", "0")).toMatch(/<text transform="rotate\(-90 [-\d.]+ [-\d.]+\)"[^>]*>opt<\/text>/);
+  // Paint order (Decision 15): blocks, participants, messages, captions.
+  expect(svg.indexOf('data-frame="0"')).toBeLessThan(svg.indexOf('data-node="Customer"'));
+  expect(svg.indexOf('data-node="Database"')).toBeLessThan(svg.indexOf('data-edge="edge:0"'));
+  expect(svg.indexOf('data-edge="edge:9"')).toBeLessThan(svg.indexOf('data-frame-tab="0"'));
+});
+
+// What the old sequence test held, written for the new look: replies, calls, the actor, the bars, the note, the order.
+test("sequence_export_keeps_replies_calls_the_actor_activations_the_note_and_the_order", () => {
+  const scene = flowScene(doc(SEQUENCE_TEXT), {}, "modern", new Map());
+  const svg = sceneToSvg(scene, SEQ_PALETTE, opts);
+  plainSvg(svg);
+  const edge = (i: number) => part(svg, "data-edge", `edge:${i}`);
+  const line = (i: number) => partsOf(edge(i), "path", "message")[0];
+  // A reply (message 2, 4 is the receipt) is dashed and ends in an open head; a call is solid with a filled head.
+  for (const i of [2, 4]) {
+    expect(line(i), `reply ${i}`).toContain('stroke-dasharray="5 4"');
+    expect(edge(i), `reply ${i}`).toContain('data-marker="open"');
+    expect(edge(i), `reply ${i}`).not.toContain('data-marker="arrow"');
+  }
+  for (const i of [0, 1, 3]) {
+    expect(line(i), `call ${i}`).not.toContain("stroke-dasharray");
+    expect(edge(i), `call ${i}`).toContain('data-marker="arrow"');
+    expect(edge(i), `call ${i}`).not.toContain('data-marker="open"');
+  }
+  // The actor is a person; a participant is not.
   expect(part(svg, "data-node", "Customer")).toContain('data-part="person"');
   expect(part(svg, "data-node", "Shop")).not.toContain('data-part="person"');
-  // One activation bar on Shop, over the messages it covers.
+  expect(part(svg, "data-node", "Payments")).not.toContain('data-part="person"');
+  // One activation bar on Shop, none on Payments.
   expect(count(part(svg, "data-node", "Shop"), /data-part="activation"/g)).toBe(1);
   expect(count(part(svg, "data-node", "Payments"), /data-part="activation"/g)).toBe(0);
-  // A call ends in a filled head, a reply is dashed with an open head.
-  const call = part(svg, "data-edge", "edge:0");
-  expect(call).toMatch(/data-part="message"(?![^>]*stroke-dasharray)/);
-  expect(call).toContain('data-marker="arrow"');
-  const reply = part(svg, "data-edge", "edge:2");
-  expect(reply).toMatch(/data-part="message"[^>]*stroke-dasharray/);
-  expect(reply).toMatch(/data-marker="open"[^>]*fill="none"/);
-  for (const t of ["place order", "charge card", "approved", "log", "receipt"]) expect(svg).toContain(`>${t}<`);
-  // The frame is a box over its rows, with its label in a tab drawn over the participants.
-  const frame = part(svg, "data-frame", "0");
-  expect(frame).toContain("<rect");
-  const tab = part(svg, "data-frame-tab", "0");
-  expect(tab).toContain('data-part="tab"');
-  expect(tab).toContain(">loop retry 3 times<");
-  expect(svg.indexOf('data-frame="0"')).toBeLessThan(svg.indexOf('data-node="Customer"'));
-  expect(svg.indexOf('data-frame-tab="0"')).toBeGreaterThan(svg.indexOf('data-node="Payments"'));
-  // The note is a note.
-  expect(part(svg, "data-node", "Note 1")).toMatch(new RegExp(`<rect data-part="note" [^>]*fill="${PALETTE.nodes.note.fill}"`));
+  // The note is filled in the note pair.
+  const note = partsOf(part(svg, "data-node", "Note 1"), "rect", "note")[0];
+  expect([attrIn(note, "fill"), attrIn(note, "stroke")]).toEqual([SEQ_PALETTE.nodes.note.fill, SEQ_PALETTE.nodes.note.stroke]);
+  // Messages run down the rows in the order written.
+  const ys = scene.edges.map((e) => e.points[0].y);
+  expect([...ys].sort((a, b) => a - b)).toEqual(ys);
+  expect(new Set(ys).size).toBe(5);
+});
+
+test("label_chips_cover_crossing_lifelines", () => {
+  const long = "x".repeat(60);
+  const d = doc(['diagram sequence "Wide"', "participant A", "participant B", "participant C", "participant D", `A -> D: ${long}`].join("\n"));
+  const svg = sceneToSvg(flowScene(d, {}, "modern", new Map()), SEQ_PALETTE, opts);
+  plainSvg(svg);
+  const lane = (name: string) => {
+    const el = partsOf(part(svg, "data-node", name), "path", "lifeline")[0];
+    return { at: svg.indexOf(el), x: Number(/^M([-\d.]+)/.exec(attrIn(el, "d")!)![1]) };
+  };
+  const edge = part(svg, "data-edge", "edge:0");
+  const chip = partsOf(edge, "rect", "chip")[0];
+  const [x, w] = [Number(attrIn(chip, "x")), Number(attrIn(chip, "width"))];
+  for (const name of ["B", "C"]) {
+    const l = lane(name);
+    // Drawn after the lifeline it crosses, and over it.
+    expect(svg.indexOf(chip), name).toBeGreaterThan(l.at);
+    expect(x, name).toBeLessThan(l.x);
+    expect(x + w, name).toBeGreaterThan(l.x);
+  }
+  expect(attrIn(chip, "fill")).toBe(SEQ_PALETTE.canvas);
+});
+
+test("canvas_and_publish_share_one_drawing", () => {
+  // Review Focus 3 too: a long self-message on the last participant, inside an opt.
+  const selfLast = ['diagram sequence "Self"', "autonumber", "participant A", "participant B", "A -> B: go", "opt checks {", `  B -> B: ${"check every card on the account".repeat(2)}`, "}"].join("\n");
+  // A caption much wider than its two-participant block: the block grows to hold it.
+  const longCaption = ['diagram sequence "Caption"', "participant A", "participant B", "loop retry every card on the account until one of them works {", "  A -> B: go", "}"].join("\n");
+  for (const text of [PAY, selfLast, longCaption])
+    for (const k of [0.88, 1, 1.15]) {
+      const d = doc(text);
+      const g = buildFlowGraph(d, emptyPositions(), "modern", { textScale: k });
+      const scene = flowScene(d, {}, "modern", new Map(), undefined, undefined, { textScale: k });
+      const where = `${text === PAY ? "Pay" : text === selfLast ? "Self" : "Caption"} ${k}`;
+      for (const e of g.edges) {
+        const m = (e.data as SeqEdgeData).m;
+        const s = scene.edges.find((x) => x.id === e.id)!;
+        expect(s, `${where} ${e.id}`).toBeDefined();
+        expect(s.points, `${where} ${e.id}`).toEqual(m.points);
+        expect(s.path, `${where} ${e.id}`).toBe(m.d);
+        expect(s.label, `${where} ${e.id}`).toBe(m.label?.text);
+        expect(s.labelW, `${where} ${e.id}`).toBe(m.label?.w);
+        expect(s.chip, `${where} ${e.id}`).toEqual(m.label?.chip);
+        expect(s.chipBg, `${where} ${e.id}`).toBe(m.label?.bg);
+        expect(s.number && { n: s.number.n, x: s.number.x, y: s.number.y, w: s.number.w }, `${where} ${e.id}`).toEqual(m.number && { n: m.number.n, x: m.number.x, y: m.number.y, w: m.number.w });
+      }
+      const box = (n: (typeof g.nodes)[number]) => ({ x: n.position.x, y: n.position.y, w: Number(n.style!.width), h: Number(n.style!.height) });
+      for (const n of g.nodes.filter((x) => x.id.startsWith("\u0000frame:"))) {
+        const b = n.data.block as SeqBlock;
+        const f = scene.frames![b.index];
+        expect({ x: f.x, y: f.y, w: f.w, h: f.h }, `${where} ${n.id}`).toEqual(box(n));
+        expect(f.tab, `${where} ${n.id}`).toEqual(b.tab);
+        expect(f.captionBox, `${where} ${n.id}`).toEqual(b.captionBox ?? undefined);
+        expect([f.kind, f.caption, f.word, f.wordW], `${where} ${n.id}`).toEqual([b.kind, b.caption, b.word, b.wordW]);
+      }
+      // Each participant is its canvas node, the whole lane high, its foot where the lanes end.
+      const lanes = g.nodes.find((x) => x.id === "\u0000lanes")!;
+      for (const n of g.nodes.filter((x) => x.type === "kind")) {
+        const s = scene.nodes.find((x) => x.id === n.id)!;
+        expect({ x: s.x, y: s.y, w: s.w, h: s.h }, `${where} ${n.id}`).toEqual(box(n));
+        expect(s.foot, `${where} ${n.id}`).toBe((lanes.data as { lanes: { bottom: number }[] }).lanes[0].bottom - n.position.y);
+      }
+      // Everything Publish draws lies inside the canvas's own boxes: chips and numbers inside the lanes node.
+      const lb = box(lanes);
+      const inside = (b: { x: number; y: number; w: number; h: number }, what: string) => {
+        expect(b.x, what).toBeGreaterThanOrEqual(lb.x - 0.01);
+        expect(b.y, what).toBeGreaterThanOrEqual(lb.y - 0.01);
+        expect(b.x + b.w, what).toBeLessThanOrEqual(lb.x + lb.w + 0.01);
+        expect(b.y + b.h, what).toBeLessThanOrEqual(lb.y + lb.h + 0.01);
+      };
+      for (const e of scene.edges) {
+        if (e.chip) inside(e.chip, `${where} ${e.id} chip`);
+        if (e.number) inside({ x: e.number.x - e.number.w / 2, y: e.number.y - 10 * k, w: e.number.w, h: 20 * k }, `${where} ${e.id} number`);
+      }
+      // Captions sit inside their block's outline, inside the lanes node and inside the Publish bounds.
+      const all = sceneBounds(scene);
+      for (const f of scene.frames ?? []) {
+        if (!f.captionBox) continue;
+        const c = f.captionBox;
+        const what = `${where} caption ${f.caption}`;
+        expect(c.x + c.w, what).toBeLessThanOrEqual(f.x + f.w + 0.01);
+        inside(c, what);
+        expect(c.x, what).toBeGreaterThanOrEqual(all.x - 0.01);
+        expect(c.x + c.w, what).toBeLessThanOrEqual(all.x + all.w + 0.01);
+      }
+      inside(sceneBounds({ ...scene, nodes: scene.nodes.filter((n) => n.kind !== "note") }), `${where} bounds`);
+    }
+});
+
+test("publish_keeps_a_long_block_caption_inside_the_image", () => {
+  const caption = "retry every card on the account until one of them works";
+  const d = doc(['diagram sequence "Caption"', "participant A", "participant B", `loop ${caption} {`, "  A -> B: go", "}"].join("\n"));
+  const scene = flowScene(d, {}, "modern", new Map());
+  const c = scene.frames![0].captionBox!;
+  const b = sceneBounds(scene);
+  // The crop holds the whole caption chip, not only the block's old outline.
+  expect(c.x + c.w).toBeLessThanOrEqual(b.x + b.w);
+  const svg = sceneToSvg(scene, SEQ_PALETTE, { ...opts, padding: 0 });
+  expect(part(svg, "data-frame-tab", "0")).toContain(`>${caption}<`);
+  const [vx, , vw] = /viewBox="([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+)"/.exec(svg)!.slice(1).map(Number);
+  expect(c.x).toBeGreaterThanOrEqual(vx);
+  expect(c.x + c.w).toBeLessThanOrEqual(vx + vw);
+});
+
+test("publish_shows_the_label_like_the_canvas", () => {
+  const d = doc(['diagram sequence "Login"', 'participant App [label: "Mobile app"]', "participant Server", "App -> Server: hi"].join("\n"));
+  const svg = sceneToSvg(flowScene(d, {}, "modern", new Map()), SEQ_PALETTE, opts);
+  const app = part(svg, "data-node", "App");
+  expect(count(app, /data-part="lifehead"/g)).toBe(2);
+  expect(count(app, />Mobile app</g)).toBe(2);
+  expect(svg).not.toContain(">App<");
+  expect(count(part(svg, "data-node", "Server"), />Server</g)).toBe(2);
+});
+
+test("participant_icons_publish_once_each", () => {
+  const d = doc(['diagram sequence "Fns"', "participant Fn [icon: aws-lambda]", "participant Fn2 [icon: aws-lambda]", "participant Gone [icon: aws-nope]", "Fn -> Fn2: call", "Fn2 -> Gone: on"].join("\n"));
+  expect(sceneIconNames(d).sort()).toEqual(["aws-lambda", "aws-nope"]);
+  const url = `data:image/svg+xml;base64,${btoa('<svg xmlns="http://www.w3.org/2000/svg"/>')}`;
+  const scene = flowScene(d, {}, "modern", new Map([["aws-lambda", { url }]]));
+  expect(scene.nodes.find((n) => n.id === "Fn")).toMatchObject({ icon: url, iconName: "aws-lambda" });
+  const refs = iconRefs();
+  const body = sceneBody(scene, SEQ_PALETTE, refs);
+  const defs = svgDefs(SEQ_PALETTE, { hairline: null, icons: refs.entries() });
+  expect(count(defs, /<image /g)).toBe(1);
+  expect(count(body, /<use /g)).toBe(4);
+  expect(body).not.toContain("<image ");
+  for (const name of ["Fn", "Fn2"]) expect(count(part(body, "data-node", name), /<use /g), name).toBe(2);
+  // The one the pack lacks: the dashed cube tile in both boxes.
+  const gone = part(body, "data-node", "Gone");
+  expect(partsOf(gone, "rect", "icon-tile")).toHaveLength(2);
+  for (const tile of partsOf(gone, "rect", "icon-tile")) expect(tile).toContain("stroke-dasharray");
 });
 
 test("the_sequence_card_is_drawn_by_the_publish_path", () => {
   const svg = exampleSvg(SEQUENCE_TEXT, PALETTE);
   expect(svg).toContain('data-node="Customer"');
   expect(svg).toContain('data-part="lifeline"');
+  // The new look: head and foot boxes, a solid lifeline, the caption on its chip.
+  expect(count(part(svg, "data-node", "Customer"), /data-part="lifehead"/g)).toBe(2);
+  expect(svg).not.toMatch(/data-part="lifeline"[^>]*stroke-dasharray/);
   expect(svg).toContain('data-frame-tab="0"');
+  expect(part(svg, "data-frame-tab", "0")).toContain(">retry 3 times<");
   expect(svg).toContain('width="100%"');
 });
 

@@ -6,6 +6,8 @@ import { tags } from "@lezer/highlight";
 import { dbmlHighlight } from "../../schema/dbmlLanguage";
 import type { LangClient } from "../client";
 import type { FlowCompletion, FlowCompletionResult } from "./complete";
+import { isFrameHeader } from "./board";
+import { DIAGRAM_KINDS, type DiagramKind } from "./model";
 
 type State = {
   /** The first statement has been read (it may be the diagram line). */
@@ -20,10 +22,17 @@ type State = {
   label: boolean;
   /** Nothing read yet on this line (step 12: the words a statement starts with, a timeline date). */
   first: boolean;
+  /** The kind of the diagram being read, from its `diagram` header. */
+  kind: DiagramKind | null;
+  /** An `autonumber` directive was just read: its argument comes next. */
+  arg: boolean;
 };
 
 /** The words step 12 kinds start a statement with. */
 const LEADING = /^(participant|actor|activate|deactivate|loop|alt|opt|par|critical|class|interface|enum|root|section|milestone)(?=\s)|^note(?=\s*:)/;
+
+/** `autonumber` as the parser takes it: bare or with one valid argument, then the line end or a comment. */
+const AUTONUMBER = /^autonumber(?=\s*(?:$|\/\/)|\s+(?:off|0|[1-9]\d{0,5})\s*(?:$|\/\/))/;
 
 const isWs = (c: string | undefined) => c !== undefined && /\s/.test(c);
 
@@ -58,7 +67,7 @@ function stopsName(s: string, j: number): boolean {
 
 export const flowLanguage = StreamLanguage.define<State>({
   name: "flow",
-  startState: () => ({ header: false, kindNext: false, title: false, bracket: false, value: false, label: false, first: true }),
+  startState: () => ({ header: false, kindNext: false, title: false, bracket: false, value: false, label: false, first: true, kind: null, arg: false }),
   copyState: (s) => ({ ...s }),
   languageData: { commentTokens: { line: "//" } },
   token(stream, st) {
@@ -69,11 +78,26 @@ export const flowLanguage = StreamLanguage.define<State>({
       st.value = false;
       st.label = false;
       st.first = true;
+      st.arg = false;
     }
     if (stream.eatSpace()) return null;
     const first = st.first;
     st.first = false;
     if (first && st.header && stream.match(LEADING)) return "keyword";
+    if (first && st.header && st.kind === "sequence" && stream.match(AUTONUMBER)) {
+      st.arg = true;
+      return "keyword";
+    }
+    if (st.arg) {
+      st.arg = false;
+      if (stream.match(/^off/)) return "keyword";
+      if (stream.match(/^(0|[1-9]\d{0,5})/)) return "number";
+    }
+    if (first && st.header && stream.pos === 0 && isFrameHeader(stream.string, 0, stream.string.length) && stream.match(/^diagram/)) {
+      st.kindNext = true;
+      st.kind = null;
+      return "keyword";
+    }
     // A timeline date, and a period's "to" and second date.
     if (first && st.header && stream.match(/^\d{4}(-\d{2}){0,2}(?=[\s:])/)) return "number";
     if (stream.match(/^to(?=\s+\d{4})/)) return "keyword";
@@ -86,7 +110,11 @@ export const flowLanguage = StreamLanguage.define<State>({
     if (st.kindNext) {
       st.kindNext = false;
       st.title = true;
-      if (stream.match(/^[^\s"/]+/)) return "typeName";
+      const word = stream.match(/^[^\s"/]+/) as RegExpMatchArray | null;
+      if (word) {
+        st.kind = DIAGRAM_KINDS.find((k) => k === word[0]) ?? null;
+        return "typeName";
+      }
     }
     if (st.title) {
       if (stream.peek() === '"') quoted(stream);

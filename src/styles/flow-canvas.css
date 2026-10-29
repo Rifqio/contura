@@ -801,7 +801,7 @@ button.fkind-gut:disabled {
   background: var(--fnode-stroke);
   content: "";
 }
-/* Sequence: the participant's box on top and its dashed lifeline down the node; activations sit on the line. */
+/* Sequence: a participant's head and foot boxes (flow-seq.css draws them, and its lifeline in the lanes node). */
 .fnode-participant,
 .fnode-actor {
   border: 0;
@@ -809,25 +809,6 @@ button.fkind-gut:disabled {
 }
 .fkind-lifehead {
   justify-content: center;
-  border: 1px solid var(--fnode-stroke);
-  border-radius: var(--rounded-md);
-  background: var(--fnode-fill);
-}
-.fkind-lifeline {
-  position: absolute;
-  top: 40px;
-  bottom: 0;
-  left: 50%;
-  border-left: 1px dashed var(--c-border-strong);
-}
-.fkind-activation {
-  position: absolute;
-  left: calc(50% - 5px);
-  width: 10px;
-  box-sizing: border-box;
-  border: 1px solid var(--fnode-stroke);
-  border-radius: 2px;
-  background: var(--fnode-fill);
 }
 .fnode-participant.fnode-selected::after,
 .fnode-actor.fnode-selected::after {

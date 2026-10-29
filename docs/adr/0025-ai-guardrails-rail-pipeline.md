@@ -25,6 +25,13 @@ The model cannot reach a database, and it cannot send more than the user allowed
 
 **The diagram tool** passes through the execution rail like every call: see ADR 0023.
 
+**Board Asks put the whole board through the rails (ADR 0019, "The Assistant on boards").** `board_items` adds the header, one Diagram item per frame sent, the sketch notes and the selection to the Ask's items before `run_rails`, so the input rail cleans each and the retrieval rail frames each; nothing on a board skips them. The budget is `board_budget`, so a board too big for the window fails `TooBig` as before, and frames are dropped whole, never cut. The checker for a board's ops is `check_board`, in the execution rail like every tool call.
+
+- **The follow-up field.** `ProposeInput.follow_up { question }` (at most 300 characters) is cleaned like the other fields. A call that asks shows no proposal: its ops are dropped and logged `tool.drop reason=asked_first`. The user's reply goes back as part of the next turn's text and through the input rail; only the reply is saved.
+- **The attachment item.** File on the start screen calls `ai_pick_attachment`: the Core opens the dialog itself, so no path comes from the webview or the model. `read_attachment` refuses a path outside what `check_user_path` allows, an extension off the allow list (`.md .txt .flow .mmd .sql .dbml .json .yaml .yml`), any path segment starting with `.`, and a file over `ATTACH_MAX_BYTES` (64 KB). The text waits in a one-slot hold under a token; the next Ask adds it as an `ItemKind::Attachment` item, cleaned and framed like any item, and takes at most a third of the board budget, cut at a line end with a note saying so.
+- **History on diagram Asks.** The last 4 turns of the board's chat go as one `ItemKind::History` item through the same rails, only when the thread's place is `diagram:<file>`, within 2,000 tokens; no earlier board text is replayed. Preview and Ask build the same item, so Sends shows what is sent. `move_ai_place` moves a board's chats when the board is renamed, so history never crosses to another file.
+- **A frame drawn from a Connection** is held by that Connection's AI access before any rail runs (`held_sources`, ADR 0023): Never, deleted, or another Group's provider refuses the Ask; it is never cut to get around the gate.
+
 ## Considered and rejected
 
 - **NeMo Guardrails.** It is Python; Contura ships no interpreter, and the rules needed are a few exact checks.

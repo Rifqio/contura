@@ -5,6 +5,7 @@ import { aiSearchThreads, errorText } from "../api/client";
 import type { ConnectionConfig, ThreadSummary } from "../api/types";
 import DbMark from "../components/DbMark";
 import Icon from "../components/Icon";
+import { motionMs } from "../diagram/motion";
 import { agoText } from "../format/units";
 import { HEAD_PX, LIST_PX, type ListItem, ROW_PX, groupByDay, rowTime, rowWindow } from "./historyList";
 
@@ -31,6 +32,8 @@ interface Props {
   emptyPlace?: string | null;
   /** A slash command: `n` counts the requests; "clear" opens the popover on the current chat's Delete question. */
   command?: { n: number; kind: "open" | "clear" };
+  /** False draws no hover text (the diagram side panel's rule: aria-labels only). */
+  hoverText?: boolean;
 }
 
 /** The question under Clear all: what goes, then Clear and Cancel. */
@@ -156,7 +159,10 @@ export default function ThreadHistory({
   onClearAll,
   emptyPlace = "No database",
   command,
+  hoverText = true,
 }: Props) {
+  /** A hover text, unless this place draws none. */
+  const tip = (text: string | undefined) => (hoverText ? text : undefined);
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [hits, setHits] = useState<ThreadSummary[] | null>(null);
@@ -533,7 +539,7 @@ export default function ThreadHistory({
           className="history-chat"
           data-row-id={id}
           // The full title and the age: on hover the row actions take the time's place.
-          title={`${t.title}\n${ago}`}
+          title={tip(`${t.title}\n${ago}`)}
           aria-current={id === currentId ? "true" : undefined}
           aria-disabled={busy ? true : undefined}
           tabIndex={id === tabId ? 0 : -1}
@@ -542,7 +548,7 @@ export default function ThreadHistory({
         >
           <span className="history-chat-title">{t.title}</span>
           {!active && (
-            <span className="history-chat-time" title={ago}>
+            <span className="history-chat-time" title={tip(ago)}>
               {rowTime(t.updatedAt, now)}
             </span>
           )}
@@ -550,14 +556,14 @@ export default function ThreadHistory({
         </button>
         {active && (
           <span className="history-actions">
-            <button type="button" className="icon-button" aria-label="Rename" title="Rename" onClick={() => startRename(t)}>
+            <button type="button" className="icon-button" aria-label="Rename" title={tip("Rename")} onClick={() => startRename(t)}>
               <Icon name="edit" size={14} />
             </button>
             <button
               type="button"
               className="icon-button"
               aria-label="Delete"
-              title="Delete"
+              title={tip("Delete")}
               disabled={!canDelete(id)}
               onClick={() => askDelete(id)}
             >
@@ -596,7 +602,7 @@ export default function ThreadHistory({
         className="icon-button"
         aria-label="Show history"
         // P11-40: no hover text while the popover is open, so it never covers the search field.
-        title={open ? undefined : "Show history"}
+        title={open ? undefined : tip("Show history")}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => (open ? close() : setOpen(true))}
@@ -608,7 +614,7 @@ export default function ThreadHistory({
           className="menu menu-end history-menu"
           role="dialog"
           aria-label="Chat history"
-          style={width !== undefined ? { width: Math.min(360, width) } : undefined}
+          style={{ ...(width !== undefined ? { width: Math.min(360, width) } : null), animationDuration: `${motionMs("menu")}ms` }}
         >
           <input
             ref={field}

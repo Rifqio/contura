@@ -150,6 +150,46 @@ async fn pg_sql_schema_lists_tables_views_columns_and_fks() {
 }
 
 #[tokio::test]
+async fn pg_sql_schema_gives_enum_columns_their_labels_in_order() {
+    let db = PgTestDb::create().await;
+    let admin = pg_admin_client(&db.name).await;
+    admin
+        .batch_execute(
+            "CREATE TYPE public.mood AS ENUM ('sad', 'it''s ok', 'a, b');
+             ALTER TYPE public.mood ADD VALUE 'first' BEFORE 'sad';
+             CREATE TABLE public.people (id int PRIMARY KEY, mood public.mood, name text);",
+        )
+        .await
+        .expect("seed");
+    drop(admin);
+
+    let dialect = connect(&db.config, db.password.as_deref()).await.unwrap();
+    let s = dialect.sql_schema(&db.name).await.unwrap();
+    dialect.disconnect().await.ok();
+
+    let people = table(&s, "people");
+    let labels: Vec<(&str, Vec<&str>)> = people
+        .columns
+        .iter()
+        .map(|c| {
+            (
+                c.name.as_str(),
+                c.enum_values.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        vec![
+            ("id", vec![]),
+            ("mood", vec!["first", "sad", "it's ok", "a, b"]),
+            ("name", vec![]),
+        ]
+    );
+    db.drop_db().await;
+}
+
+#[tokio::test]
 async fn sqlite_sql_schema_lists_tables_views_columns_and_fks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("shop.sqlite");

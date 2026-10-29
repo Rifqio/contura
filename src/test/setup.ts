@@ -13,3 +13,9 @@ if (typeof globalThis.CSS === "undefined" || typeof globalThis.CSS.escape !== "f
     String(value).replace(/[\0-\x1f\x7f]|[^\w\u0080-￿-]/g, (ch) => (ch <= "\x1f" || ch === "\x7f" ? `\\${ch.charCodeAt(0).toString(16)} ` : `\\${ch}`));
   globalThis.CSS = { ...(globalThis.CSS ?? {}), escape } as typeof CSS;
 }
+
+// jsdom has no layout and no `document.elementFromPoint`; React Flow's connection drag asks it what is under the
+// pointer on every move. Nothing is under a point in jsdom; a test that needs a target sets its own.
+if (typeof document !== "undefined" && typeof document.elementFromPoint !== "function") {
+  document.elementFromPoint = () => null;
+}

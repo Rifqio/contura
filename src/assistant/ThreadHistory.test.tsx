@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ConnectionConfig, ThreadSummary, WorkTag } from "../api/types";
 import { callsTo, routeInvoke } from "../test/invoke";
+import { setReducedMotionPref } from "../diagram/motion";
 import ThreadHistory from "./ThreadHistory";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -507,4 +508,30 @@ test("parity_P11_40_the_history_tooltip_never_covers_the_search_field", async ()
   expect(button.hasAttribute("title")).toBe(false);
   await user.keyboard("{Escape}");
   expect(button.getAttribute("title")).toBe("Show history");
+});
+
+test("the_row_tag_follows_the_last_table", async () => {
+  const on = (table: string): WorkTag => ({ connectionId: "c1", database: "hc-backend", table, tabLabel: "Query 1" });
+  const { user, view, props } = setup({ threads: [summary("t", "Customers", 60_000, on("customers"))], currentId: "t" });
+  await open(user);
+  expect(chatRows()[0].querySelector(".history-chat-table")?.textContent).toBe("customers");
+  // The same chat worked on `orders` in another tab; the next list update carries it.
+  view.rerender(<ThreadHistory {...props} threads={[summary("t", "Customers", 30_000, on("orders"))]} />);
+  expect(chatRows()[0].querySelector(".history-chat-table")?.textContent).toBe("orders");
+});
+
+test("the_popover_opens_without_motion_under_reduced_motion", async () => {
+  setReducedMotionPref(true);
+  try {
+    const { user } = setup();
+    await open(user);
+    const menu = screen.getByRole("dialog", { name: "Chat history" });
+    expect(menu.style.animationDuration).toBe("0ms");
+    setReducedMotionPref(false);
+    await user.click(screen.getByRole("button", { name: "Show history" }));
+    await open(user);
+    expect(screen.getByRole("dialog", { name: "Chat history" }).style.animationDuration).not.toBe("0ms");
+  } finally {
+    setReducedMotionPref(false);
+  }
 });

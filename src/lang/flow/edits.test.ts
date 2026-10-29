@@ -10,6 +10,7 @@ import {
   moveToGroup,
   renameNode,
   setAttr,
+  setNumbering,
   setLinkLabel,
   uniqueName,
 } from "./edits";
@@ -560,4 +561,62 @@ test("addNode with before writes the new line just before that node", () => {
 test("a taken name gets the next free number after a space", () => {
   const flow = lines('diagram flow "f"', "Step");
   expect(applyFlowEdit(flow, parseFlow(flow), { op: "addNode", name: "Step", kind: null, unique: true }).name).toBe("Step 2");
+});
+
+describe("numbering", () => {
+  const SEQ = (...body: string[]) => lines('diagram sequence "Pay"', ...body);
+  const turn = (text: string, on: boolean) => apply(text, setNumbering(text, parseFlow(text), on));
+
+  test("numbering_on_writes_one_line_after_the_header", () => {
+    const text = SEQ("participant A", "A -> B: hi");
+    expect(turn(text, true)).toBe(SEQ("autonumber", "participant A", "A -> B: hi"));
+    expect(doc(turn(text, true)).autonumber).toEqual([{ from: 0 }]);
+  });
+
+  test("numbering_off_removes_every_directive", () => {
+    const text = SEQ("autonumber 10", "A -> B: one", "loop retry {", "  autonumber off", "  A -> B: two", "}");
+    expect(turn(text, false)).toBe(SEQ("A -> B: one", "loop retry {", "  A -> B: two", "}"));
+  });
+
+  test("numbering_on_replaces_other_directives_with_one", () => {
+    const text = SEQ("A -> B: one", "autonumber 5", "A -> B: two");
+    expect(turn(text, true)).toBe(SEQ("autonumber", "A -> B: one", "A -> B: two"));
+  });
+
+  test("numbering_keeps_a_trailing_comment", () => {
+    const text = SEQ("autonumber 10 // start at ten", "A -> B: one");
+    expect(turn(text, false)).toBe(SEQ("// start at ten", "A -> B: one"));
+    const nested = SEQ("loop x {", "  autonumber off // quiet", "  A -> B: one", "}");
+    expect(turn(nested, false)).toBe(SEQ("loop x {", "  // quiet", "  A -> B: one", "}"));
+  });
+
+  test("numbering_keeps_crlf", () => {
+    const text = SEQ("A -> B: one").replace(/\n/g, "\r\n");
+    const on = turn(text, true);
+    expect(on).toBe('diagram sequence "Pay"\r\nautonumber\r\nA -> B: one\r\n');
+    expect(turn(on, false)).toBe(text);
+  });
+
+  test("numbering_on_is_a_no_op_when_already_plain", () => {
+    const text = SEQ("autonumber", "A -> B: one");
+    expect(setNumbering(text, parseFlow(text), true)).toEqual([]);
+  });
+
+  test("numbering_does_nothing_while_the_frame_has_an_error", () => {
+    const text = SEQ("A -> B: one", "autonumber what");
+    expect(parseFlow(text).doc).toBeNull();
+    expect(setNumbering(text, parseFlow(text), true)).toEqual([]);
+    expect(setNumbering(text, parseFlow(text), false)).toEqual([]);
+  });
+
+  test("numbering_does_nothing_outside_a_sequence", () => {
+    const text = 'diagram flow "F"\nA > B\n';
+    expect(setNumbering(text, parseFlow(text), true)).toEqual([]);
+  });
+
+  test("numbering_through_applyFlowEdit", () => {
+    const text = SEQ("A -> B: one");
+    const r = applyFlowEdit(text, parseFlow(text), { op: "setNumbering", on: true });
+    expect(apply(text, r.edits)).toBe(SEQ("autonumber", "A -> B: one"));
+  });
 });

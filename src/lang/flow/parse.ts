@@ -17,6 +17,7 @@ import {
   type FlowLink,
   type FlowNode,
   type FlowNodeKind,
+  type SeqNumbering,
   flowName,
   KINDS,
   MAX_FAN_LINKS,
@@ -48,7 +49,7 @@ export type FlowRange = { from: number; to: number };
  * - `link:<i>`: from its first name to its second; `fromName`, `toName`, `arrow`, `label`, `line` (the whole statement),
  *   and `attrs` (its `[color: ..]`, step 11) on the last link of a statement that has one.
  * - `frame:<i>`: a sequence frame by its index in the doc's frames, through its `}`; `name` (the label after the kind
- *   word, empty when it has none), `open` and `close`.
+ *   word, empty when it has none, ending before any brackets), `attrs` (its `[color: ..]`), `values`, `open` and `close`.
  */
 export type FlowSpan = FlowRange & {
   name?: FlowRange;
@@ -113,12 +114,14 @@ export type RowSpan = { line: FlowRange; name?: FlowRange; column?: FlowRange; t
 const NODE_PARTS = ["name", "attrs", "kind"] as const;
 const GROUP_PARTS = ["name", "attrs", "open", "close"] as const;
 const LINK_PARTS = ["fromName", "toName", "arrow", "label", "line", "attrs"] as const;
-type Part = (typeof NODE_PARTS)[number] | (typeof GROUP_PARTS)[number] | (typeof LINK_PARTS)[number];
+const DIRECTIVE_PARTS = ["label", "line"] as const;
+type Part = (typeof NODE_PARTS)[number] | (typeof GROUP_PARTS)[number] | (typeof LINK_PARTS)[number] | (typeof DIRECTIVE_PARTS)[number];
 
 function partsOf(key: string): readonly Part[] {
   if (key.startsWith("node:")) return NODE_PARTS;
   if (key.startsWith("group:") || key.startsWith("frame:") || key.startsWith("table:")) return GROUP_PARTS;
   if (key.startsWith("link:")) return LINK_PARTS;
+  if (key.startsWith("autonumber:")) return DIRECTIVE_PARTS;
   return [];
 }
 
@@ -229,10 +232,11 @@ class Parser {
   /** Each node's own extra lines (class members). */
   private rows = new Map<string, RowSpan[]>();
   /** Sequence frames: the open ones, and those closed. */
-  private frameStack: { label: string; kind: string; from: number; depth: number; at: number; nameTo: number; line: number; labelFrom: number; labelTo: number }[] = [];
+  private frameStack: { label: string; kind: string; from: number; depth: number; at: number; nameTo: number; line: number; labelFrom: number; labelTo: number; color?: string; attrs?: FlowRange; values?: Record<string, FlowRange> }[] = [];
   private frames: NonNullable<FlowDoc["frames"]> = [];
   private openActs = new Map<string, number>();
   private activations: NonNullable<FlowDoc["activations"]> = [];
+  private numbering: SeqNumbering[] = [];
   /** Timeline sections and the one items go in now. */
   private sections: string[] = [];
   private section: string | undefined;
@@ -596,6 +600,7 @@ class Parser {
       this.pushNode({ name, kind: "note", attrs: {}, text: text?.value ?? "" }, { from: p, to: range.to }, range);
       return true;
     }
+    if (k === "sequence" && w && w.word === "autonumber" && (w.to >= e || isWs(s.charCodeAt(w.to)) || this.isComment(w.to, e) || s.charCodeAt(w.to) === 58)) return this.autonumber(p, w.to, e);
     if (k === "sequence" && w && spaced) {
       if (w.word === "participant" || w.word === "actor") return this.declared(p, after, e, w.word);
       if (w.word === "activate" || w.word === "deactivate") {
@@ -623,9 +628,14 @@ class Parser {
           this.error(p, this.lineEnd(p, e), MESSAGES.frameNeedsBrace);
           return true;
         }
-        const labelTo = this.trimBack(j, after);
+        let labelTo = this.trimBack(j, after);
+        // A trailing [..] is the block's attributes only when every key in it is a known one; a UML guard stays text.
+        const b = this.trailingAttrs(after, labelTo);
+        const attrs = b >= 0 ? this.attrs(b, labelTo) : null;
+        if (attrs) labelTo = this.trimBack(b, after);
         const label = s.slice(after, labelTo).trim();
-        this.frameStack.push({ label: label ? `${w.word} ${label}` : w.word, kind: w.word, from: this.links.length, depth: this.frameStack.length, at: p, nameTo: j, line: this.line, labelFrom: after, labelTo });
+        if (attrs) this.blockAttrs(attrs);
+        this.frameStack.push({ label: label ? `${w.word} ${label}` : w.word, kind: w.word, from: this.links.length, depth: this.frameStack.length, at: p, nameTo: j, line: this.line, labelFrom: after, labelTo, color: attrs?.attrs.color, attrs: attrs ? { from: attrs.from, to: attrs.to } : undefined, values: attrs?.values });
         this.end(j + 1, e);
         return true;
       }
@@ -652,6 +662,34 @@ class Parser {
     }
     void lineFrom;
     return false;
+  }
+
+  /** An `autonumber` line in a sequence: bare, `off` or a number; with an arrow or colon it is a name, quoted by the fix. */
+  private autonumber(p: number, wordTo: number, e: number): boolean {
+    const s = this.s;
+    const at = this.ws(wordTo, e);
+    const stop = this.trimBack(this.lineEnd(at, e), at);
+    const c = at < e ? s.charCodeAt(at) : 0;
+    const c2 = at + 1 < e ? s.charCodeAt(at + 1) : 0;
+    if (c === 58 || c === 62 || c === 60 || (c === 45 && (c2 === 45 || c2 === 62)) || (c === 46 && c2 === 46)) {
+      this.error(p, stop, MESSAGES.autonumberName, () => [{ title: FIX_TITLES.use('"autonumber"'), edits: [{ from: p, to: wordTo, insert: '"autonumber"' }] }]);
+      return true;
+    }
+    const arg = s.slice(at, stop);
+    const from = this.links.length;
+    if (stop > at && !/^(off|0|[1-9]\d{0,5})$/.test(arg)) {
+      this.error(at, stop, MESSAGES.autonumberArg, () => [{ title: FIX_TITLES.remove, edits: [{ from: wordTo, to: stop, insert: "" }] }]);
+      return true;
+    }
+    const d: SeqNumbering = { from };
+    if (arg === "off") d.off = true;
+    else if (stop > at) d.start = Number(arg);
+    const to = stop > at ? stop : wordTo;
+    const lineTo = this.trimBack(e, p);
+    this.packed.set(`autonumber:${this.numbering.length}`, [p, to, stop > at ? at : -1, stop > at ? stop : -1, p, lineTo]);
+    this.numbering.push(d);
+    this.end(to, e);
+    return true;
   }
 
   /** A node declared by its leading word: `participant App`, `class Invoice`, `milestone v1.0`, `root Plan`. */
@@ -1170,8 +1208,9 @@ class Parser {
     const f = this.kind === "sequence" ? this.frameStack.pop() : undefined;
     if (f) {
       // GROUP_PARTS for `frame:<i>` (its index in the doc's frames): the label after the kind word, the `{`, the `}`.
-      this.packed.set(`frame:${this.frames.length}`, [f.at, p + 1, f.labelFrom, f.labelTo, -1, -1, f.nameTo, f.nameTo + 1, p, p + 1]);
-      this.frames.push({ label: f.label, kind: f.kind, from: f.from, to: this.links.length - 1, depth: f.depth });
+      this.packed.set(`frame:${this.frames.length}`, [f.at, p + 1, f.labelFrom, f.labelTo, f.attrs ? f.attrs.from : -1, f.attrs ? f.attrs.to : -1, f.nameTo, f.nameTo + 1, p, p + 1]);
+      if (f.values) this.values.set(`frame:${this.frames.length}`, f.values);
+      this.frames.push({ label: f.label, kind: f.kind, from: f.from, to: this.links.length - 1, depth: f.depth, ...(f.color !== undefined ? { color: f.color } : {}) });
       this.end(p + 1, e);
       return;
     }
@@ -1705,6 +1744,22 @@ class Parser {
     }
   }
 
+  /** A sequence frame's brackets take a colour only (`MESSAGES.blockAttrs`); the colour is checked like a line's. */
+  private blockAttrs(attrs: Attrs) {
+    const s = this.s;
+    const items = [...(attrs.kind ? [attrs.kind] : []), ...attrs.keys.filter((k) => k !== "color").map((k) => attrs.items[k])];
+    const only = (attrs.kind ? 1 : 0) + attrs.keys.length === 1;
+    for (const item of items) {
+      this.error(item.from, item.to, MESSAGES.blockAttrs, () => {
+        if (!only) return [{ title: FIX_TITLES.remove, edits: [this.removeItem(item)] }];
+        let from = attrs.from;
+        while (from > 0 && (s.charCodeAt(from - 1) === 32 || s.charCodeAt(from - 1) === 9)) from--;
+        return [{ title: FIX_TITLES.remove, edits: [{ from, to: attrs.to, insert: "" }] }];
+      });
+    }
+    this.checkColour(attrs.attrs.color, attrs.values.color);
+  }
+
   /** A line's colour from its brackets, with a problem for what a line does not take (step 11). */
   private lineColour(attrs: Attrs | null): string | undefined {
     if (!attrs) return undefined;
@@ -1920,6 +1975,7 @@ class Parser {
     if (kind === "sequence") {
       doc.frames = this.frames;
       doc.activations = this.activations;
+      if (this.numbering.length) doc.autonumber = this.numbering;
     }
     if (kind === "timeline") doc.sections = this.sections;
     return doc;

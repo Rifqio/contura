@@ -7,6 +7,19 @@
     "file": {
       "type": "string"
     },
+    "follow_up": {
+      "additionalProperties": false,
+      "properties": {
+        "question": {
+          "maxLength": 300,
+          "type": "string"
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "type": "object"
+    },
     "ops": {
       "items": {
         "oneOf": [
@@ -16,6 +29,10 @@
               "add_node": {
                 "additionalProperties": false,
                 "properties": {
+                  "frame": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
                   "group": {
                     "maxLength": 200,
                     "type": "string"
@@ -50,6 +67,10 @@
               "remove_node": {
                 "additionalProperties": false,
                 "properties": {
+                  "frame": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
                   "target": {
                     "maxLength": 200,
                     "type": "string"
@@ -72,6 +93,10 @@
               "rename_node": {
                 "additionalProperties": false,
                 "properties": {
+                  "frame": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
                   "name": {
                     "maxLength": 200,
                     "type": "string"
@@ -99,6 +124,10 @@
               "add_flow": {
                 "additionalProperties": false,
                 "properties": {
+                  "frame": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
                   "from": {
                     "maxLength": 200,
                     "type": "string"
@@ -130,6 +159,10 @@
               "remove_flow": {
                 "additionalProperties": false,
                 "properties": {
+                  "frame": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
                   "from": {
                     "maxLength": 200,
                     "type": "string"
@@ -161,6 +194,10 @@
               "relabel_flow": {
                 "additionalProperties": false,
                 "properties": {
+                  "frame": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
                   "from": {
                     "maxLength": 200,
                     "type": "string"
@@ -193,6 +230,10 @@
               "move_to_group": {
                 "additionalProperties": false,
                 "properties": {
+                  "frame": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
                   "group": {
                     "maxLength": 200,
                     "type": [
@@ -213,6 +254,160 @@
             },
             "required": [
               "move_to_group"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "add_frame": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "dfd",
+                      "flow",
+                      "cloud",
+                      "er",
+                      "sequence",
+                      "state",
+                      "class",
+                      "mindmap",
+                      "timeline"
+                    ],
+                    "type": "string"
+                  },
+                  "title": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title",
+                  "kind"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "add_frame"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "add_column": {
+                "additionalProperties": false,
+                "properties": {
+                  "flags": {
+                    "items": {
+                      "enum": [
+                        "pk",
+                        "not null",
+                        "unique"
+                      ],
+                      "type": "string"
+                    },
+                    "maxItems": 3,
+                    "type": "array"
+                  },
+                  "frame": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "table": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "type": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "table",
+                  "name"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "add_column"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "remove_column": {
+                "additionalProperties": false,
+                "properties": {
+                  "column": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "frame": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "table": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "table",
+                  "column"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "remove_column"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "set_column": {
+                "additionalProperties": false,
+                "properties": {
+                  "column": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "frame": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "table": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "type": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "table",
+                  "column"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "set_column"
             ],
             "type": "object"
           }

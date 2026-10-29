@@ -1,0 +1,73 @@
+{
+  "dfd": [
+    { "what": "An outside party", "example": "Customer [entity]" },
+    { "what": "A process with its number", "example": "Checkout [process, id: 1]" },
+    { "what": "A data store", "example": "Orders [store, id: D1]" },
+    { "what": "A data flow", "example": "Customer > Checkout: order details" },
+    { "what": "Both ways", "example": "Checkout <> Payments" },
+    { "what": "Dashed", "example": "Checkout --> Audit" }
+  ],
+  "flow": [
+    { "what": "A step", "example": "Check stock [step]" },
+    { "what": "A decision", "example": "Paid? [decision]" },
+    { "what": "Input or output", "example": "Card details [io]" },
+    { "what": "An arrow", "example": "Cart > Pay" },
+    { "what": "A labelled arrow", "example": "Paid? > Ship: yes" },
+    { "what": "Fan out to several steps", "example": "Pack > Ship, Email" }
+  ],
+  "cloud": [
+    { "what": "A service", "example": "Api [service]" },
+    { "what": "A service with an icon", "example": "Web [icon: server]" },
+    { "what": "An arrow with a label", "example": "Users > Web: HTTPS" },
+    { "what": "Fan out to several services", "example": "Web > Api, Cache" },
+    { "what": "Both ways", "example": "Web <> Cache" },
+    { "what": "Dashed", "example": "Web --> Logs" }
+  ],
+  "er": [
+    { "what": "A table", "example": "orders" },
+    { "what": "A label and a colour", "example": "orders [entity, label: Orders, color: info]" },
+    { "what": "Many to one", "example": "orders.customer_id > customers.id" },
+    { "what": "One to many", "example": "customers.id < orders.customer_id" },
+    { "what": "One to one", "example": "users.id - profiles.user_id" },
+    { "what": "A label on a line", "example": "orders.customer_id > customers.id: placed by" }
+  ],
+  "sequence": [
+    { "what": "A participant", "example": "participant App" },
+    { "what": "A person", "example": "actor Customer" },
+    { "what": "A message", "example": "Customer -> App: Pay" },
+    { "what": "A reply (dashed)", "example": "App --> Customer: Receipt" },
+    { "what": "A message to itself", "example": "Billing -> Billing: Check fraud" },
+    { "what": "A participant with an icon and a colour", "example": "participant Db [icon: database, color: success]" }
+  ],
+  "state": [
+    { "what": "A state", "example": "Draft [state]" },
+    { "what": "A transition on an event", "example": "Draft > Sent: send" },
+    { "what": "A choice", "example": "Paid? [choice]" },
+    { "what": "A fork", "example": "Split [fork]" },
+    { "what": "Dashed", "example": "Sent --> Draft: reopen" },
+    { "what": "Dotted", "example": "Sent -- Archived" }
+  ],
+  "class": [
+    { "what": "A class", "example": "class Invoice" },
+    { "what": "An interface", "example": "interface Payable" },
+    { "what": "An enum", "example": "enum Status" },
+    { "what": "A field", "example": "Invoice : + id: int" },
+    { "what": "A method", "example": "Invoice : + send()" },
+    { "what": "Extends", "example": "Document <|-- Invoice" }
+  ],
+  "mindmap": [
+    { "what": "The idea in the middle", "example": "root Q4 plan" },
+    { "what": "An icon", "example": "  Release [icon: star]" },
+    { "what": "A label and a colour", "example": "  Release [label: Ship it, color: success]" },
+    { "what": "An arrow across branches", "example": "Diagrams > Release" },
+    { "what": "A note", "example": "note: Due by December" }
+  ],
+  "timeline": [
+    { "what": "An item on a day", "example": "2026-10-19: Docs ready" },
+    { "what": "An item in a month", "example": "2026-11: Beta" },
+    { "what": "An item in a year", "example": "2027: Version 2" },
+    { "what": "A period", "example": "2026-09 to 2026-10: Data transfer" },
+    { "what": "A milestone", "example": "milestone v1.0" },
+    { "what": "A section", "example": "section Q4 2026" }
+  ]
+}

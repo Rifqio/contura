@@ -7,7 +7,11 @@
 // The writer comes in parts (B4 Task 1): `sceneBody` draws a scene, `svgDefs` the shared defs and `wrapSvg` the head,
 // background and mark round them; `sceneToSvg` is the three in a row.
 import { iconPath, type IconName } from "../../components/Icon";
-import { erMetrics } from "../../flow/kindLayout";
+import { ER_FAR_ROW, SOFT_CHAR_W } from "../canvasView";
+import { contrastRatio, FAINT, logoHex } from "../../flow/icons";
+import { erMetrics, messageLabelW, SEQ_HEAD } from "../../flow/kindLayout";
+import { seqColours } from "../../flow/seqColour";
+import { ACT_W } from "../../flow/seqGeometry";
 import { CARD_HEADER, CARD_ROW } from "../metrics";
 import { roundedPath } from "../route";
 import type { EdgeKind } from "../types";
@@ -184,6 +188,8 @@ let textK = 1;
 /** The icon references and the hairline id of the draw in progress, set by `sceneBody` with `textK`. */
 let refsInUse: IconRefs | undefined;
 let hairline = HAIRLINE;
+/** The palette of a soft-text draw in progress (a frame picture), set with `textK`: ER rows are drawn as bars. */
+let softPalette: ExportPalette | undefined;
 const textWidth = (s: string) => s.length * 7 * textK;
 
 /** A data flow node in Modern or the Classic Gane-Sarson shapes (frame 6+.2). */
@@ -412,20 +418,73 @@ function classSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
   parts.push(`<rect data-part="outline" x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}" rx="6" fill="none" stroke="${stroke}"${dash}/>`);
 }
 
-/** A sequence participant: its head box on top (an actor with a person before its name), the dashed lifeline down the node, its activation bars. */
-function participantSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
-  const { fill, stroke } = palette.nodes[n.kind];
-  const { x, y, w, h } = n;
-  const cx = x + w / 2;
-  parts.push(`<path data-part="lifeline" d="M${num(cx)} ${num(y + 40)} V${num(y + h)}" fill="none" stroke="${palette.strongBorder}" stroke-dasharray="4 3"/>`);
-  for (const b of n.bars ?? []) {
-    parts.push(`<rect data-part="activation" x="${num(cx - 5)}" y="${num(y + b.top)}" width="10" height="${num(b.height)}" rx="2" fill="${fill}" stroke="${stroke}"/>`);
+/**
+ * Whether a sequence participant's icon draws with the hairline (Plan E Decision 5): when Plan C asks for it, or when
+ * its logo's own colour is under 1.5:1 (`FAINT`) on the participant's `fill`.
+ */
+function participantOutline(n: SceneNode, fill: string): boolean {
+  if (n.iconOutline) return true;
+  const hex = n.iconName ? logoHex(n.iconName) : null;
+  return hex !== null && contrastRatio(hex, fill) < FAINT;
+}
+
+const SEQ_WHO: ReadonlySet<string> = new Set(["participant", "actor"]);
+const whoOf = (n: SceneNode) => (n.kind === "actor" ? "actor" : "participant");
+
+/**
+ * A sequence participant as SeqParticipant and SeqLanes draw it (Plan E Decisions 4, 6, 12): its solid lane in its line
+ * colour, its activation bars, then its head box on top and its foot box at `foot`, each filled with the tint of its
+ * colour and outlined in it, with its icon (or the dashed cube tile for one the pack lacks; an actor with no icon a
+ * person) and its words in the text colour, the pair centred.
+ */
+function participantSvg(n: SceneNode, palette: ExportPalette): string {
+  const p = participantParts(n, palette);
+  const parts = [`<path data-part="lifeline" d="M${num(p.lane.x)} ${num(p.lane.top)} V${num(p.lane.bottom)}" fill="none" stroke="${p.line}" stroke-width="1.5"/>`];
+  for (const b of p.bars) {
+    parts.push(`<rect data-part="activation" x="${num(b.x)}" y="${num(b.y)}" width="${ACT_W}" height="${num(b.h)}" rx="2" fill="${p.fill}" stroke="${p.line}"/>`);
   }
-  parts.push(`<rect data-part="lifehead" x="${num(x)}" y="${num(y)}" width="${num(w)}" height="40" rx="6" fill="${fill}" stroke="${stroke}"/>`);
-  if (n.kind === "actor") {
-    const left = cx - (20 + textWidth(n.title)) / 2;
-    parts.push(glyph("user", left, y + 13, 14, stroke, "person"), text(left + 20, y + 25, n.title, ` font-weight="600"`));
-  } else parts.push(text(cx, y + 25, n.title, ` text-anchor="middle" font-weight="600"`));
+  p.boxes.forEach((b, i) => {
+    parts.push(`<rect data-part="lifehead" x="${num(b.x)}" y="${num(b.y)}" width="${num(b.w)}" height="${SEQ_HEAD}" rx="7" fill="${p.fill}" stroke="${p.line}" stroke-width="1.5"/>`);
+    parts.push(p.marks[i]);
+    const t = p.names[i];
+    parts.push(text(t.x, t.y, n.title, `${t.anchor ? ` text-anchor="${t.anchor}"` : ""} font-weight="600"`));
+  });
+  return `<g data-node="${esc(n.id)}">${parts.join("")}</g>`;
+}
+
+/**
+ * A participant's geometry and colours, shared by `participantSvg` and a frame picture's `PictureSequence`: its lane, its
+ * bars, its head and foot boxes, the icon (or tile, or person) drawn in each, and each one's words, their baseline
+ * and anchor (13 px, bold).
+ */
+function participantParts(n: SceneNode, palette: ExportPalette) {
+  const { line, fill } = seqColours(palette, n.color, whoOf(n));
+  const { x, y, w } = n;
+  const cx = x + w / 2;
+  const foot = n.foot ?? n.h - SEQ_HEAD;
+  const bars = (n.bars ?? []).map((b) => ({ x: cx - ACT_W / 2, y: y + b.top, h: b.height }));
+  const url = n.icon && SAFE_IMAGE.test(n.icon) ? n.icon : null;
+  const outline = url !== null && participantOutline(n, fill);
+  // An 18 px icon slot and a 6 px gap before the words.
+  const slot = url || n.iconName || n.kind === "actor" ? 24 : 0;
+  const left = cx - (slot + messageLabelW(n.title, "state", textK)) / 2;
+  const boxes: { x: number; y: number; w: number }[] = [];
+  const marks: string[] = [];
+  const names: { x: number; y: number; anchor?: "middle" }[] = [];
+  for (const top of [y, y + foot]) {
+    const iy = top + (SEQ_HEAD - 18) / 2;
+    boxes.push({ x, y: top, w });
+    if (url) marks.push(imageSvg(url, left, iy, 18, outline));
+    else if (n.iconName) {
+      marks.push(
+        `<rect data-part="icon-tile" x="${num(left)}" y="${num(iy)}" width="18" height="18" rx="3" fill="${palette.surface}" stroke="${palette.strongBorder}" stroke-dasharray="3 2"/>` +
+          glyph("cube", left + 2, iy + 2, 14, palette.subtle),
+      );
+    } else if (n.kind === "actor") marks.push(glyph("user", left + 1, iy + 1, 16, palette.text, "person"));
+    else marks.push("");
+    names.push(slot ? { x: left + slot, y: top + SEQ_HEAD / 2 + 4.5 * textK } : { x: cx, y: top + SEQ_HEAD / 2 + 4.5 * textK, anchor: "middle" });
+  }
+  return { line, fill, lane: { x: cx, top: y + SEQ_HEAD, bottom: y + foot }, bars, boxes, marks, names };
 }
 
 /** A mind map's central idea, a stronger pill; a branch topic, a pill; a deeper topic, plain words on a line. */
@@ -484,6 +543,8 @@ const coloured = (palette: ExportPalette, c: SceneColour | undefined) => (c && (
 
 /** A drawn node: data flow, flowchart, cloud (frames 6+.2, 6+.4, 6+.5), state and the step 12 kinds, as the canvas draws them. */
 function drawnSvg(n: SceneNode, given: ExportPalette): string {
+  // A participant takes the sequence colours (Plan E Decision 4), never a preset's fill.
+  if (SEQ_WHO.has(n.kind)) return participantSvg(n, given);
   const parts: string[] = [];
   // Step 11: a coloured shape draws its palette colour's fill and border in place of its kind's, and its words.
   const c = coloured(given, n.color);
@@ -493,7 +554,6 @@ function drawnSvg(n: SceneNode, given: ExportPalette): string {
   else if (STATE_KINDS.has(n.kind)) stateSvg(n, palette, parts);
   else if (n.kind === "note") noteSvg(n, palette, parts);
   else if (CLASS_KINDS.has(n.kind)) classSvg(n, palette, parts);
-  else if (n.kind === "participant" || n.kind === "actor") participantSvg(n, palette, parts);
   else if (MIND_KINDS.has(n.kind)) mindSvg(n, palette, parts);
   else if (TIME_KINDS.has(n.kind)) timeSvg(n, palette, parts);
   else if (n.kind === "document" || n.kind === "database") documentSvg(n, palette, parts);
@@ -517,12 +577,26 @@ function areaSvg(a: SceneArea, palette: ExportPalette): string {
 
 /** A 6 px arrowhead at `tip`, pointing away from `from`. */
 function head(from: { x: number; y: number }, tip: { x: number; y: number }, fill: string): string {
+  return `<path data-marker="head" d="${headD(from, tip)}" fill="${fill}"/>`;
+}
+
+/** The 6 px filled head's outline at `tip`, pointing away from `from`. */
+function headD(from: { x: number; y: number }, tip: { x: number; y: number }): string {
   const len = Math.hypot(tip.x - from.x, tip.y - from.y);
   const ux = len === 0 ? 1 : (tip.x - from.x) / len;
   const uy = len === 0 ? 0 : (tip.y - from.y) / len;
   const bx = tip.x - ux * 6;
   const by = tip.y - uy * 6;
-  return `<path data-marker="head" d="M${num(tip.x)} ${num(tip.y)} L${num(bx - uy * 3)} ${num(by + ux * 3)} L${num(bx + uy * 3)} ${num(by - ux * 3)} Z" fill="${fill}"/>`;
+  return `M${num(tip.x)} ${num(tip.y)} L${num(bx - uy * 3)} ${num(by + ux * 3)} L${num(bx + uy * 3)} ${num(by - ux * 3)} Z`;
+}
+
+/** The 10 px open head's stroke at `tip`, pointing away from `from`. */
+function openD(from: { x: number; y: number }, tip: { x: number; y: number }): string {
+  const len = Math.hypot(tip.x - from.x, tip.y - from.y);
+  const ux = len === 0 ? 1 : (tip.x - from.x) / len;
+  const uy = len === 0 ? 0 : (tip.y - from.y) / len;
+  const at = (back: number, side: number) => `${num(tip.x - ux * back - uy * side)} ${num(tip.y - uy * back + ux * side)}`;
+  return `M${at(9, -4)} L${at(0, 0)} L${at(9, 4)}`;
 }
 
 /**
@@ -536,7 +610,7 @@ function markSvg(mark: SceneMark, from: { x: number; y: number }, tip: { x: numb
   const uy = len === 0 ? 0 : (tip.y - from.y) / len;
   const at = (back: number, side: number) => `${num(tip.x - ux * back - uy * side)} ${num(tip.y - uy * back + ux * side)}`;
   const stroke = palette.subtle;
-  if (mark === "open") return `<path${tag} data-marker="open" d="M${at(9, -4)} L${at(0, 0)} L${at(9, 4)}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round"/>`;
+  if (mark === "open") return `<path${tag} data-marker="open" d="${openD(from, tip)}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round"/>`;
   // An ER end, as the canvas's markers draw it: a bar across the line 8 px in, or a crow's foot spreading onto the card.
   if (mark === "one") return `<path${tag} data-marker="bar" d="M${at(8, -5)} L${at(8, 5)}" fill="none" stroke="${stroke}" stroke-width="1.5"/>`;
   if (mark === "many") return `<path${tag} data-marker="crow" d="M${at(10, 0)} L${at(0, -5)} M${at(10, 0)} L${at(0, 5)} M${at(10, 0)} L${at(0, 0)}" fill="none" stroke="${stroke}" stroke-width="1.5"/>`;
@@ -576,27 +650,176 @@ function flowEdgeSvg(e: SceneEdge, given: ExportPalette): string {
 }
 
 /**
- * A sequence message as SeqEdge draws it: straight along its row from lifeline to lifeline (a message to itself loops
- * out right), dashed for a reply, its head at the target, its words above the line on the canvas colour.
+ * A sequence message as SeqEdge draws it (Plan E Decisions 7, 9 to 11): the drawing's path with the gap at its label,
+ * dashed for a reply, its head on the last segment; then its label's chip in the canvas's colour or its block's wash, the
+ * label on it at its measured width (`textLength`, so every viewer breaks the line where the canvas does); then its
+ * number on the sender's lifeline. Far (a soft picture) the digits go, as the canvas's far numbers do.
  */
-function messageSvg(e: SceneEdge, palette: ExportPalette): string {
-  const pts = e.points;
+function messageSvg(e: SceneEdge, palette: ExportPalette, frames: readonly SceneFrame[]): string {
+  const m = messageParts(e, palette, frames);
   const stroke = palette.subtle;
-  const dash = e.line === "dashed" ? ` stroke-dasharray="5 4"` : "";
-  const d = pts.map((p, i) => `${i === 0 ? "M" : "L"}${num(p.x)} ${num(p.y)}`).join(" ");
-  const parts = [`<path data-part="message" d="${d}" fill="none" stroke="${stroke}" stroke-width="1.5"${dash}/>`];
-  parts.push(markSvg(e.marks?.end ?? "arrow", pts[pts.length - 2], pts[pts.length - 1], palette, ` data-part="head"`));
-  if (e.label) {
-    const self = pts.length > 2;
-    const w = textWidth(e.label) * 0.93 + 8;
-    const left = self ? pts[0].x + 48 : (pts[0].x + pts[1].x) / 2 - w / 2;
-    const bottom = self ? pts[0].y : pts[0].y - 10;
+  const dash = m.dashed ? ` stroke-dasharray="5 4"` : "";
+  const parts = [`<path data-part="message" d="${m.d}" fill="none" stroke="${stroke}" stroke-width="1.5"${dash}/>`];
+  parts.push(markSvg(m.mark, m.from, m.tip, palette, ` data-part="head"`));
+  if (m.chip) {
+    const c = m.chip;
+    const fit = e.labelW !== undefined ? ` textLength="${num(e.labelW)}" lengthAdjust="spacingAndGlyphs"` : "";
     parts.push(
-      `<rect x="${num(left)}" y="${num(bottom - 16 * textK)}" width="${num(w)}" height="${num(16 * textK)}" rx="3" fill="${palette.canvas}"/>`,
-      text(left + 4, bottom - 4, e.label, ` font-size="12" fill="${palette.subtle}"`),
+      `<rect data-part="chip" x="${num(c.x)}" y="${num(c.y)}" width="${num(c.w)}" height="${num(c.h)}" rx="3" fill="${c.bg}"/>`,
+      text(c.x + c.w / 2, c.y + c.h / 2 + 4 * textK, e.label!, ` text-anchor="middle" font-size="12"${fit}`),
     );
   }
+  const nb = m.number;
+  if (nb) {
+    parts.push(`<rect data-part="number" x="${num(nb.x)}" y="${num(nb.y)}" width="${num(nb.w)}" height="${num(nb.h)}" rx="${num(nb.h / 2)}" fill="${palette.surface}" stroke="${nb.line}" stroke-width="1.5"/>`);
+    if (!softPalette) parts.push(text(nb.cx, nb.cy + 4 * textK, String(nb.n), ` data-part="number-text" text-anchor="middle" font-size="11" font-weight="600"`));
+  }
   return `<g data-edge="${esc(e.id)}">${parts.join("")}</g>`;
+}
+
+/**
+ * A message's geometry and colours, shared by `messageSvg` and a frame picture's `PictureSequence`: its path, dashed for a
+ * reply, its end mark, its label's chip in its colour (the label centred on it, 12 px) and its number's pill.
+ */
+function messageParts(e: SceneEdge, palette: ExportPalette, frames: readonly SceneFrame[]) {
+  const pts = e.points;
+  const d = e.path ?? pts.map((p, i) => `${i === 0 ? "M" : "L"}${num(p.x)} ${num(p.y)}`).join(" ");
+  const chip =
+    e.label && e.chip ? { ...e.chip, bg: typeof e.chipBg === "number" ? seqColours(palette, frames[e.chipBg]?.color, "block").wash : palette.canvas } : null;
+  const nb = e.number;
+  const k = textK;
+  const number = nb ? { n: nb.n, cx: nb.x, cy: nb.y, x: nb.x - nb.w / 2, y: nb.y - 10 * k, w: nb.w, h: 20 * k, line: seqColours(palette, nb.color, nb.who).line } : null;
+  return { d, dashed: e.line === "dashed", mark: e.marks?.end ?? "arrow", from: pts[pts.length - 2], tip: pts[pts.length - 1], chip, number };
+}
+
+/** A rectangle as path commands, one of many in a path. */
+const rectD = (x: number, y: number, w: number, h: number) => `M${num(x)} ${num(y)}h${num(w)}v${num(h)}h${num(-w)}z`;
+
+/**
+ * A sequence in a frame picture (Plan E Task 9; Plan F Decision 7). At the sequence limit (2,000 participants, 3,000
+ * messages) one element a part made 3.7 M characters of SVG with soft text (4 M with words): 15 and 16 pieces of
+ * PICTURE_PIECE_CHARS, each an SVG document WebKit keeps. In a picture every part of one style is one subpath of one
+ * path, as F's far ER rows are: the lifelines of a colour, the bars and the boxes of a colour, the message lines,
+ * their heads, the chips of a colour and the number pills of a colour; soft words are one path of bars, real words
+ * (`picture-text`) one group of runs a kind. Boxes, bars and pills lose their round corners (7 units at most: under a
+ * pixel at PICTURE_MAX_SCALE). Participants paint lanes, bars, boxes, icons, words; messages lines, heads, chips,
+ * pills, words: what overlaps keeps its order, as no two participants' parts and no two messages' parts meet.
+ */
+class PictureSequence {
+  private readonly lanes = new Map<string, string[]>();
+  private readonly bars = new Map<string, string[]>();
+  private readonly boxes = new Map<string, string[]>();
+  private marks: string[] = [];
+  private names: string[] = [];
+  private solid: string[] = [];
+  private dashed: string[] = [];
+  private arrows: string[] = [];
+  private opens: string[] = [];
+  private readonly chips = new Map<string, string[]>();
+  private labels: string[] = [];
+  private readonly numbers = new Map<string, string[]>();
+  private digits: string[] = [];
+
+  /** `soft`: words as bars (text far); else the words themselves. */
+  constructor(private readonly soft: boolean) {}
+
+  private static add(m: Map<string, string[]>, key: string, d: string) {
+    const list = m.get(key);
+    if (list) list.push(d);
+    else m.set(key, [d]);
+  }
+
+  participant(n: SceneNode, palette: ExportPalette) {
+    const p = participantParts(n, palette);
+    PictureSequence.add(this.lanes, p.line, `M${num(p.lane.x)} ${num(p.lane.top)}V${num(p.lane.bottom)}`);
+    const style = `${p.fill}|${p.line}`;
+    for (const b of p.bars) PictureSequence.add(this.bars, style, rectD(b.x, b.y, ACT_W, b.h));
+    const len = [...n.title].length;
+    p.boxes.forEach((b, i) => {
+      PictureSequence.add(this.boxes, style, rectD(b.x, b.y, b.w, SEQ_HEAD));
+      if (p.marks[i]) this.marks.push(p.marks[i]);
+      const t = p.names[i];
+      if (!this.soft) this.names.push(text(t.x, t.y, n.title, t.anchor ? ` text-anchor="${t.anchor}"` : ""));
+      else if (len) {
+        const r = softBar(t.x, t.y, len, 13 * textK, n.w, t.anchor);
+        this.names.push(rectD(r.x, r.y, r.w, r.h));
+      }
+    });
+  }
+
+  message(e: SceneEdge, palette: ExportPalette, frames: readonly SceneFrame[]) {
+    const m = messageParts(e, palette, frames);
+    (m.dashed ? this.dashed : this.solid).push(m.d);
+    if (m.mark === "open") this.opens.push(openD(m.from, m.tip));
+    else this.arrows.push(headD(m.from, m.tip));
+    if (m.chip) {
+      const c = m.chip;
+      PictureSequence.add(this.chips, c.bg, rectD(c.x, c.y, c.w, c.h));
+      const len = [...e.label!].length;
+      const y = c.y + c.h / 2 + 4 * textK;
+      if (!this.soft) this.labels.push(text(c.x + c.w / 2, y, e.label!, e.labelW !== undefined ? ` textLength="${num(e.labelW)}" lengthAdjust="spacingAndGlyphs"` : ""));
+      else if (len) {
+        const r = softBar(c.x + c.w / 2, y, len, 12 * textK, Infinity, "middle");
+        this.labels.push(rectD(r.x, r.y, r.w, r.h));
+      }
+    }
+    const nb = m.number;
+    if (nb) {
+      PictureSequence.add(this.numbers, nb.line, rectD(nb.x, nb.y, nb.w, nb.h));
+      // Far, the digits go, as the canvas's far numbers do.
+      if (!this.soft) this.digits.push(text(nb.cx, nb.cy + 4 * textK, String(nb.n)));
+    }
+  }
+
+  /** The words of one kind: soft, one path of bars; else one group of runs sharing `attrs`. */
+  private words(list: string[], palette: ExportPalette, part: string, attrs: string): string {
+    if (!list.length) return "";
+    return this.soft ? `<path data-part="soft-${part}" d="${list.join("")}" fill="${palette.faint}" fill-opacity="0.45"/>` : `<g data-part="${part}"${attrs}>${list.join("")}</g>`;
+  }
+
+  /** The participants' layers, in paint order; they are let go. */
+  participantsSvg(palette: ExportPalette): string {
+    const out: string[] = [];
+    for (const [line, ds] of this.lanes) out.push(`<path data-part="lifelines" d="${ds.join("")}" fill="none" stroke="${line}" stroke-width="1.5"/>`);
+    for (const [style, ds] of this.bars) {
+      const [fill, line] = style.split("|");
+      out.push(`<path data-part="activations" d="${ds.join("")}" fill="${fill}" stroke="${line}"/>`);
+    }
+    for (const [style, ds] of this.boxes) {
+      const [fill, line] = style.split("|");
+      out.push(`<path data-part="lifeheads" d="${ds.join("")}" fill="${fill}" stroke="${line}" stroke-width="1.5"/>`);
+    }
+    out.push(...this.marks, this.words(this.names, palette, "names", ` font-weight="600"`));
+    this.lanes.clear();
+    this.bars.clear();
+    this.boxes.clear();
+    this.marks = [];
+    this.names = [];
+    return out.join("");
+  }
+
+  /** The messages' layers, in paint order; they are let go. */
+  messagesSvg(palette: ExportPalette): string {
+    const stroke = palette.subtle;
+    const out: string[] = [];
+    if (this.solid.length) out.push(`<path data-part="messages" d="${this.solid.join(" ")}" fill="none" stroke="${stroke}" stroke-width="1.5"/>`);
+    if (this.dashed.length) out.push(`<path data-part="replies" d="${this.dashed.join(" ")}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-dasharray="5 4"/>`);
+    if (this.arrows.length) out.push(`<path data-part="heads" d="${this.arrows.join(" ")}" fill="${stroke}"/>`);
+    if (this.opens.length) out.push(`<path data-part="open-heads" d="${this.opens.join(" ")}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round"/>`);
+    for (const [bg, ds] of this.chips) out.push(`<path data-part="chip" d="${ds.join("")}" fill="${bg}"/>`);
+    out.push(this.words(this.labels, palette, "labels", ` text-anchor="middle" font-size="12"`));
+    for (const [line, ds] of this.numbers) out.push(`<path data-part="numbers" d="${ds.join("")}" fill="${palette.surface}" stroke="${line}" stroke-width="1.5"/>`);
+    if (this.digits.length) out.push(`<g data-part="number-texts" text-anchor="middle" font-size="11" font-weight="600">${this.digits.join("")}</g>`);
+    this.solid = [];
+    this.dashed = [];
+    this.arrows = [];
+    this.opens = [];
+    this.chips.clear();
+    this.labels = [];
+    this.numbers.clear();
+    this.digits = [];
+    return out.join("");
+  }
 }
 
 /** A mind map branch as MindEdge draws it: a curve from the parent's side to the child's, with no head. */
@@ -607,16 +830,39 @@ function branchSvg(e: SceneEdge, palette: ExportPalette): string {
   return `<g data-edge="${esc(e.id)}"><path d="M${num(a.x)} ${num(a.y)} C ${num(mx)} ${num(a.y)}, ${num(mx)} ${num(b.y)}, ${num(b.x)} ${num(b.y)}" fill="none" stroke="${palette.subtle}" stroke-width="1.5"/></g>`;
 }
 
-/** A sequence frame's box over its rows, on a light tint of the panel. */
-const frameSvg = (f: SceneFrame, i: number, palette: ExportPalette) =>
-  `<g data-frame="${i}"><rect x="${num(f.x)}" y="${num(f.y)}" width="${num(f.w)}" height="${num(f.h)}" rx="6" fill="${palette.panel}" fill-opacity="0.4" stroke="${palette.strongBorder}"/></g>`;
+/** Each block kind's glyph on its side tab (Plan E Decision 13, as seqNodes `BLOCK_GLYPH`). */
+const BLOCK_GLYPH: Record<string, IconName> = { loop: "repeat", alt: "split", opt: "branch", par: "columns", critical: "warning" };
 
-/** A frame's label in its tab at the frame's top left, drawn over the participants as the canvas draws it. */
+/**
+ * A block (a sequence frame) as SeqFrame draws it (Plan E Decision 13): its opaque wash outlined in its line colour, and
+ * down its left edge the side tab in its tab colour with its kind's glyph and, when there is room, its kind word turned a
+ * quarter counter-clockwise, in the tab's ink.
+ */
+function frameSvg(f: SceneFrame, i: number, palette: ExportPalette): string {
+  const { line, wash, tab, tabInk } = seqColours(palette, f.color, "block");
+  const t = f.tab;
+  const r = 6;
+  const parts = [
+    `<rect data-part="wash" x="${num(f.x)}" y="${num(f.y)}" width="${num(f.w)}" height="${num(f.h)}" rx="${r}" fill="${wash}" stroke="${line}" stroke-width="1.5"/>`,
+    `<path data-part="tab" d="M${num(t.x + t.w)} ${num(t.y)} H${num(t.x + r)} Q${num(t.x)} ${num(t.y)} ${num(t.x)} ${num(t.y + r)} V${num(t.y + t.h - r)} Q${num(t.x)} ${num(t.y + t.h)} ${num(t.x + r)} ${num(t.y + t.h)} H${num(t.x + t.w)} Z" fill="${tab}"/>`,
+    glyph(BLOCK_GLYPH[f.kind] ?? "repeat", t.x + 3, t.y + 5, 18, tabInk, "glyph"),
+  ];
+  if (f.word) {
+    // Under the glyph (5 + 18 + 8 down), centred on the tab, reading upward.
+    const cx = t.x + t.w / 2;
+    const cy = t.y + 31 + f.wordW / 2;
+    parts.push(`<text transform="rotate(-90 ${num(cx)} ${num(cy)})" x="${num(cx)}" y="${num(cy + 4 * textK)}" text-anchor="middle" font-size="11" font-weight="600" fill="${tabInk}">${esc(f.kind)}</text>`);
+  }
+  return `<g data-frame="${i}">${parts.join("")}</g>`;
+}
+
+/** A block's caption (its label after the kind word) on a chip of its wash, drawn over the participants; none without one. */
 function frameTabSvg(f: SceneFrame, i: number, palette: ExportPalette): string {
-  const w = f.label.length * 7 * textK + 18;
-  const { x, y } = f;
-  const d = `M${num(x)} ${num(y + 21)} V${num(y + 6)} Q${num(x)} ${num(y)} ${num(x + 6)} ${num(y)} H${num(x + w)} V${num(y + 15)} Q${num(x + w)} ${num(y + 21)} ${num(x + w - 6)} ${num(y + 21)} Z`;
-  return `<g data-frame-tab="${i}"><path data-part="tab" d="${d}" fill="${palette.surface}" stroke="${palette.strongBorder}"/>${text(x + 8, y + 15, f.label, ` font-size="12" font-weight="600" fill="${palette.subtle}"`)}</g>`;
+  const c = f.captionBox;
+  if (!c) return "";
+  const { wash } = seqColours(palette, f.color, "block");
+  const words = text(c.x + 6, c.y + c.h / 2 + 4 * textK, f.caption, ` font-size="12" fill="${palette.subtle}" textLength="${num(c.w - 12)}" lengthAdjust="spacingAndGlyphs"`);
+  return `<g data-frame-tab="${i}"><rect data-part="caption" x="${num(c.x)}" y="${num(c.y)}" width="${num(c.w)}" height="${num(c.h)}" rx="3" fill="${wash}"/>${words}</g>`;
 }
 
 /** A timeline section: a quiet dashed band, named at the top. */
@@ -663,7 +909,30 @@ function nodeSvg(n: SceneNode, palette: ExportPalette): string {
   // An ER card's not-null marks, as the canvas draws them: a filled diamond, an outline for a nullable column (M11).
   const nulls = er;
   const typeX = x + w - (nulls ? 24 : 10);
-  n.rows.forEach((row, i) => {
+  // A soft-text ER card (a far frame picture, Plan F Decision 7) draws its rows as the canvas's far card does (kindNodes
+  // `ErBars`, Decision 3), from the one `ER_FAR_ROW`: on each row's middle a name bar `from` into the rows body and a
+  // type bar ending `to` before its right, `h` times the text size tall, at most 0.55 and 0.3 of the card, in the faint
+  // token at 45 percent; a key row's square in the key colour in the gutter; no not-null marks. The rows body sits
+  // inside the card's 1 px border. All bars are one path, and the key marks another, in the card's own units: one path
+  // a card keeps a 2,000-table picture small.
+  if (er && softPalette) {
+    const inset = 1;
+    const bh = ER_FAR_ROW.h * textK;
+    const bar = (left: number, top: number, bw: number, h: number) => `M${num(left)} ${num(top)}h${num(bw)}v${num(h)}h${num(-bw)}z`;
+    let d = "";
+    let keys = "";
+    n.rows.forEach((row, i) => {
+      const mid = m.mid + m.row * i;
+      const nameW = Math.min(row.left.length * SOFT_CHAR_W * textK, 0.55 * w);
+      if (nameW > 0) d += bar(inset + ER_FAR_ROW.from, mid - bh / 2, nameW, bh);
+      const typeW = row.right ? Math.min(row.right.length * SOFT_CHAR_W * textK, 0.3 * w) : 0;
+      if (typeW > 0) d += bar(inset + w - ER_FAR_ROW.to - typeW, mid - bh / 2, typeW, bh);
+      if (row.mark === "pk") keys += bar(inset + ER_FAR_ROW.keyMid - ER_FAR_ROW.key / 2, mid - ER_FAR_ROW.key / 2, ER_FAR_ROW.key, ER_FAR_ROW.key);
+    });
+    if (d) parts.push(`<path data-part="soft-rows" transform="translate(${x} ${y})" d="${d}" fill="${softPalette.faint}" fill-opacity="0.45"/>`);
+    if (keys) parts.push(`<path data-part="soft-keys" transform="translate(${x} ${y})" d="${keys}" fill="${softPalette.keyMark}"/>`);
+  }
+  if (!(er && softPalette)) n.rows.forEach((row, i) => {
     // An ER row's words sit 4 px (at the text size) under its middle, the diamond on it; others on the card's pitch.
     const mid = y + m.mid + m.row * i;
     const ty = at(er ? mid + 4 * textK : y + CARD_HEADER + CARD_ROW * i + 16);
@@ -698,11 +967,11 @@ function nodeSvg(n: SceneNode, palette: ExportPalette): string {
 
 const DASH: Partial<Record<EdgeKind, string>> = { joinPending: "5 4", joinCross: "5 4", where: "1.5 3" };
 
-function edgeSvg(e: SceneEdge, palette: ExportPalette): string {
+function edgeSvg(e: SceneEdge, palette: ExportPalette, frames: readonly SceneFrame[] = []): string {
   const pts = e.points;
   if (pts.length < 2) return "";
   if (e.kind === "flow") return flowEdgeSvg(e, palette);
-  if (e.kind === "message") return messageSvg(e, palette);
+  if (e.kind === "message") return messageSvg(e, palette, frames);
   if (e.kind === "branch") return branchSvg(e, palette);
   const stroke = palette.subtle;
   const width = e.kind === "lineage" ? 1 : 1.5;
@@ -758,36 +1027,155 @@ function scaleFonts(svg: string, k: number): string {
   return k === 1 ? svg : svg.replace(/ font-size="([\d.]+)"/g, (_, n: string) => ` font-size="${num(Number(n) * k)}"`);
 }
 
-/** Whether the scene draws a pale logo that takes the hairline filter (an outlined icon on a node or a group). */
-export function sceneOutlined(scene: Scene): boolean {
-  return scene.nodes.some((n) => n.iconOutline && n.icon) || (scene.areas ?? []).some((a) => a.iconOutline && a.icon);
+/**
+ * Whether the scene draws a pale logo that takes the hairline filter (an outlined icon on a node or a group). A
+ * sequence participant's logo also takes it when faint on the participant's fill in `palette`; without the palette any
+ * participant's logo counts, so a filter the drawing names is always defined.
+ */
+export function sceneOutlined(scene: Scene, palette?: ExportPalette): boolean {
+  const outlined = (n: SceneNode) => {
+    if (!n.icon) return false;
+    if (n.iconOutline) return true;
+    if (!SEQ_WHO.has(n.kind) || !n.iconName) return false;
+    return palette ? participantOutline(n, seqColours(palette, n.color, whoOf(n)).fill) : logoHex(n.iconName) !== null;
+  };
+  return scene.nodes.some(outlined) || (scene.areas ?? []).some((a) => a.iconOutline && a.icon);
+}
+
+/** One run of words: a `<text>` element, its attributes and what it holds (tspans included). */
+const TEXT_RUN = /<text([^>]*)>([\s\S]*?)<\/text>/g;
+const RUN_ATTR = { x: / x="([^"]*)"/, y: / y="([^"]*)"/, size: / font-size="([^"]*)"/, anchor: / text-anchor="([^"]*)"/ };
+const attrOf = (attrs: string, name: keyof typeof RUN_ATTR) => RUN_ATTR[name].exec(attrs)?.[1];
+const ENTITY: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"' };
+
+/**
+ * Every run of words in `svg` as one soft bar (Plan F Decision 7, as the canvas draws far text, Decision 2): a
+ * `<rect rx="2">` on the run's line, `min(len * SOFT_CHAR_W * fontPx / 13, cap)` wide from the run's anchor, in
+ * `palette.faint` at 45 percent. `fontPx` is the run's own size at the scene's text size; `cap` is the width of the
+ * shape, group or band the run sits in.
+ */
+function softRuns(svg: string, cap: number, palette: ExportPalette): string {
+  return svg.replace(TEXT_RUN, (_, attrs: string, inner: string) => {
+    // A turned run (a block's kind word) is left out: a bar could not follow it, and turned 11 px words far are unreadable.
+    if (/\stransform=/.test(attrs)) return "";
+    const words = inner.replace(/<[^>]*>/g, "").replace(/&(?:amp|lt|gt|quot);/g, (m) => ENTITY[m]);
+    const len = [...words].length;
+    if (len === 0) return "";
+    // A run with no size of its own takes the image's: 13 px times the scene's text size (`wrapSvg`'s root font-size;
+    // no group in a body sets one), the canvas's body size.
+    const px = Number(attrOf(attrs, "size") ?? 13) * textK;
+    const b = softBar(Number(attrOf(attrs, "x") ?? 0), Number(attrOf(attrs, "y") ?? 0), len, px, cap, attrOf(attrs, "anchor"));
+    return `<rect data-part="soft" x="${num(b.x)}" y="${num(b.y)}" width="${num(b.w)}" height="${num(px)}" rx="2" fill="${palette.faint}" fill-opacity="0.45"/>`;
+  });
+}
+
+/**
+ * The soft bar of a run of `len` characters at `fontPx` (already times the text size) whose anchor is at (x, y), its
+ * baseline: `min(len * SOFT_CHAR_W * fontPx / 13, cap)` wide, one em tall from the words' ascent above the baseline.
+ */
+function softBar(x: number, y: number, len: number, px: number, cap: number, anchor: string | undefined): { x: number; y: number; w: number; h: number } {
+  const w = Math.min((len * SOFT_CHAR_W * px) / 13, cap);
+  const left = anchor === "middle" ? x - w / 2 : anchor === "end" ? x - w : x;
+  return { x: left, y: y - 0.8 * px, w, h: px };
 }
 
 /**
  * Everything a scene draws between the background and the mark, at its own text size (`Scene.textScale`, R1). With
- * `refs`, icons are `<use>`s of shared images (`svgDefs` draws them); an outlined one names `hairline`.
+ * `refs`, icons are `<use>`s of shared images (`svgDefs` draws them); an outlined one names `hairline`. With
+ * `opts.softText` every run of words is a soft bar instead (`softRuns`, a frame picture whose text is far); without
+ * `opts` the body is as it always was.
  */
-export function sceneBody(scene: Scene, palette: ExportPalette, refs?: IconRefs, hairlineName: string = hairlineId()): string {
-  textK = scene.textScale ?? 1;
-  refsInUse = refs;
-  hairline = hairlineName;
-  try {
-    const sections = (scene.sections ?? []).map((sec) => sectionSvg(sec, palette)).join("");
-    const areas = (scene.areas ?? []).map((a) => areaSvg(a, palette)).join("");
-    const frames = (scene.frames ?? []).map((fr, i) => frameSvg(fr, i, palette)).join("");
-    const axis = scene.axis ? axisSvg(scene.axis, palette) : "";
-    // Messages go over the lifelines and activation bars, and a frame's tab over everything, as on the canvas.
-    const edges = scene.edges.filter((e) => e.kind !== "message").map((e) => edgeSvg(e, palette)).join("");
-    const nodes = scene.nodes.map((n) => nodeSvg(n, palette)).join("");
-    const messages = scene.edges.filter((e) => e.kind === "message").map((e) => edgeSvg(e, palette)).join("");
-    const tabs = (scene.frames ?? []).map((fr, i) => frameTabSvg(fr, i, palette)).join("");
-    // The frame's text size scales every label of the drawing, as on the canvas.
-    return scaleFonts(`${sections}${areas}${frames}${axis}${edges}${nodes}${messages}${tabs}`, textK);
-  } finally {
-    textK = 1;
-    refsInUse = undefined;
-    hairline = HAIRLINE;
+export function sceneBody(scene: Scene, palette: ExportPalette, refs?: IconRefs, hairlineName: string = hairlineId(), opts?: BodyOptions): string {
+  const steps = sceneBodySteps(scene, palette, refs, hairlineName, opts);
+  for (;;) {
+    const r = steps.next();
+    if (r.done) return r.value;
   }
+}
+
+/**
+ * How a body is drawn: `softText`, every run of words a soft bar; `picture`, a frame picture, where a sequence's parts
+ * of one style are one path each (`PictureSequence`).
+ */
+export interface BodyOptions {
+  softText?: boolean;
+  picture?: boolean;
+}
+
+/** Parts drawn between two yields of `sceneBodySteps`. */
+const BODY_STEP = 64;
+
+/**
+ * `sceneBody` in steps: it yields after every BODY_STEP parts (a shape, a line, a group...), so a frame picture of a
+ * big diagram is drawn across time slices (Plan F Decision 7). The draw's text size, icon references and hairline are
+ * set for each batch and put back before each yield, so another draw may run in between. Drained, it is `sceneBody`.
+ */
+export function* sceneBodySteps(
+  scene: Scene,
+  palette: ExportPalette,
+  refs?: IconRefs,
+  hairlineName: string = hairlineId(),
+  opts?: BodyOptions,
+): Generator<void, string> {
+  const k = scene.textScale ?? 1;
+  const softly = opts?.softText === true;
+  // Each part softened inside its own width, before the fonts are scaled (bars carry no font size).
+  const soft = softly ? (svg: string, cap: number) => softRuns(svg, cap, palette) : (svg: string) => svg;
+  // Messages go over the lifelines and activation bars, and a frame's tab over everything, as on the canvas. A line's
+  // label sits in its own pill, which is wider than the label's bar. A sequence paints in Plan E Decision 15's order:
+  // blocks, each participant (lane, bars, head, foot), messages with their chips and numbers, then captions.
+  const draws: (() => string)[] = [];
+  for (const sec of scene.sections ?? []) draws.push(() => soft(sectionSvg(sec, palette), sec.w));
+  for (const a of scene.areas ?? []) draws.push(() => soft(areaSvg(a, palette), a.w));
+  const frames = scene.frames ?? [];
+  frames.forEach((fr, i) => draws.push(() => soft(frameSvg(fr, i, palette), fr.w)));
+  const axis = scene.axis;
+  if (axis) draws.push(() => axisSvg(axis, palette));
+  for (const e of scene.edges) if (e.kind !== "message") draws.push(() => soft(edgeSvg(e, palette), Infinity));
+  // In a frame picture a sequence's participants and messages are gathered into a few paths (`PictureSequence`),
+  // drawn after the last of each.
+  const seq = opts?.picture ? new PictureSequence(softly) : null;
+  const seqNode = (n: SceneNode) => seq !== null && n.look !== undefined && SEQ_WHO.has(n.kind);
+  for (const n of scene.nodes)
+    if (seqNode(n))
+      draws.push(() => {
+        seq!.participant(n, palette);
+        return "";
+      });
+  if (seq && scene.nodes.some(seqNode)) draws.push(() => seq.participantsSvg(palette));
+  for (const n of scene.nodes) if (!seqNode(n)) draws.push(() => soft(nodeSvg(n, palette), n.w));
+  for (const e of scene.edges)
+    if (e.kind === "message")
+      draws.push(
+        seq && e.points.length >= 2
+          ? () => {
+              seq.message(e, palette, frames);
+              return "";
+            }
+          : () => soft(edgeSvg(e, palette, frames), Infinity),
+      );
+  if (seq && scene.edges.some((e) => e.kind === "message")) draws.push(() => seq.messagesSvg(palette));
+  frames.forEach((fr, i) => draws.push(() => soft(frameTabSvg(fr, i, palette), fr.w)));
+  const parts: string[] = [];
+  for (let i = 0; i < draws.length; i += BODY_STEP) {
+    if (i > 0) yield;
+    textK = k;
+    refsInUse = refs;
+    hairline = hairlineName;
+    softPalette = softly ? palette : undefined;
+    try {
+      let chunk = "";
+      for (let j = i; j < Math.min(i + BODY_STEP, draws.length); j++) chunk += draws[j]();
+      // The frame's text size scales every label of the drawing, as on the canvas.
+      parts.push(scaleFonts(chunk, k));
+    } finally {
+      textK = 1;
+      refsInUse = undefined;
+      hairline = HAIRLINE;
+      softPalette = undefined;
+    }
+  }
+  return parts.join("");
 }
 
 /**
@@ -807,6 +1195,6 @@ const NO_ICONS: ReadonlyMap<string, { url: string; size: number }> = new Map();
 
 /** One scene as an SVG image; the hairline filter is defined once, and only when an outlined logo is drawn. */
 export function sceneToSvg(scene: Scene, palette: ExportPalette, opts: SvgOptions): string {
-  const defs = svgDefs(palette, { hairline: sceneOutlined(scene) ? hairlineId() : null, icons: NO_ICONS });
+  const defs = svgDefs(palette, { hairline: sceneOutlined(scene, palette) ? hairlineId() : null, icons: NO_ICONS });
   return wrapSvg(defs, sceneBody(scene, palette), opts.crop ?? sceneBounds(scene), palette, opts, scene.textScale ?? 1);
 }

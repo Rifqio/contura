@@ -87,6 +87,8 @@ const AI_ERROR_KINDS: string[] = [
   "badToolInput",
   "toolOff",
   "badFileName",
+  "attachmentGone",
+  "diagramHeld",
   "internal",
 ] satisfies AiError["kind"][];
 
@@ -314,6 +316,8 @@ const DEFAULT_KICKER: Partial<Record<AiError["kind"], string>> = {
   badToolInput: "Tool refused",
   toolOff: "Tool off",
   badFileName: "File name",
+  attachmentGone: "Attachment",
+  diagramHeld: "AI access",
   internal: "Error",
 };
 

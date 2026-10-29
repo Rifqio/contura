@@ -62,11 +62,17 @@ export interface SceneNode {
   depth?: number;
   /** A sequence participant's activation bars, measured from the node's top. */
   bars?: { top: number; height: number }[];
+  /** A sequence participant's foot box's top, from the node's top: its lane runs from the head box down to it. */
+  foot?: number;
   /** Step 11: its palette colour, in place of its kind's. */
   color?: SceneColour;
 }
 
-/** A sequence frame (`loop`, `alt`, `opt`, `par`, `critical`): a box over its message rows, its label in a tab. */
+/**
+ * A sequence frame (`loop`, `alt`, `opt`, `par`, `critical`), a block of the drawing (Plan E Decision 13): a box over its
+ * message rows in its colour's wash, its side tab with its kind's glyph and, when `word`, its kind word (`wordW` wide)
+ * turned a quarter; its caption (its label after the kind word) on a chip at `captionBox`, absent with no caption.
+ */
 export interface SceneFrame {
   label: string;
   x: number;
@@ -74,6 +80,13 @@ export interface SceneFrame {
   w: number;
   h: number;
   depth: number;
+  kind: string;
+  caption: string;
+  color?: SceneColour;
+  word: boolean;
+  wordW: number;
+  tab: Box;
+  captionBox?: Box;
 }
 
 /** A timeline section: a quiet dashed band behind its items, named at the top. */
@@ -136,6 +149,16 @@ export interface SceneEdge {
   marks?: { start?: SceneMark; end?: SceneMark };
   /** Step 11: its palette colour, its arrowheads too. */
   color?: SceneColour;
+  /**
+   * A sequence message (Plan E): its path from the drawing, with the gap at its label (`points` are its vertices); its
+   * label `labelW` wide on `chip`, in the canvas's colour or the wash of block `chipBg` (its index in `Scene.frames`);
+   * its number on the sender's lifeline, `w` wide and 20 tall (times the text size), outlined in the sender's colour.
+   */
+  path?: string;
+  labelW?: number;
+  chip?: Box;
+  chipBg?: "canvas" | number;
+  number?: { n: number; x: number; y: number; w: number; color?: SceneColour; who: "participant" | "actor" };
 }
 
 export interface Scene {
@@ -182,11 +205,29 @@ export function sceneBounds(scene: Scene, ids?: string[]): Box {
     take(n.x + n.w, n.y + n.h);
   }
   if (!pick) {
-    for (const e of scene.edges) for (const p of e.points) take(p.x, p.y);
+    const k = scene.textScale ?? 1;
+    for (const e of scene.edges) {
+      for (const p of e.points) take(p.x, p.y);
+      // A sequence message's label chip and number circle.
+      if (e.chip) {
+        take(e.chip.x, e.chip.y);
+        take(e.chip.x + e.chip.w, e.chip.y + e.chip.h);
+      }
+      if (e.number) {
+        take(e.number.x - e.number.w / 2, e.number.y - 10 * k);
+        take(e.number.x + e.number.w / 2, e.number.y + 10 * k);
+      }
+    }
     for (const a of [...(scene.areas ?? []), ...(scene.frames ?? []), ...(scene.sections ?? [])]) {
       take(a.x, a.y);
       take(a.x + a.w, a.y + a.h);
     }
+    // A sequence block's caption chip (inside its block, counted on its own too).
+    for (const f of scene.frames ?? [])
+      if (f.captionBox) {
+        take(f.captionBox.x, f.captionBox.y);
+        take(f.captionBox.x + f.captionBox.w, f.captionBox.y + f.captionBox.h);
+      }
     if (scene.axis) {
       take(scene.axis.x, scene.axis.y - 7);
       take(scene.axis.x + scene.axis.w, scene.axis.y + 7);

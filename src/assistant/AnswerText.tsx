@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo, useRef } from "react";
+import { Fragment, memo, type ReactNode, useMemo, useRef } from "react";
 import type { AnswerActionKind, DialectKind, SqlBlock } from "../api/types";
 import Icon from "../components/Icon";
 import AnswerSql from "./AnswerSql";
@@ -25,6 +25,11 @@ interface Props {
   sqlBlocks?: boolean;
   /** The fence the inline box shows in the editor itself: that block shows no actions of its own. */
   bareFence?: number | null;
+  /**
+   * Draws an inline code span its own way: `n` counts the inline code of the answer outside fenced blocks from 0,
+   * `text` is its text; null keeps the plain code. The caller builds it from the text, never from HTML.
+   */
+  renderCode?(n: number, text: string): ReactNode | null;
 }
 
 /** The longest text node a paragraph gets, so a long answer is laid out and updated in bounded pieces. */
@@ -49,14 +54,23 @@ export function textPieces(text: string): string[] {
   return out;
 }
 
-function Inlines({ inlines }: { inlines: Inline[] }) {
+/** How many inline code spans a block holds (a fenced block none). */
+function codesIn(b: Block): number {
+  const count = (xs: Inline[]) => xs.reduce((n, x) => n + (x.kind === "code" ? 1 : 0), 0);
+  if (b.kind === "para" || b.kind === "heading") return count(b.inlines);
+  return b.kind === "list" ? b.items.reduce((n, it) => n + count(it), 0) : 0;
+}
+
+/** `base` is the number of the first inline code here among the answer's; `draw` draws one its own way. */
+function Inlines({ inlines, base, draw }: { inlines: Inline[]; base: number; draw?: Props["renderCode"] }) {
+  let n = base;
   return (
     <>
       {inlines.map((x, i) =>
         x.kind === "bold" ? (
           <strong key={i}>{x.text}</strong>
         ) : x.kind === "code" ? (
-          <code key={i}>{x.text}</code>
+          <Fragment key={i}>{draw?.(n++, x.text) ?? <code>{x.text}</code>}</Fragment>
         ) : x.text.length > TEXT_NODE_MAX ? (
           <Fragment key={i}>{textPieces(x.text)}</Fragment>
         ) : (
@@ -79,30 +93,37 @@ interface BlockProps {
   onAction?(kind: AnswerActionKind, sql: string, opened?: OpenedTab | null): void;
   sqlBlocks: boolean;
   bare: boolean;
+  codeBase: number;
+  renderCode?: Props["renderCode"];
 }
 
 /** One block; a finished block of a streaming answer keeps its object, so a new delta does not draw it again. */
-const AnswerBlock = memo(function AnswerBlock({ block: b, known, streaming, dialect, target, noEditor, onOpenInNewTab, onCopy, onAction, sqlBlocks, bare }: BlockProps) {
+const AnswerBlock = memo(function AnswerBlock({ block: b, known, streaming, dialect, target, noEditor, onOpenInNewTab, onCopy, onAction, sqlBlocks, bare, codeBase, renderCode }: BlockProps) {
   switch (b.kind) {
     case "para":
       return (
         <p className="answer-p">
-          <Inlines inlines={b.inlines} />
+          <Inlines inlines={b.inlines} base={codeBase} draw={renderCode} />
         </p>
       );
     case "heading":
       // A bold line, not large type; levels 4 to 6 keep it under the panel's own headings.
       return (
         <p className={`answer-h answer-h${b.level}`} role="heading" aria-level={b.level + 3}>
-          <Inlines inlines={b.inlines} />
+          <Inlines inlines={b.inlines} base={codeBase} draw={renderCode} />
         </p>
       );
     case "list": {
-      const items = b.items.map((it, j) => (
-        <li key={j}>
-          <Inlines inlines={it} />
-        </li>
-      ));
+      let base = codeBase;
+      const items = b.items.map((it, j) => {
+        const first = base;
+        base += it.reduce((k, x) => k + (x.kind === "code" ? 1 : 0), 0);
+        return (
+          <li key={j}>
+            <Inlines inlines={it} base={first} draw={renderCode} />
+          </li>
+        );
+      });
       return b.ordered ? <ol className="answer-list">{items}</ol> : <ul className="answer-list">{items}</ul>;
     }
     case "code": {
@@ -175,6 +196,7 @@ export default function AnswerText({
   onAction,
   sqlBlocks = true,
   bareFence = null,
+  renderCode,
 }: Props) {
   // A streaming answer is read as it grows: finished blocks are parsed once and kept (see `createAnswerParser`).
   const parser = useRef<AnswerParser | null>(null);
@@ -184,6 +206,15 @@ export default function AnswerText({
     return parser.current.parse(text);
   }, [text, streaming]);
   const known = streaming ? null : (blocks ?? null);
+  // Where each block's inline code starts in the answer's numbering, for `renderCode`.
+  const bases = useMemo(() => {
+    let n = 0;
+    return parsed.map((b) => {
+      const at = n;
+      n += renderCode ? codesIn(b) : 0;
+      return at;
+    });
+  }, [parsed, renderCode]);
   return (
     <>
       {notes.map((n) => (
@@ -206,6 +237,8 @@ export default function AnswerText({
           onAction={onAction}
           sqlBlocks={sqlBlocks}
           bare={b.kind === "code" && b.fence === bareFence}
+          codeBase={bases[i]}
+          renderCode={renderCode}
         />
       ))}
     </>

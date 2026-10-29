@@ -255,6 +255,8 @@ test("svg_export_has_no_literal_colours", () => {
     strongBorder: "#0a0a0a",
     panel: "#0a0a0a",
     muted: "#0b0b0b",
+    faint: "#0c0c0c",
+    keyMark: "#0d0d0e",
   };
   const svg = exportSvg(
     KFC_MODEL,

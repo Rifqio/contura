@@ -774,3 +774,92 @@ describe("a header with a word that is no diagram kind", () => {
     );
   });
 });
+
+describe("autonumber", () => {
+  const seqText = (...l: string[]) => `${['diagram sequence "N"', ...l].join("\n")}\n`;
+  test("autonumber_forms", () => {
+    const cases: [string, object][] = [
+      ["autonumber", {}],
+      ["autonumber 0", { start: 0 }],
+      ["autonumber 999999", { start: 999999 }],
+      ["autonumber off", { off: true }],
+      ["autonumber // on", {}],
+      ["  autonumber 7 // seven", { start: 7 }],
+    ];
+    for (const [line, want] of cases) expect(ok(seqText("participant A", "participant B", "A -> B", line)).autonumber).toEqual([{ from: 1, ...want }]);
+  });
+  test("autonumber_bad_argument", () => {
+    for (const bad of ["autonumber 010", "autonumber +5", "autonumber 1.5", "autonumber -1", "autonumber 1000000", "autonumber on", "autonumber off 3", "autonumber 10 5", "autonumber [color: red]"]) {
+      const text = seqText(bad);
+      const e = errors(text);
+      expect(e.map((p) => p.message), bad).toEqual([MESSAGES.autonumberArg]);
+      expect(apply(text, e[0].fixes[0].edits).split("\n")[1], bad).toBe("autonumber");
+    }
+  });
+  test("autonumber_with_an_arrow_or_colon", () => {
+    for (const bad of ["autonumber -> B", "autonumber --> B", "autonumber > B", "autonumber -- B", "autonumber: hi"]) {
+      const text = seqText(bad);
+      const r = parseFlow(text);
+      const e = r.problems.filter((p) => p.severity === "error");
+      expect(e.map((p) => p.message), bad).toEqual([MESSAGES.autonumberName]);
+      const fixed = apply(text, e[0].fixes[0].edits);
+      expect(fixed.split("\n")[1], bad).toBe(bad.replace("autonumber", '"autonumber"'));
+    }
+    expect(parseFlow(seqText('"autonumber" -> B')).doc?.links).toHaveLength(1);
+  });
+  test("a_bare_autonumber_declares_nothing", () => {
+    expect(ok(seqText("autonumber")).nodes).toEqual([]);
+    expect(ok(seqText("participant autonumber")).nodes.map((n) => n.name)).toEqual(["autonumber"]);
+    expect(parseFlow(seqText("Autonumber -> B")).doc?.links[0].from).toBe("Autonumber");
+  });
+  test("autonumber_is_a_name_elsewhere", () => {
+    expect(ok('diagram flow "F"\nautonumber\nB\nautonumber > B\n').nodes.map((n) => n.name)).toContain("autonumber");
+  });
+  test("autonumber_span", () => {
+    const text = seqText("participant A", "participant B", "A -> B", "autonumber 7 // seven");
+    const r = parseFlow(text);
+    const s = r.span("autonumber:0")!;
+    expect(at(text, s.from, s.to)).toBe("autonumber 7");
+    expect(at(text, s.label!.from, s.label!.to)).toBe("7");
+    expect(at(text, s.line!.from, s.line!.to)).toBe("autonumber 7 // seven");
+    expect(r.ranges["autonumber:0"]).toEqual(s);
+  });
+});
+
+describe("sequence frame colour", () => {
+  const seq = (head: string) => lines('diagram sequence "S"', "participant A", "participant B", head, "  A -> B: hi", "}");
+  test("a_block_takes_a_colour", () => {
+    expect(ok(seq("opt card saved [color: warning] {")).frames?.[0]).toMatchObject({ label: "opt card saved", kind: "opt", color: "warning" });
+    expect(ok(seq('opt a [color: "#3b82f6"] {')).frames?.[0]).toMatchObject({ label: "opt a", color: "#3b82f6" });
+    expect(ok(seq("loop [color: teal] {")).frames?.[0]).toMatchObject({ label: "loop", kind: "loop", color: "teal" });
+    const text = seq("opt card saved [color: warning] {");
+    const sp = parseFlow(text).span("frame:0")!;
+    expect(at(text, sp.name!.from, sp.name!.to)).toBe("card saved");
+    expect(at(text, sp.attrs!.from, sp.attrs!.to)).toBe("[color: warning]");
+    expect(at(text, sp.values!.color.from, sp.values!.color.to)).toBe("warning");
+  });
+  test("guards_in_brackets_stay_label_text", () => {
+    for (const [head, label] of [
+      ["alt [x > 0] {", "alt [x > 0]"],
+      ["loop [every item] {", "loop [every item]"],
+      ["opt see [note 1] {", "opt see [note 1]"],
+    ]) {
+      const r = parseFlow(seq(head));
+      expect(r.problems).toEqual([]);
+      expect(r.doc?.frames?.[0].label).toBe(label);
+      expect(r.doc?.frames?.[0].color).toBeUndefined();
+    }
+  });
+  test("a_block_refuses_other_keys", () => {
+    const text = seq("loop x [icon: user] {");
+    const [p] = errors(text);
+    expect(errors(text)).toHaveLength(1);
+    expect(p.message).toBe(MESSAGES.blockAttrs);
+    expect(apply(text, p.fixes[0].edits)).toBe(seq("loop x {"));
+    const bad = parseFlow(seq("loop x [color: blurple] {"));
+    expect(bad.problems).toHaveLength(1);
+    expect(bad.problems[0].message).toMatch(/^blurple is not a colour/);
+    expect(bad.problems.every((q) => q.severity === "hint")).toBe(true);
+    expect(bad.doc?.frames?.[0].color).toBe("blurple");
+  });
+});

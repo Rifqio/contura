@@ -99,6 +99,11 @@ pub struct SentRecord {
     pub title: Option<SummarySent>,
     /// The exact text, only with "Keep the exact text sent" on (R7.2).
     pub exact: Option<String>,
+    /// The Connections a diagram Ask's text drew on and that passed its gate: the frames
+    /// From my database drew and the `table:` links that resolved (Task 4b). A later Ask
+    /// leaves this turn out of its history once one of them is held. Empty elsewhere.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<crate::model::ConnectionId>,
 }
 
 /// The sample rows of an Ask, as Sent and Sends count them.
@@ -129,6 +134,7 @@ impl Default for SentRecord {
             rows: None,
             title: None,
             exact: None,
+            sources: Vec::new(),
         }
     }
 }
@@ -472,6 +478,7 @@ mod tests {
                 rows: None,
                 title: None,
                 exact: None,
+                sources: Vec::new(),
             }),
             usage: Some(Usage {
                 input: 1,

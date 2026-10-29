@@ -356,13 +356,16 @@ pub fn write_diagram_layout(data_dir: &Path, name: &str, layout: &str) -> Result
 /// Moves both files to the Recycle Bin. It blocks while the shell works, so the app calls
 /// it off the main thread.
 pub fn delete_diagram(data_dir: &Path, name: &str) -> Result<()> {
-    delete_diagram_with(data_dir, name, |files: &[PathBuf]| {
-        trash::delete_all(files).map_err(|e| {
-            Error::File(format!(
-                "cannot move {} to the Recycle Bin: {e}",
-                files[0].display()
-            ))
-        })
+    delete_diagram_with(data_dir, name, recycle)
+}
+
+/// The Recycle Bin call `delete_diagram` passes to `delete_diagram_with`.
+pub fn recycle(files: &[PathBuf]) -> Result<()> {
+    trash::delete_all(files).map_err(|e| {
+        Error::File(format!(
+            "cannot move {} to the Recycle Bin: {e}",
+            files[0].display()
+        ))
     })
 }
 

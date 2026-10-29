@@ -3,6 +3,7 @@
 // resize pointer. A drag is live: the owner draws the new box once a frame. The zones sit under the ports, so a
 // port wins at an edge's middle.
 import { type PointerEvent as ReactPointerEvent, useLayoutEffect, useRef, useState } from "react";
+import { useZoomVar } from "./zoomVar";
 
 export type ResizeDir = "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
 export const RESIZE_DIRS: readonly ResizeDir[] = ["n", "s", "e", "w", "nw", "ne", "sw", "se"];
@@ -115,6 +116,8 @@ export interface ResizeZonesProps {
 export function ResizeZones({ start, limits, square = false, onLive, onDone, onCancel, onFit }: ResizeZonesProps) {
   const [dragging, setDragging] = useState(false);
   const readout = useRef<HTMLSpanElement>(null);
+  // Each zone keeps its screen size by the zoom, given to the zones alone (Task 9 fix 2).
+  const zoomVar = useZoomVar<HTMLSpanElement>();
   const stop = useRef<(() => void) | null>(null);
   // A layout-effect cleanup, so a drag cut short ends while the zones are still in the page.
   useLayoutEffect(() => () => stop.current?.(), []);
@@ -192,7 +195,7 @@ export function ResizeZones({ start, limits, square = false, onLive, onDone, onC
   return (
     <>
       {RESIZE_DIRS.map((d) => (
-        <span key={d} className={`rz-zone rz-${d} nodrag nopan${dragging ? " rz-dragging" : ""}`} data-dir={d} aria-hidden="true" onPointerDown={down(d)} onDoubleClick={onFit && ((e) => {
+        <span key={d} ref={zoomVar} className={`rz-zone rz-${d} nodrag nopan${dragging ? " rz-dragging" : ""}`} data-dir={d} aria-hidden="true" onPointerDown={down(d)} onDoubleClick={onFit && ((e) => {
           e.stopPropagation();
           onFit();
         })} />

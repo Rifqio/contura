@@ -8,6 +8,10 @@ import { exportPalette, type ExportPalette } from "./palette";
 import { type Scene, sceneBounds } from "./scene";
 import { hairlineId, iconRefs, sceneBody, sceneToSvg, type SvgOptions, svgDefs, wrapSvg } from "./svg";
 import { defsOnlyHold, plainSvg } from "../../test/plainSvg";
+import { flowScene } from "../../flow/flowScene";
+import { erCardH, erMetrics } from "../../flow/kindLayout";
+import { parseFlow } from "../../lang/flow/parse";
+import { SOFT_CHAR_W } from "../canvasView";
 
 const PALETTE: ExportPalette = {
   surface: "#010101",
@@ -30,6 +34,8 @@ const PALETTE: ExportPalette = {
   strongBorder: "#131313",
   panel: "#141414",
   muted: "#151515",
+  faint: "#161616",
+  keyMark: "#171718",
 };
 
 const SCENE: Scene = {
@@ -304,5 +310,86 @@ test("plain_svg_allows_use_and_defs_only_beyond_today", () => {
   expect(() => plainSvg(`<svg ${XL}><g ${XL}><use href="#i" xlink:href="#i"/></g></svg>`)).toThrow();
   for (const bad of ['<defs><script/></defs>', '<defs><image id="i" href="https://example.com/x.png"/></defs>', '<defs><linearGradient id="g"/></defs>', "<defs></defs><defs></defs>"]) {
     expect(() => defsOnlyHold(`<svg>${bad}</svg>`), bad).toThrow();
+  }
+});
+
+// ----- Plan F Task 7 (Decision 7): a frame picture's soft text and its ER cards cut at the canvas's 20 rows.
+
+test("soft_text_draws_bars_and_no_text", () => {
+  for (const k of [1, 1.15]) {
+    const scene: Scene = { ...SCENE, textScale: k };
+    const plain = sceneBody(scene, PALETTE);
+    const body = sceneBody(scene, PALETTE, undefined, undefined, { softText: true });
+    expect(body).not.toContain("<text");
+    expect(body).not.toContain("orders");
+    const bars = [...body.matchAll(/<rect data-part="soft" ([^>]*)\/>/g)].map((m) => m[1]);
+    // One bar a run of words.
+    expect(bars).toHaveLength((plain.match(/<text/g) ?? []).length);
+    for (const b of bars) {
+      expect(b).toContain('rx="2"');
+      expect(b).toContain(`fill="${PALETTE.faint}"`);
+      expect(b).toContain('fill-opacity="0.45"');
+    }
+    const attr = (b: string, n: string) => Number(new RegExp(` ?${n}="([^"]+)"`).exec(b)![1]);
+    // The title "orders" (6 characters at 13 px) starts at the card's left plus 10, as its words did.
+    const title = bars.find((b) => attr(b, "x") === 10 && Math.abs(attr(b, "width") - 6 * SOFT_CHAR_W * k) < 0.01);
+    expect(title, `k ${k}`).toBeDefined();
+    // "Inner join" at 11 px, centred on its pill.
+    const label = 10 * SOFT_CHAR_W * ((11 * k) / 13);
+    const pill = bars.find((b) => Math.abs(attr(b, "width") - label) < 0.01);
+    expect(pill, `k ${k}`).toBeDefined();
+    expect(attr(pill!, "x") + attr(pill!, "width") / 2).toBeCloseTo(308, 1);
+    // A bar never runs past its shape.
+    const long: Scene = { nodes: [{ ...SCENE.nodes[0], id: "w", title: "x".repeat(80) }], edges: [], textScale: k };
+    const widths = [...sceneBody(long, PALETTE, undefined, undefined, { softText: true }).matchAll(/data-part="soft"[^>]* width="([^"]+)"/g)].map((m) => Number(m[1]));
+    expect(Math.max(...widths)).toBe(216);
+  }
+});
+
+test("scene_body_without_options_is_unchanged", () => {
+  // B4's golden, through the body alone: no options and empty options draw what the golden holds.
+  const golden = goldens["./__golden__/scenes.json"];
+  for (const e of golden.entries) {
+    const p = golden.palettes[e.palette];
+    const body = sceneBody(e.scene, p);
+    expect(sceneBody(e.scene, p, undefined, undefined, {}), e.name).toBe(body);
+    expect(sceneBody(e.scene, p, undefined, undefined, { softText: false }), e.name).toBe(body);
+    expect(e.svg, e.name).toContain(body);
+  }
+});
+
+const longEr = (n: number, target: number) =>
+  parseFlow(['diagram er "Long"', "wide {", ...Array.from({ length: n }, (_, i) => `  c${i} int${i === 0 ? " pk" : ""}`), "}", "other {", "  id int pk", "}", `other.id > wide.c${target}`, "other.id > wide.c3"].join("\n")).doc!;
+const AT_WIDE = { wide: { x: 400, y: 100 }, other: { x: 0, y: 0 } };
+
+test("a_row_cap_draws_20_rows_and_ends_lines_at_the_edge", () => {
+  for (const k of [0.88, 1, 1.15]) {
+    const scene = flowScene(longEr(30, 25), AT_WIDE, "modern", new Map(), undefined, undefined, { textScale: k, rowCap: 20 });
+    const wide = scene.nodes.find((x) => x.id === "wide")!;
+    // As tall as the canvas draws a 30-row card: its first 20 rows.
+    expect(wide.h, `k ${k}`).toBe(erCardH(20, k));
+    expect(wide.rows.map((r) => r.left)).toEqual(Array.from({ length: 20 }, (_, i) => `c${i}`));
+    // A line to row 25 ends on the card's bottom edge; one to row 3 at its row.
+    const [toLate, toEarly] = scene.edges;
+    expect(toLate.points[toLate.points.length - 1].y, `k ${k}`).toBeCloseTo(wide.y + wide.h, 9);
+    expect(toEarly.points[toEarly.points.length - 1].y, `k ${k}`).toBeCloseTo(wide.y + erMetrics(k).mid + 3 * erMetrics(k).row, 9);
+    const svg = sceneToSvg(scene, PALETTE, opts);
+    expect(svg).toContain(">c19<");
+    expect(svg).not.toContain(">c20<");
+  }
+  // A card with fewer rows than the cap is drawn whole.
+  const short = flowScene(longEr(5, 4), AT_WIDE, "modern", new Map(), undefined, undefined, { rowCap: 20 });
+  expect(short.nodes.find((x) => x.id === "wide")!.h).toBe(erCardH(5, 1));
+});
+
+test("publish_output_is_unchanged_without_a_row_cap", () => {
+  for (const k of [0.88, 1, 1.15]) {
+    const doc = longEr(30, 25);
+    const without = flowScene(doc, AT_WIDE, "modern", new Map(), undefined, undefined, { textScale: k });
+    const wide = without.nodes.find((x) => x.id === "wide")!;
+    expect(wide.h).toBe(erCardH(30, k));
+    expect(wide.rows).toHaveLength(30);
+    expect(flowScene(doc, AT_WIDE, "modern", new Map(), undefined, undefined, { textScale: k, rowCap: undefined })).toEqual(without);
+    expect(sceneToSvg(without, PALETTE, opts)).toContain(">c29<");
   }
 });

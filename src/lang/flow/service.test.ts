@@ -509,3 +509,50 @@ test("a_half_typed_kind_on_frame_zero_takes_only_its_own_kinds_doc", () => {
   // A known other kind then drops it.
   expect(t.parse("d", `${erFrame("Billing", ["invoices"], true).replace("diagram er", "diagram flow")}\n${pay}`).frames[0].lastValid).toBeNull();
 });
+
+test("board_outline_answers_every_frame_once_with_problems", () => {
+  const s = createFlowService();
+  const shop = ['diagram er "Shop"', "orders {", "  id int pk", "  customer_id int", "}", "customers {", "  id int pk", "}", "orders.customer_id > customers.id", ""].join("\n");
+  const broken = ['diagram flow "Broken"', ...Array.from({ length: 12 }, (_, i) => `A${i} [color: ${"q".repeat(300)}]`), ""].join("\n");
+  const text = `${BOARD}\n${shop}\n${broken}`;
+  const { version, frames } = s.parse("d", text);
+  const r = s.boardOutline("d", version);
+  if (r.stale) throw new Error("expected the board's outline");
+  // Every frame once, in text order, with its place in the text.
+  expect(r.frames.map((f) => [f.index, f.title, f.kind, f.from, f.to, f.line])).toEqual(frames.map((f) => [f.index, f.title, f.kind, f.from, f.to, f.line]));
+  // Each outline is the one `outline` gives for that frame (file lines), so ER tables carry their columns.
+  r.frames.forEach((f, i) => expect(f.outline).toEqual((s.outline("d", version, i) as { outline: unknown }).outline));
+  const er = r.frames[2].outline;
+  expect(er.nodes.map((n) => [n.name, n.columns])).toEqual([
+    ["orders", ["id", "customer_id"]],
+    ["customers", ["id"]],
+  ]);
+  expect(er.links).toEqual([expect.objectContaining({ from: "orders", to: "customers", fromColumn: "customer_id", toColumn: "id", line: frames[2].line + 8 })]);
+  // Problems in frame lines, at most 10, each message at most 200 characters.
+  expect(r.frames[0].problems).toEqual([]);
+  const p = r.frames[3].problems;
+  expect(p).toHaveLength(10);
+  expect(p[0].line).toBe(2);
+  expect(p.every((x) => x.message.length <= 200)).toBe(true);
+  expect(p[0].message.startsWith("q".repeat(100))).toBe(true);
+  expect(Object.keys(p[0]).sort()).toEqual(["line", "message"]);
+  // A newer text makes the answer stale.
+  s.parse("d", `${text}\n`);
+  expect(s.boardOutline("d", version)).toEqual({ stale: true });
+});
+
+test("a_long_problem_message_is_cut_by_characters_not_halves", () => {
+  // 150 emoji are 300 UTF-16 units but 150 characters: the message is longer than 200 units, yet only the
+  // characters count, and a cut never splits an emoji.
+  const s = createFlowService();
+  const emoji = "\u{1F600}".repeat(150);
+  const { version } = s.parse("d", `diagram flow "E"\nA [color: ${emoji}]\nB [color: ${"\u{1F600}".repeat(300)}]\n`);
+  const r = s.boardOutline("d", version);
+  if (r.stale) throw new Error("expected the board's outline");
+  const [short, long] = r.frames[0].problems.map((p) => p.message);
+  expect(short.startsWith(emoji)).toBe(true);
+  expect(Array.from(short).length).toBeLessThanOrEqual(200);
+  expect(short.length).toBeGreaterThan(200);
+  expect(Array.from(long)).toHaveLength(200);
+  expect(long).toBe("\u{1F600}".repeat(200));
+});

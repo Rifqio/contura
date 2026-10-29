@@ -13,6 +13,7 @@ import { undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { erCardH } from "./kindLayout";
 import { type Node, ReactFlow, ReactFlowProvider, type ReactFlowInstance } from "@xyflow/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { DiagramCanvasProps } from "../diagram/DiagramCanvas";
@@ -178,8 +179,8 @@ function setup(text = ER, layout: string | null = LAYOUT, name = "rel") {
   const press = (key: string, init: KeyboardEventInit = {}) => fireEvent.keyDown(canvasEl(), { key, ...init });
   const field = (label: string) => screen.findByLabelText(label, { selector: "input" }) as Promise<HTMLInputElement>;
   const notice = () => strip().querySelector(".flow-notice")?.textContent ?? "";
-  /** A live node's place on the board. */
-  const at = (table: string) => canvas.props!.nodes.find((n) => n.id === table)!.position;
+  /** A live node's place on the board: its frame-local position plus the live anchor's (Plan F Decision 11). */
+  const at = (table: string) => canvas.instance!.getInternalNode(table)!.internals.positionAbsolute;
   const row = (table: string, column: string) =>
     [...card(table)!.querySelectorAll<HTMLElement>(".fkind-er-row")].find((r) => r.querySelector(".fkind-col")?.textContent === column)!;
   const screenAt = (p: Point) => canvas.instance!.flowToScreenPosition(p);
@@ -519,6 +520,8 @@ const FRAMES_AT = (titles: string[], gap = { x: 800, y: 0 }) =>
 /** Selects a frame by its tab (the first of a repeated title) and waits for its table to be live. */
 async function pickFrame(s: Setup, title: string, first = "orders") {
   fireEvent.click((await screen.findAllByRole("button", { name: `ER diagram ${title}` }))[0]);
+  // Live, not only drawn selected (Plan F Decision 12): its box holds no static shape any more.
+  await waitFor(() => expect(canvas.props!.nodes.some((n) => n.parentId === boardFrameId(title))).toBe(false));
   await waitFor(() => expect(s.card(first)).not.toBeNull());
 }
 
@@ -1047,6 +1050,8 @@ test("a_frame_switch_ends_every_er_mode_and_keeps_nothing", async () => {
   /** Switched to Archive: nothing of Shop's ER state is left, in the stores, the window or the strip. */
   const leftNothing = async () => {
     await waitFor(() => expect(isCurrent("Archive")).toBe(true));
+    // Live, not only drawn selected (Plan F Decision 12): its box holds no static shape any more.
+    await waitFor(() => expect(canvas.props!.nodes.some((n) => n.parentId === boardFrameId("Archive"))).toBe(false));
     await waitFor(() => expect(s.card("orders")).not.toBeNull());
     expect(rel.opts!.store.size()).toBe(0);
     for (const t of ["orders", "customers"]) {
@@ -1299,4 +1304,49 @@ test("a_pick_ended_or_unmounted_before_its_frame_cancels_the_focus", () => {
   expect(second).not.toBe(first);
   h.unmount();
   expect(cancel).toHaveBeenCalledWith(second);
+});
+
+// ---- Plan F Task 11: board leftovers
+
+test.each([
+  ["s", 0.88],
+  ["l", 1.15],
+] as const)("the_new_table_card_takes_the_frame_text_size (%s)", async (size, k) => {
+  const at = JSON.stringify({
+    version: 2,
+    frames: { Billing: { at: { x: 0, y: 0 }, nodes: { customers: { x: 0, y: 0 }, invoices: { x: 400, y: 0 } }, style: "modern", direction: "TB", textSize: size } },
+    sketches: [],
+  });
+  const s = setup(ER, at, "newtable");
+  await drawn(s, "invoices");
+  fireEvent.contextMenu(s.pane(), { clientX: 300, clientY: 200 });
+  await userEvent.click(within(await screen.findByRole("menu", { name: "Canvas actions" })).getByRole("menuitem", { name: "Add here" }));
+  await userEvent.click(within(await screen.findByRole("menu", { name: "Add here" })).getByRole("menuitem", { name: /^Table/ }));
+  const card = (await screen.findByRole("group", { name: "New table" })) as HTMLElement;
+  expect(card.style.width).toBe(`${Math.round(184 * k)}px`);
+  expect(card.style.height).toBe(`${erCardH(1, k)}px`);
+});
+
+test("a_card_selected_by_a_drag_start_is_not_a_pick", async () => {
+  const s = setup(SHOP, SHOP_AT, "shop");
+  await drawn(s, "profiles");
+  await shapesLine(/^One to one/);
+  const prompt = s.notice();
+  // As React Flow sends it: the press, the first move, then the card selected by the drag's start, then the drop.
+  const from = rowPoint(s, "profiles", 1);
+  const el = s.row("profiles", "customer_id");
+  const a = s.screenAt(from);
+  const b = s.screenAt({ x: from.x + 40, y: from.y + 40 });
+  fireEvent.pointerDown(el, { clientX: a.x, clientY: a.y, button: 0, pointerId: 1 });
+  fireEvent.pointerMove(el, { clientX: b.x, clientY: b.y, button: 0, pointerId: 1 });
+  act(() => s.props().onSelect!(["profiles"]));
+  fireEvent.pointerUp(window, { clientX: b.x, clientY: b.y, button: 0, pointerId: 1 });
+  fireEvent.click(el, { clientX: b.x, clientY: b.y });
+  await new Promise((r) => setTimeout(r, 50));
+  expect(s.notice()).toBe(prompt);
+  expect(s.doc()).toBe(SHOP);
+  // A Shelf pick (a selection with no press) still starts the line.
+  act(() => s.props().onSelect!([]));
+  act(() => s.props().onSelect!(["customers"]));
+  await waitFor(() => expect(s.notice()).not.toBe(prompt));
 });

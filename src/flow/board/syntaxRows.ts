@@ -61,6 +61,7 @@ export const SYNTAX_HELP: Record<DiagramKind, HelpRow[]> = {
     { what: "Show it as busy", example: lines("activate Billing", "Billing -> Bank: Charge", "deactivate Billing") },
     { what: "A repeated block", example: lines("loop until paid {", "  App -> Billing: Retry", "}") },
     { what: "An optional block", example: lines("opt card saved {", "  App -> Vault: Save card", "}") },
+    { what: "Number the messages", example: "autonumber" },
     { what: "At the same time", example: lines("par {", "  App -> Mail: Send", "  App -> Log: Write", "}") },
     { what: "A note", example: "note: Retries stop after 3" },
   ],

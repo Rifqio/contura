@@ -1,14 +1,18 @@
 use contura_core::Error;
+use contura_core::ai::attachment::{
+    ATTACH_EXTENSIONS, Attachment, AttachmentSlot, attachment_for, read_attachment,
+};
 use contura_core::ai::compact::{CompactRequest, compact_now};
 use contura_core::ai::context::sync::{ContextInfo, ContextStatusRow, context_status, resync};
 use contura_core::ai::diagram::{
-    DiagramAskRequest, diagram_ask_stream, diagram_place, diagram_preview,
+    DiagramAskRequest, SourceStanding, diagram_ask_attached, diagram_gate, diagram_place,
+    diagram_preview, saved_tables, table_owners, table_values,
 };
 use contura_core::ai::memory::{
     AppendTurn, Compaction, CompactionId, LastWork, ThreadSummary, ThreadView, TurnView, WorkInput,
 };
 use contura_core::ai::models::{ModelList, ModelPicks};
-use contura_core::ai::preview::{Preview, SameProvider, preview};
+use contura_core::ai::preview::{CatalogReader, Preview, SameProvider, preview};
 use contura_core::ai::request::AskRequest;
 use contura_core::ai::sent::{AnswerAction, AnswerActionKind, AnswerRecord, ToolOutcome};
 use contura_core::ai::stream::{AiEvent, ask_stream};
@@ -147,6 +151,13 @@ pub async fn ai_clear_all(app: AppHandle) -> Result<(), Error> {
     .await
 }
 
+/// Settings' "Clear AI history" also clears every board's chats (boards belong to no
+/// Group). Off the main thread, as the other clears.
+#[tauri::command]
+pub async fn ai_clear_diagram_chats(app: AppHandle) -> Result<(), Error> {
+    off_runtime(move || app.state::<AiService>().clear_diagram_chats()).await
+}
+
 /// Deletes the Connection, then its Recent steps kept with Asks on other Connections. The
 /// purge reads and rewrites threads, so it runs off the async runtime; one that fails stays
 /// pending in the AI store and runs on the next start, so the delete itself succeeded.
@@ -278,6 +289,95 @@ pub async fn fetch_full_value(
 /// Contura's own data folder; Schema Models and exports are never written inside it.
 pub struct DataDir(pub PathBuf);
 
+/// The one file attached for the next diagram Ask (Decision 15).
+#[derive(Default)]
+pub struct Attachments(pub std::sync::Mutex<AttachmentSlot>);
+
+impl Attachments {
+    fn slot(&self) -> Result<std::sync::MutexGuard<'_, AttachmentSlot>, Error> {
+        self.0
+            .lock()
+            .map_err(|_| Error::Store("lock poisoned".into()))
+    }
+}
+
+/// The token of the attachment a diagram request names, if any.
+fn attachment_token(request: &DiagramAskRequest) -> Option<&str> {
+    request.board.as_ref()?.attachment.as_deref()
+}
+
+/// The request is the reply to a follow-up question: it may name the file kept for it.
+fn is_reply(request: &DiagramAskRequest) -> bool {
+    request
+        .board
+        .as_ref()
+        .is_some_and(|b| b.follow_up.is_some())
+}
+
+/// The chat thread a diagram request names, read off the runtime; `None` with no id or no
+/// such thread. `board_history` decides what of it goes.
+async fn diagram_thread(app: &AppHandle, id: Option<ThreadId>) -> Result<Option<AiThread>, Error> {
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    let app = app.clone();
+    off_runtime(move || app.state::<AiService>().thread(id)).await
+}
+
+/// What `ai_pick_attachment` tells the webview: never the path.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedAttachment {
+    pub token: String,
+    pub name: String,
+    pub bytes: u32,
+}
+
+/// Opens the open dialog in the Core, reads the chosen text file through `read_attachment`
+/// (its guards, then 64 KB at most) and holds it for the next diagram Ask, in place of any
+/// file held before. The webview gets a token, the name and the size; `None` when the dialog
+/// is cancelled.
+#[tauri::command]
+pub async fn ai_pick_attachment(
+    window: tauri::Window,
+    data: State<'_, DataDir>,
+    slot: State<'_, Attachments>,
+) -> Result<Option<PickedAttachment>, Error> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    window
+        .dialog()
+        .file()
+        .add_filter("Text files", &ATTACH_EXTENSIONS)
+        .set_parent(&window)
+        .pick_file(move |picked| {
+            let _ = tx.send(picked);
+        });
+    let picked = rx
+        .await
+        .map_err(|_| Error::File("the file dialog closed unexpectedly".into()))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|e| Error::InvalidInput(format!("Choose a file on this computer: {e}")))?;
+    let dir = data.0.clone();
+    let attachment: Attachment = off_runtime(move || read_attachment(&path, &dir)).await?;
+    let name = attachment.name.clone();
+    let bytes = u32::try_from(attachment.text.len()).unwrap_or(u32::MAX);
+    let token = slot.slot()?.put(attachment);
+    Ok(Some(PickedAttachment { token, name, bytes }))
+}
+
+/// The user removed the attachment chip: the file it named leaves the Core's memory. A file
+/// picked since, under another token, stays.
+#[tauri::command]
+pub fn ai_clear_attachment(slot: State<'_, Attachments>, token: String) -> Result<(), Error> {
+    slot.slot()?.take(&token);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn read_model_files(
     data: State<'_, DataDir>,
@@ -380,21 +480,29 @@ pub fn write_diagram_layout(
     contura_core::diagrams::write_diagram_layout(&data.0, &name, &layout)
 }
 
-/// Moves both files of diagram `name` to the Recycle Bin, off the main thread: the shell
-/// call blocks and starts COM, which stays out of the webview's thread (P4).
+/// Moves both files of diagram `name` to the Recycle Bin, then clears its chats, off the main
+/// thread: the shell call blocks and starts COM, which stays out of the webview's thread (P4).
+/// Chats that cannot be cleared are logged; the delete still reports success.
 #[tauri::command]
-pub async fn delete_diagram(data: State<'_, DataDir>, name: String) -> Result<(), Error> {
+pub async fn delete_diagram(
+    app: AppHandle,
+    data: State<'_, DataDir>,
+    name: String,
+) -> Result<(), Error> {
     let dir = data.0.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        contura_core::diagrams::delete_diagram(&dir, &name)
-    })
-    .await
-    .map_err(|e| Error::File(format!("cannot move the diagram to the Recycle Bin: {e}")))?
+    tauri::async_runtime::spawn_blocking(move || app.state::<AiService>().delete_board(&dir, &name))
+        .await
+        .map_err(|e| Error::File(format!("cannot move the diagram to the Recycle Bin: {e}")))?
 }
 
 #[tauri::command]
-pub fn rename_diagram(data: State<'_, DataDir>, from: String, to: String) -> Result<(), Error> {
-    contura_core::diagrams::rename_diagram(&data.0, &from, &to)
+pub fn rename_diagram(
+    data: State<'_, DataDir>,
+    ai: Ai<'_>,
+    from: String,
+    to: String,
+) -> Result<(), Error> {
+    ai.rename_board(&data.0, &from, &to)
 }
 
 /// "Save a copy as...": both files at `path`, outside Contura's data folder.
@@ -1177,27 +1285,76 @@ pub async fn ai_ask_stream(
     Ok(())
 }
 
+/// What the diagram Ask's gate knows of the Connections (Task 4b): each one's name and
+/// stored AI access, those on the ungrouped provider the diagram Ask uses, and the
+/// Connections owning each `table:` value (`values`), from the same Connection list.
+fn diagram_standing(
+    ai: &AiService,
+    service: &ConnectionService,
+    connections: &[ConnectionConfig],
+    values: &[String],
+) -> Result<SourceStanding, Error> {
+    let owners = if values.is_empty() {
+        Vec::new()
+    } else {
+        table_owners(values, connections, &saved_tables(service.context())?)
+    };
+    Ok(SourceStanding {
+        connections: connections
+            .iter()
+            .map(|c| (c.id, c.name.clone(), c.ai_access))
+            .collect(),
+        same_provider: ai.same_provider(None, connections)?,
+        owners,
+    })
+}
+
 /// What a diagram Ask would send, built in the Core: the Sends list and "Show exactly".
-/// The diagram is not database data, so only the global settings apply.
+/// The diagram is not database data, so only the global settings apply; a frame drawn from
+/// a Connection, or a `table:` link to one, is gated at that Connection (Task 4b).
 #[tauri::command]
 pub async fn ai_diagram_preview(
     app: tauri::AppHandle,
+    slot: State<'_, Attachments>,
     request: DiagramAskRequest,
 ) -> Result<Preview, Error> {
     let wanted = request.model.clone().filter(|m| !m.trim().is_empty());
-    let (settings, model, secrets) = off_runtime(move || {
-        let ai = app.state::<AiService>();
+    let reader = app.clone();
+    let scanned = request.clone();
+    let (settings, model, secrets, standing) = off_runtime(move || {
+        let values = table_values(&scanned)?;
+        let ai = reader.state::<AiService>();
         let settings = ai.settings(None)?.settings;
         let model = ai.model_info_in(&settings, wanted.as_deref().unwrap_or(&settings.model))?;
-        let connections = app.state::<ConnectionService>().list()?;
-        Ok((settings, model, ai.secrets_for_redaction(&connections)?))
+        let service = reader.state::<ConnectionService>();
+        let connections = service.list()?;
+        let standing = diagram_standing(&ai, &service, &connections, &values)?;
+        Ok((
+            settings,
+            model,
+            ai.secrets_for_redaction(&connections)?,
+            standing,
+        ))
     })
     .await?;
+    // A held board is refused before the slot is looked at; then a token the slot no longer
+    // holds is refused before the thread is read or anything built. The preview only looks,
+    // the Ask takes the file once it ends well.
+    diagram_gate(&settings, &request, &standing)?;
+    let attachment = attachment_for(
+        &*slot.slot()?,
+        attachment_token(&request),
+        is_reply(&request),
+    )?;
+    let thread = diagram_thread(&app, request.thread_id).await?;
     diagram_preview(
         &settings,
         &model,
         &secrets,
         &request,
+        &standing,
+        thread.as_ref(),
+        attachment.as_ref(),
         &mut contura_core::ai::log::Log::new(),
     )
 }
@@ -1214,19 +1371,25 @@ pub async fn ai_diagram_ask(
 ) -> Result<(), Error> {
     let reader = app.clone();
     let wanted = request.model.clone().filter(|m| !m.trim().is_empty());
-    let (provider, model, settings, secrets) = off_runtime(move || {
+    let scanned = request.clone();
+    let (provider, model, settings, secrets, standing) = off_runtime(move || {
+        let values = table_values(&scanned)?;
         let ai = reader.state::<AiService>();
         let (provider, settings, model) = ai.provider_for(None)?;
         let model = ai.model_info_in(&settings, wanted.as_deref().unwrap_or(&model))?;
-        let connections = reader.state::<ConnectionService>().list()?;
+        let service = reader.state::<ConnectionService>();
+        let connections = service.list()?;
+        let standing = diagram_standing(&ai, &service, &connections, &values)?;
         Ok((
             provider,
             model,
             settings,
             ai.secrets_for_redaction(&connections)?,
+            standing,
         ))
     })
     .await?;
+    let thread = diagram_thread(&app, request.thread_id).await?;
     let place = diagram_place(&request.file);
     let request_id = request.request_id.clone();
     let dir = data.0.clone();
@@ -1236,6 +1399,9 @@ pub async fn ai_diagram_ask(
         if registered.await.is_err() {
             return;
         }
+        // The Core refuses a stale token and keeps the file unless the Ask ends well.
+        let holder = task_app.clone();
+        let slot = holder.state::<Attachments>();
         let _finish = Finish {
             app: task_app,
             request_id: request.request_id.clone(),
@@ -1257,8 +1423,17 @@ pub async fn ai_diagram_ask(
             })
         };
         // Every error has already been sent as the last event.
-        let _ = diagram_ask_stream(
-            &*provider, &settings, &model, &secrets, &request, &disk, &emit,
+        let _ = diagram_ask_attached(
+            &*provider,
+            &settings,
+            &model,
+            &secrets,
+            &request,
+            &standing,
+            thread.as_ref(),
+            &slot.0,
+            &disk,
+            &emit,
         )
         .await;
         end.ended();
@@ -1725,6 +1900,41 @@ mod source_rules {
 
     fn line_starts_async(body: &[&str]) -> bool {
         body[0].starts_with("pub async fn ")
+    }
+
+    /// Decision 15 and 9: the preview only looks at the held file and the Ask takes it; both
+    /// read the thread; the file is read only through `read_attachment`, from the Core's dialog.
+    #[test]
+    fn the_diagram_preview_peeks_and_the_ask_takes() {
+        // The preview refuses a held board, then a stale token, before the thread is read or
+        // anything built (Task 4b: the slot is not looked at for a held board).
+        let preview = named("ai_diagram_preview").join("\n");
+        let held = preview
+            .find("attachment_for(")
+            .expect("the preview checks the token");
+        let gate = preview
+            .find("diagram_gate(&settings, &request, &standing)?")
+            .expect("the preview gates first");
+        assert!(gate < held, "{preview}");
+        let thread = preview
+            .find("diagram_thread(&app, request.thread_id)")
+            .unwrap();
+        assert!(held < thread, "{preview}");
+        assert!(!preview.contains(".take("), "{preview}");
+        // The Ask leaves the slot to the Core: emptied only when it ends well.
+        let ask = named("ai_diagram_ask").join("\n");
+        assert!(ask.contains("diagram_ask_attached("), "{ask}");
+        assert!(ask.contains("diagram_thread(&app, request.thread_id)"));
+        assert!(!ask.contains(".take(") && !ask.contains(".peek("), "{ask}");
+        let pick = named("ai_pick_attachment").join("\n");
+        assert!(pick.contains(".pick_file(") && pick.contains("read_attachment(&path, &dir)"));
+    }
+
+    /// Removing the chip lets the file go from the Core, but only the file it named.
+    #[test]
+    fn removing_the_chip_clears_its_file() {
+        let body = named("ai_clear_attachment").join("\n");
+        assert!(body.contains(".take(&token)"), "{body}");
     }
 
     #[test]

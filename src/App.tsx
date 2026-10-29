@@ -1172,6 +1172,10 @@ function Workspace() {
         toast.show({ kind: "info", text: "A diagram has its own Assistant, so the Ask panel stays closed here." });
         return;
       }
+      if (settingsActive) {
+        toast.show({ kind: "info", text: "Settings fill the window, so the Ask panel stays closed here." });
+        return;
+      }
       setAssistantOpen((o) => !o);
     },
     "settings.open": () => openSettings(),
@@ -1422,7 +1426,8 @@ function Workspace() {
     historyOpen && current?.kind === "query" ? (inPlace.find((c) => c.id === current.doc.connectionId) ?? null) : null;
   const historyAllShown = historyOpen && historyAll && current?.kind === "query";
 
-  const assistantShown = assistantOpen && activeWindow?.kind !== "flow";
+  // Settings fills the window, so the panel steps aside there and comes back on the next tab (owner, 29 Oct).
+  const assistantShown = assistantOpen && activeWindow?.kind !== "flow" && !settingsActive;
   /** History draws only beside a query tab; its column is in the body grid only then (and never under a window tab). */
   const historyShown = (historyAllShown || !!historyFor) && current?.kind === "query";
   const historyColumn = !activeWindow && historyShown;

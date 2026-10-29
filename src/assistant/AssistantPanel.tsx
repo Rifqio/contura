@@ -39,7 +39,6 @@ import type {
   DialectKind,
   ItemKind,
   LastWork,
-  ModelList,
   ModelPicks,
   Preview,
   PreviewItem,
@@ -67,6 +66,7 @@ import { queueOffline } from "./offlineQueue";
 import ContextLine from "./ContextLine";
 import { contextNotice } from "./contextText";
 import ModelPicker from "./ModelPicker";
+import { useKnownModels } from "./useKnownModels";
 import Sends from "./Sends";
 import { saveSendsOpen } from "./sendsFold";
 import AskSash from "./AskSash";
@@ -137,6 +137,9 @@ const newId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `t${Date.now()}${Math.random().toString(36).slice(2)}`;
+
+/** A board's place (`diagram:<name>`): its chats are the board's own, never compacted or titled by this panel. */
+const isBoardPlace = (place: string) => place.startsWith("diagram:");
 
 /** The AI title calls a chat gets: the first, and one retry on the next answer. Mirrors `title::TITLE_TRIES`. */
 const TITLE_TRIES = 2;
@@ -377,7 +380,7 @@ export default function AssistantPanel({
   /** The saved answer, by its time, whose Sent record is open. */
   const [sentOpen, setSentOpen] = useState<number | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
-  const [models, setModels] = useState<ModelList | null>(null);
+  const [models, setModels] = useKnownModels(groupId);
   /** Bumped to open the model menu from a card. */
   const [pickerOpen, setPickerOpen] = useState(0);
   /** The slash list: the active row, the draft it was closed on with Esc, and the requests to the history popover and the Sends list. */
@@ -575,13 +578,6 @@ export default function AssistantPanel({
       })
       .catch(() => {
         if (live) setSettings(null);
-      });
-    aiKnownModels(groupId)
-      .then((l) => {
-        if (live) setModels(l);
-      })
-      .catch(() => {
-        if (live) setModels(null);
       });
     return () => {
       live = false;
@@ -848,6 +844,8 @@ export default function AssistantPanel({
    * so the next question is never refused. The title lands on the row and the open chat; a place change cancels it.
    */
   function nameChat(threadId: string, forPlace: string, off: ItemKind[], model: string | null) {
+    // A board's chats are named by the board's own assistant only (Plan D A20), never from here.
+    if (isBoardPlace(forPlace)) return;
     if (settings?.settings.nameChats === false || naming.current.has(threadId)) return;
     const requestId = newId();
     naming.current.set(threadId, requestId);
@@ -972,7 +970,8 @@ export default function AssistantPanel({
   /** Compact now from the full-thread card: the older messages become a summary, then the same Ask goes again. */
   async function compactNow(f: Failure) {
     const threadId = currentId;
-    if (!threadId || working !== null) return;
+    // A board's chats are never compacted from here (Plan D: they stay out of this panel's compaction and titles).
+    if (!threadId || working !== null || isBoardPlace(place)) return;
     const forPlace = place;
     setChatError(null);
     setWorking("Compacting the thread");
@@ -996,7 +995,7 @@ export default function AssistantPanel({
   /** /compact: Compact now for the open chat, without asking again; a failure is said above the thread. */
   async function compactChat() {
     const threadId = currentId;
-    if (!threadId || working !== null || stream.running || undoing !== null) return;
+    if (!threadId || working !== null || stream.running || undoing !== null || isBoardPlace(place)) return;
     const forPlace = place;
     setChatError(null);
     setWorking("Compacting the thread");

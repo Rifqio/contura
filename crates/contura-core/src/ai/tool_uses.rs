@@ -99,9 +99,15 @@ fn rows_of(thread: &AiThread) -> Vec<ToolUseRow> {
             result,
         };
         if let Some(tool_use) = &record.tool_use {
+            // The board's name is its place's: a renamed board's old records keep the old
+            // `file` as history, but their rows follow the board.
+            let file = thread
+                .place
+                .strip_prefix("diagram:")
+                .unwrap_or(&tool_use.file);
             rows.push(row(
                 ToolKind::ProposeDiagramChanges,
-                format!("{}.flow", tool_use.file),
+                format!("{file}.flow"),
                 diagram_result(tool_use),
             ));
         } else if let Some(outline) = record.sent.as_ref().and_then(|s| s.outline.as_ref()) {
@@ -211,7 +217,10 @@ mod tests {
     fn change(index: u32, dropped: bool) -> ProposedChange {
         ProposedChange {
             index,
-            op: DiagramOp::RemoveNode { target: "A".into() },
+            op: DiagramOp::RemoveNode {
+                target: "A".into(),
+                frame: None,
+            },
             status: if dropped {
                 ChangeStatus::Dropped {
                     reason: DropReason::UnknownShape,
@@ -221,6 +230,7 @@ mod tests {
                 ChangeStatus::Ok
             },
             depends_on: Vec::new(),
+            frame: None,
         }
     }
 

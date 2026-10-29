@@ -17,7 +17,8 @@ import { fakeWorker } from "../../test/langWorker";
 import { mockReactFlowDom } from "../../test/reactFlow";
 import FlowTab from "../FlowTab";
 import { LAYOUT_SAVE_MAX, parseBoardLayout, utf8Length } from "./boardLayout";
-import { boardFrameId, FRAME_PREVIEW_TYPE, type FramePreviewData, inFrameId } from "./boardScene";
+import { boardFrameId, FRAME_PICTURE_TYPE, inFrameId, SKETCH_PICTURE_TYPE } from "./boardScene";
+import { pictureSvgOf } from "../../test/framePictures";
 import { SKETCH_LAYER_ID } from "./sketches";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -50,7 +51,7 @@ vi.mock("./boardScene", async (load) => {
   };
 });
 
-// The shared per-node ResizeObserver (Task 18b): with static frames drawn as previews at the fit, measuring one node
+// The shared per-node ResizeObserver (Task 18b): with static frames drawn as pictures at the fit, measuring one node
 // at a time is quick again (34 s here, 681 MB peak for the whole run).
 beforeAll(() => {
   mockReactFlowDom();
@@ -92,16 +93,28 @@ test("a_full_board_opens_and_types_without_growth", async () => {
   const nodes = () => canvas.props?.nodes ?? [];
   const typedFrame = boardFrameId(`Area ${TYPED_FRAME}`);
 
-  // Open: every frame drawn static (none selected on a board of many), every sketch in its layer.
+  // Open: every frame drawn static (none selected on a board of many). At the fit body text is far, so the 1,000
+  // sketches draw as a few pictures, with no node of their own (Task 9 fix 2).
   await waitFor(() => expect(nodes().filter((n) => n.type === "boardFrame")).toHaveLength(FRAMES), WAIT);
-  expect(nodes().filter((n) => n.parentId === SKETCH_LAYER_ID)).toHaveLength(SKETCH_COUNT);
-  // At the fit (far below BOX_BELOW) each static frame is one preview of its 200 shapes, and no static line is drawn
-  // (Task 18b): 50 nodes and no lines where the frames' 10,000 shapes and 15,000 lines were.
-  await waitFor(() => expect(nodes().filter((n) => n.parentId?.startsWith("\u0000board:"))).toHaveLength(FRAMES), WAIT);
-  const previews = nodes().filter((n) => n.type === FRAME_PREVIEW_TYPE);
-  expect(previews).toHaveLength(FRAMES);
-  expect(previews.reduce((sum, n) => sum + (n.data as FramePreviewData).shapes.length + (n.data as FramePreviewData).areas.length, 0)).toBe(MAX_BOARD_SHAPES);
-  expect(previews.reduce((sum, n) => sum + (n.data as FramePreviewData).lines.length, 0)).toBe(FRAMES * LINKS);
+  const tiles = () => nodes().filter((n) => n.type === SKETCH_PICTURE_TYPE);
+  await waitFor(() => expect(tiles().length).toBeGreaterThan(0), WAIT);
+  expect(tiles().length).toBeLessThan(10);
+  expect(nodes().filter((n) => n.id === SKETCH_LAYER_ID || n.parentId === SKETCH_LAYER_ID)).toHaveLength(0);
+  // At the fit (text far) each static frame in view is one picture of its 200 shapes, and no static line is drawn (Plan
+  // F Decision 7). The board is too wide for the least zoom, so it opens at its start (`fitFromStart`), and only the
+  // frames in view are drawn (Plan F Decision 6): the rest push their box node alone.
+  const previewsNow = () => nodes().filter((n) => n.type === FRAME_PICTURE_TYPE);
+  await waitFor(() => expect(previewsNow().length).toBeLessThan(FRAMES), WAIT);
+  const previews = previewsNow();
+  expect(previews.length).toBeGreaterThan(0);
+  // A run from the board's start, each a whole frame.
+  expect(previews.map((n) => n.parentId)).toEqual(previews.map((_, k) => boardFrameId(`Area ${k}`)));
+  expect(nodes().filter((n) => n.parentId?.startsWith("\u0000board:"))).toHaveLength(previews.length);
+  for (const n of previews) {
+    const svg = pictureSvgOf(n);
+    expect((svg.match(/<g data-(?:node|area)=/g) ?? []).length).toBe(MAX_BOARD_SHAPES / FRAMES);
+    expect((svg.match(/<g data-edge=/g) ?? []).length).toBe(LINKS);
+  }
   expect(canvas.props?.edges ?? []).toHaveLength(0);
 
   // Frame 25 shown in the pane and selected, as a search landing in it does.
@@ -112,14 +125,16 @@ test("a_full_board_opens_and_types_without_growth", async () => {
   // Live: frame 25's shapes are drawn with bare names, and its box is the live one.
   await waitFor(() => expect(nodes().some((n) => n.id === "Step 0")).toBe(true), WAIT);
   await waitFor(() => expect(nodes().filter((n) => n.parentId === typedFrame)).toHaveLength(0), WAIT);
-  // Still at the fit: the other 49 frames stay previews, and the only lines drawn are frame 25's.
-  expect(nodes().filter((n) => n.type === FRAME_PREVIEW_TYPE)).toHaveLength(FRAMES - 1);
+  // The frames in view stay pictures (frame 25 is live, not one of them), and the only lines drawn are frame 25's.
+  await waitFor(() => expect(previewsNow().length).toBeGreaterThan(0), WAIT);
+  expect(previewsNow().length).toBeLessThan(FRAMES);
+  expect(previewsNow().some((n) => n.parentId === typedFrame)).toBe(false);
   expect(canvas.props?.edges).toHaveLength(LINKS);
 
   const before = new Map(nodes().map((n) => [n.id, n]));
   const edgesBefore = new Map((canvas.props?.edges ?? []).map((e) => [e.id, e]));
-  /** Another frame's shape, group area or line holder, a sketch, or the sketch layer. */
-  const isOther = (n: Node) => n.id === SKETCH_LAYER_ID || n.parentId === SKETCH_LAYER_ID || (!!n.parentId?.startsWith("\u0000board:") && n.parentId !== typedFrame);
+  /** Another frame's shape, group area or line holder, or a picture of the sketch layer. */
+  const isOther = (n: Node) => n.type === SKETCH_PICTURE_TYPE || (!!n.parentId?.startsWith("\u0000board:") && n.parentId !== typedFrame);
 
   // 30 characters typed into frame 25's last link label, one keystroke at a time.
   for (const ch of TYPED) {
@@ -135,15 +150,15 @@ test("a_full_board_opens_and_types_without_growth", async () => {
     expect(n, n.id).toBe(before.get(n.id));
     others++;
   }
-  // Each other frame's one preview, every sketch and the layer.
-  expect(others).toBe(FRAMES - 1 + SKETCH_COUNT + 1);
+  // Each other frame in view's one picture, and the sketch layer's pictures.
+  expect(others).toBe(previewsNow().length + tiles().length);
   for (let k = 0; k < FRAMES; k++) {
     if (k === TYPED_FRAME) continue;
     const id = boardFrameId(`Area ${k}`);
     expect(nodes().find((n) => n.id === id)).toBe(before.get(id));
   }
 
-  // No other frame draws a line of its own: its lines are in its preview, kept above.
+  // No other frame draws a line of its own: its lines are in its picture, kept above.
   const typedIn = inFrameId(`Area ${TYPED_FRAME}`, "");
   for (const e of canvas.props?.edges ?? []) expect(e.id.startsWith("\u0000in:") && !e.id.startsWith(typedIn), e.id).toBe(false);
   for (const e of edgesBefore.values()) expect(e.id.startsWith("\u0000in:"), e.id).toBe(false);

@@ -487,6 +487,25 @@ test("bad_file_name_has_no_retry", () => {
   expect(buttons()).toEqual([]);
 });
 
+test("attachment_gone_says_attach_again", () => {
+  document.body.innerHTML = "";
+  expect(aiErrorOf(ai({ kind: "attachmentGone" }))).toEqual({ kind: "attachmentGone" });
+  render(answerState(ai({ kind: "attachmentGone" }), { ...groq, onRetry: vi.fn() }));
+  text("The attached file is no longer held. Attach it again.");
+  expect(buttons()).toEqual([]);
+});
+
+test("diagram_held_shows_the_cores_sentence", () => {
+  document.body.innerHTML = "";
+  const message = 'The node "Orders" links to table shop.orders of prod, whose AI access is Never, so this Ask was not sent. Remove the link or change that Connection\'s AI access.';
+  expect(aiErrorOf(ai({ kind: "diagramHeld", message }))).toEqual({ kind: "diagramHeld", message });
+  render(answerState(ai({ kind: "diagramHeld", message }), { ...groq, onRetry: vi.fn() }));
+  text(message);
+  expect(screen.getByText("AI access")).toBeTruthy();
+  // Asking again sends the same board: no Retry until the frame or the access changes.
+  expect(buttons()).toEqual([]);
+});
+
 test("file_changed_card_texts", () => {
   document.body.innerHTML = "";
   render(answerState(ai({ kind: "fileChanged", file: "fulfilment", line: 9, nowReads: "Pack order" }), groq));

@@ -3,6 +3,7 @@ import appCss from "./app.css?raw";
 import tokensCss from "./tokens.css?raw";
 import fontsCss from "./fonts.css?raw";
 import compareCss from "./compare.css?raw";
+import flowBoardCss from "./flow-board.css?raw";
 
 /** Every shipped component file (tests are left out: their fixtures are not drawn). */
 const TSX = Object.entries(import.meta.glob("../**/*.tsx", { query: "?raw", import: "default", eager: true }) as Record<string, string>).filter(
@@ -829,4 +830,20 @@ test("raised_surface_hovers_use_raised_hover_and_the_search_button_hover_shows",
 test("a_point_menu_keeps_its_natural_width_at_the_right_edge", () => {
   const menu = rules(appCss).filter((r) => r.selector.split(",").map((x) => x.trim()).includes(".tree-menu"));
   expect(menu.some((r) => /width:\s*max-content/.test(r.body))).toBe(true);
+});
+
+test("soft_lines_use_tokens_and_no_transition", () => {
+  // Plan F Decision 2: far text keeps its layout and draws as soft bars of the faint text token, with no transition.
+  for (const size of ["s", "m", "l"]) {
+    const soft = rules(flowBoardCss).filter((r) => r.selector.includes(`[data-far~="${size}"] .board-ts-${size}`));
+    expect(soft.length, size).toBeGreaterThan(0);
+    const body = soft.map((r) => r.body).join("\n");
+    expect(body).toMatch(/color:\s*transparent/);
+    expect(body).toContain("color-mix(in srgb, var(--c-text-faint) 45%, transparent)");
+    expect(body).toMatch(/border-radius:\s*2px/);
+    expect(body).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(body).not.toMatch(/transition/);
+  }
+  // The ER bars take the same colour.
+  expect(bodyIn(flowBoardCss, ".fkind-er-bars")).toContain("color-mix(in srgb, var(--c-text-faint) 45%, transparent)");
 });

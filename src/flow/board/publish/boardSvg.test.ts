@@ -52,6 +52,8 @@ const palette = (p: string): ExportPalette => ({
   strongBorder: `#${p}1313`,
   panel: `#${p}1414`,
   muted: `#${p}1515`,
+  faint: `#${p}1616`,
+  keyMark: `#${p}1717`,
   colours: {
     accent: { fill: `#${p}a100`, stroke: `#${p}a200`, text: `#${p}0303` },
     info: { fill: `#${p}a300`, stroke: `#${p}a400`, text: `#${p}0303` },
@@ -346,6 +348,11 @@ test("an_unknown_sketch_colour_never_reaches_an_attribute", () => {
 test("no_hex_literal_in_board_svg_source", () => {
   const code = boardSvgSource.replace(/\/\*[^]*?\*\//g, "").replace(/\/\/.*$/gm, "");
   expect(code).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+});
+
+test("board_svg_imports_no_react_component", () => {
+  // Publish shares the sketch geometry and the frame's name through leaf modules, not the canvas's components (B4 R26).
+  expect(boardSvgSource).not.toMatch(/from "\.\.\/(FrameNode|SketchNode)"/);
 });
 
 test("tab_geometry_matches_the_stylesheet", () => {
@@ -683,7 +690,7 @@ test("a_long_er_table_on_a_board_stays_in_its_region", () => {
     return { key: keys[i], index: i, title: f.title, kind: f.kind, ...r, problems: 0, clash: false };
   });
   const live = { layout: { version: 1, nodes: b.frames.get("Long")!.nodes, style: "modern", direction: "TB" } as PublishFrame["layout"], folded: new Set<string>(), textScale: 1, notation: "crow" as const };
-  const input = boardPublishInput({ frames, board: b, keys, boxes, origin: { x: 0, y: 0 }, frameIndex: 1, live, shapes: [], sketchIds: [], onScreen: { x: 0, y: 0, w: 10, h: 10 } });
+  const input = boardPublishInput({ frames, board: b, keys, boxes, frameIndex: 1, live, shapes: [], sketchIds: [], onScreen: { x: 0, y: 0, w: 10, h: 10 } });
   for (const part of ["board", "frame"] as const) {
     const c = composeBoard(input, part, LIGHT, "light", new Map(), true);
     const g = /<g data-board-frame="1" transform="translate\(([-\d.]+) ([-\d.]+)\)"/.exec(c.body);

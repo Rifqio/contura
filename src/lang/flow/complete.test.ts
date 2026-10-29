@@ -229,3 +229,16 @@ describe("ER completion", () => {
     expect(er(`${HEAD}orders {\n  "x}" int pk\n  id int |`).labels).toEqual(["pk", "not null", "unique"]);
   });
 });
+
+test("autonumber_is_offered_at_line_start_in_a_sequence", () => {
+  expect(at('diagram sequence "A"\nauto|').labels).toContain("autonumber");
+  expect(at('diagram flow "A"\nauto|').labels).not.toContain("autonumber");
+});
+
+describe("a sequence block's brackets", () => {
+  test("a_block_bracket_offers_color", () => {
+    for (const w of ["loop", "alt", "opt", "par", "critical"]) expect(at(`diagram sequence "A"\n${w} x [|`).labels).toEqual(["color"]);
+    expect(at('diagram sequence "A"\nopt x [color: wa|').labels).toEqual(["warning"]);
+    expect(at('diagram sequence "A"\nopt x [color: |').labels).toContain("danger");
+  });
+});

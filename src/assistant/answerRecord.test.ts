@@ -236,3 +236,11 @@ test("the_context_is_read_but_not_copied_from_the_live_event", () => {
   expect(recordOf({})!.context).toBeNull();
   expect(recordOf({ context: info })!.context).toEqual(info);
 });
+
+test("the_record_keeps_the_connections_a_diagram_ask_drew_on", () => {
+  // Task 4b: the history gate reads `sent.sources` back from the saved record; a rebuild must never drop it.
+  const sent = { ...sentRecord(), sources: ["c1", "c2"] };
+  const r = buildRecord(end({ done: done(), text: "x" }), { ...NO_LIVE, sent });
+  expect(r.sent?.sources).toEqual(["c1", "c2"]);
+  expect(recordOf(JSON.parse(JSON.stringify(r)))?.sent?.sources).toEqual(["c1", "c2"]);
+});

@@ -37,10 +37,11 @@ const NO_LEVEL: u8 = u8::MAX;
 /// carried (R1.7), and the memory stage sends none at Never. This tab needs none either:
 /// `scene::tab_text` gates each of its parts and sends nothing at Never. Nor do Recent
 /// steps: `steps::render_steps` gates each step by its own Connection and the Ask's. Diagram text is not database
-/// data: no level lets it go, and only a diagram Ask opens it.
+/// data: no level lets it go, and only a diagram Ask opens it. The same holds for a file the
+/// user attached to a diagram Ask.
 fn need(kind: ItemKind) -> u8 {
     match kind {
-        ItemKind::Diagram => NO_LEVEL,
+        ItemKind::Diagram | ItemKind::Attachment => NO_LEVEL,
         ItemKind::Question
         | ItemKind::History
         | ItemKind::Summary
@@ -84,6 +85,9 @@ pub fn lock_reason(access: AiAccess, kind: ItemKind, connection_name: &str) -> O
     let need = need(kind);
     if need == 0 {
         return None;
+    }
+    if kind == ItemKind::Attachment {
+        return Some("Only a diagram Ask sends an attached file".into());
     }
     if need == NO_LEVEL {
         return Some("Only a diagram Ask sends diagram text".into());
@@ -384,11 +388,12 @@ impl Rail for InputRail {
         let mask_values = !allowed(ask.access, ItemKind::Values, switches);
         let (access, untied_model, diagram) = (ask.access, ask.untied_model, ask.diagram);
         // R1.4: an untied Schema Model's DBML goes with no Connection; nothing else does.
-        // A diagram's text goes only on a diagram Ask, under no AI access level.
+        // A diagram's text, and a file attached to it, go only on a diagram Ask, under no AI
+        // access level.
         let open = |kind| {
             allowed(access, kind, switches)
                 || (untied_model && kind == ItemKind::Dbml)
-                || (diagram && kind == ItemKind::Diagram)
+                || (diagram && matches!(kind, ItemKind::Diagram | ItemKind::Attachment))
         };
         // With no Dialect, the MySQL lexer also reads double quotes as strings, so it hides more.
         let dialect = ask.dialect.unwrap_or(DialectKind::MySql);

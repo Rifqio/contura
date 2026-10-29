@@ -56,6 +56,7 @@ import {
 import { summarize } from "../grid/summary";
 import { cellText, cellValue, type DisplayRow, displayRows, hasKey, parsePaste } from "../edits/gridRows";
 import CellEditor, { type LargeEditor } from "./CellEditor";
+import { pickerFor } from "./cellPickers/picker";
 import type { LangClient } from "../lang/client";
 import { type SchemaCache, schemaKey } from "../lang/sql/schemaCache";
 import type { AskContext, AskKit } from "../assistant/context";
@@ -843,6 +844,8 @@ export default function DataGrid({
       return;
     }
     setNote(null);
+    // The enum list's NULL row needs the column's nullability: read the design now, as Set NULL does.
+    if (pickerOf(column)?.kind === "enum") withDesign(() => {});
     const start = (initial: string, old?: Cell) =>
       setEditing({
         row,
@@ -1611,6 +1614,34 @@ export default function DataGrid({
   };
   const canFollow = kind === "table" && !!onFollow && !!keySchema;
 
+  /** PostgreSQL enum labels of this table's columns, from the schema index the grid already loads. */
+  const enumLabels = useMemo(() => {
+    if (dialect !== "postgres" || !lang || schemaLoad !== "loaded") return null;
+    const t = lang.schemas
+      .tables(connectionId, table.database)
+      ?.find((x) => x.name === table.name && (table.schema === null || x.schema === null || x.schema === table.schema));
+    return new Map((t?.columns ?? []).flatMap((c) => (c.enumValues?.length ? [[c.name, c.enumValues] as const] : [])));
+  }, [dialect, lang, schemaLoad, connectionId, table]);
+  const pickerOf = (column: number) => {
+    const c = columns[column];
+    return c ? pickerFor(c.typeName, dialect, enumLabels?.get(c.name)) : null;
+  };
+  /**
+   * The enum list's NULL row: only once the design says the column is nullable (or could not be read, when every
+   * column counts as nullable), and only where Set NULL works.
+   */
+  function pickerNull(e: Editing): (() => void) | undefined {
+    const d = view[e.row];
+    const name = columns[e.column]?.name;
+    const nullable = design ? design.get(name)?.nullable !== false : designFailed.current;
+    if (!d || !nullable || blocked(d, e.column, true) !== null) return undefined;
+    return () => {
+      setNull(e.row, e.column);
+      setEditing(null);
+      focusGrid();
+    };
+  }
+
   /** How a column of another table of this database filters, from the language schema; text when unknown. */
   function kindIn(path: ObjectPath) {
     const t = lang?.schemas
@@ -2362,6 +2393,9 @@ export default function DataGrid({
                     initial={editing.initial}
                     multiline={editing.multiline}
                     large={editing.large ? largeEditor(editing) : undefined}
+                    picker={editing.large ? undefined : (pickerOf(editing.column) ?? undefined)}
+                    pickerLabel={columns[editing.column]?.name}
+                    onSetNull={pickerNull(editing)}
                     onLarger={(v) => {
                       editValue.current = v;
                       setEditing({ ...editing, initial: v, large: true });

@@ -28,6 +28,8 @@ interface Entry {
   region?: RefObject<HTMLElement | null>;
   /** Offered to the Command Palette only: keys never reach it (an editor's own commands run from its keymap). */
   paletteOnly?: boolean;
+  /** On screen with focus in no owner's region, this owner goes before the others on screen (the board's Ask pane). */
+  preferWhenShown?: boolean;
 }
 
 const modalOpen = () => !!document.querySelector('dialog[open], [aria-modal="true"]');
@@ -75,8 +77,8 @@ class CommandBus {
   /** The owner that would run `id` now, or null when none may (every owner is in a [hidden] pane). */
   private ownerOf(id: CommandId, keys: boolean): Entry | null {
     // The owner whose region holds focus wins (the innermost of several), then one whose region is
-    // on screen, then one without a region. An owner inside a [hidden] pane never runs. Ties go to
-    // the latest registered.
+    // on screen (one that prefers it first), then one without a region. An owner inside a [hidden]
+    // pane never runs. Ties go to the latest registered.
     const focus = document.activeElement;
     let best: Entry | null = null;
     let bestRank = 0;
@@ -84,7 +86,7 @@ class CommandBus {
       const entry = this.entries[i];
       if (!entry.handlers.current[id] || (keys && entry.paletteOnly)) continue;
       const el = entry.region?.current ?? null;
-      const rank = !el ? 1 : el.closest("[hidden]") ? 0 : focus && el.contains(focus) ? 3 : el.isConnected ? 2 : 1;
+      const rank = !el ? 1 : el.closest("[hidden]") ? 0 : focus && el.contains(focus) ? 3 : el.isConnected ? (entry.preferWhenShown ? 2.5 : 2) : 1;
       const deeper = rank === 3 && bestRank === 3 && best?.region?.current?.contains(el) && best.region.current !== el;
       if (rank > bestRank || deeper) {
         best = entry;
@@ -283,13 +285,15 @@ export function useKeymap(): KeymapValue {
  * grid) are skipped; every key bound to an app command is kept from the browser (PR41).
  * `region` is the element the owner draws in: focus inside it, or being on screen, puts this
  * owner ahead of others for the same command, and inside a [hidden] pane it never runs.
- * With `paletteOnly` the handlers run only from the Command Palette, never from a key.
+ * With `paletteOnly` the handlers run only from the Command Palette, never from a key. With `preferWhenShown` this
+ * owner goes before other owners on screen when focus is in none of their regions.
  */
-export function useCommandKeys(handlers: CommandHandlers, opts?: { region?: RefObject<HTMLElement | null>; paletteOnly?: boolean }): void {
+export function useCommandKeys(handlers: CommandHandlers, opts?: { region?: RefObject<HTMLElement | null>; paletteOnly?: boolean; preferWhenShown?: boolean }): void {
   const bus = (useContext(KeymapContext) ?? FALLBACK).bus;
   const ref = useRef(handlers);
   ref.current = handlers;
   const region = opts?.region;
   const paletteOnly = opts?.paletteOnly ?? false;
-  useEffect(() => bus.register({ handlers: ref, region, paletteOnly }), [bus, region, paletteOnly]);
+  const preferWhenShown = opts?.preferWhenShown ?? false;
+  useEffect(() => bus.register({ handlers: ref, region, paletteOnly, preferWhenShown }), [bus, region, paletteOnly, preferWhenShown]);
 }

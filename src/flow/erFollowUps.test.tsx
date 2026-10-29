@@ -91,6 +91,8 @@ const PALETTE_FOR_TEST: ExportPalette = {
   strongBorder: "#131313",
   panel: "#141414",
   muted: "#151515",
+  faint: "#161616",
+  keyMark: "#171718",
 };
 const rule = (sel: string) => {
   const at = css().indexOf(`${sel} {`);

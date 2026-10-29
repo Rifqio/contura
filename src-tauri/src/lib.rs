@@ -6,6 +6,7 @@ mod job_commands;
 #[cfg(target_os = "linux")]
 mod paste_guard;
 mod paths;
+mod perf_log;
 mod updater;
 mod window_size;
 
@@ -67,6 +68,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             window_size::set_interface_size,
+            perf_log::perf_log_enabled,
+            perf_log::perf_log_append,
             commands::list_connections,
             commands::save_connection,
             commands::set_connection_ai_access,
@@ -76,6 +79,7 @@ pub fn run() {
             commands::ai_context_status,
             commands::ai_resync,
             commands::ai_clear_all,
+            commands::ai_clear_diagram_chats,
             commands::delete_connection,
             commands::test_connection,
             commands::suggested_connections,
@@ -189,6 +193,8 @@ pub fn run() {
             commands::ai_preview,
             commands::ai_diagram_preview,
             commands::ai_diagram_ask,
+            commands::ai_pick_attachment,
+            commands::ai_clear_attachment,
             commands::ai_record_tool_result,
             commands::ai_recent_tool_uses,
             commands::list_ai_threads,
@@ -327,6 +333,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(AiService::open(ai_store, secrets.clone()));
     app.manage(ConnectionService::new(store, secrets).with_data_dir(data_dir.clone()));
     app.manage(commands::DataDir(data_dir.clone()));
+    app.manage(commands::Attachments::default());
     let (kind, target) = updater::install_target();
     app.manage(UpdateService::new(
         AppStore::open(&data_dir.join("app.sqlite"))?,

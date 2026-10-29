@@ -12,7 +12,7 @@ export type { Sketch, SketchKind };
  */
 export type SketchChange = { id: string; before: Sketch | null; after: Sketch | null; at?: number };
 
-/** The layer node every sketch node is a child of, placed at `-origin` (Decision 21). */
+/** The layer node every sketch node is a child of, at the board's (0, 0) for good (Decision 21; Plan F Decision 11). */
 export const SKETCH_LAYER_ID = "\u0000sketches";
 const SKETCH_PREFIX = "\u0000sketch:";
 /** A sketch's node id on the canvas. */

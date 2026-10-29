@@ -22,6 +22,20 @@ import type { NodeLook } from "../nodes/parts";
 export type ErNotation = "crow" | "arrow";
 export type TextSize = "s" | "m" | "l";
 
+/**
+ * Where a frame From my database drew came from (Task 4b, A25): the diagram Ask is refused while that Connection's AI
+ * access is Never, it is deleted, or it sends to another Group's provider. Kept in the layout file only, never in the
+ * `.flow` text. `schema` is null on MySQL and SQLite, which have none.
+ */
+export interface FrameSource {
+  connectionId: string;
+  database: string;
+  schema: string | null;
+}
+
+/** The longest Connection id or database name a source holds; a longer one is a hand-edited file and reads as none. */
+const MAX_SOURCE_TEXT = 200;
+
 /** One frame's place on the board and its own settings; `nodes` are relative to `at`. */
 export interface FrameLayout {
   at: { x: number; y: number };
@@ -32,6 +46,19 @@ export interface FrameLayout {
   direction: FlowDirection;
   notation?: ErNotation;
   textSize?: TextSize;
+  /** The Connection the frame was drawn from; absent on a frame typed or pasted by hand. */
+  source?: FrameSource;
+}
+
+const sourceText = (v: unknown): v is string => typeof v === "string" && v !== "" && v.length <= MAX_SOURCE_TEXT;
+
+/** A source as the file holds it, or undefined when it cannot be one. Never throws. */
+function readSource(v: unknown): FrameSource | undefined {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return undefined;
+  const r = v as Record<string, unknown>;
+  if (!sourceText(r.connectionId) || !sourceText(r.database)) return undefined;
+  if (r.schema !== null && typeof r.schema !== "string") return undefined;
+  return { connectionId: r.connectionId, database: r.database, schema: r.schema };
 }
 
 export type SketchKind = "rect" | "ellipse" | "diamond" | "line" | "arrow" | "pen" | "text" | "note" | "section" | "icon";
@@ -65,8 +92,20 @@ const MAX_SKETCH_COLOR = 32;
 const MAX_ICON_NAME = 100;
 const ICON_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
+/** A frame source no frame owns any more, kept so the diagram Ask stays held (see `adoptStraySources`). */
+export interface HeldSource {
+  /** The title the frame had when its source was last kept. */
+  frame: string;
+  source: FrameSource;
+}
+
+/** The most held sources a file keeps: the board's frame limit. */
+const MAX_HELD = 50;
+
 export interface BoardLayout {
   viewport?: Viewport;
+  /** Sources of frames that lost their title to a clash; each holds the diagram Ask. Version 2 only. */
+  held?: HeldSource[];
   /** By frame title. Entries of titles no frame has stay (undo brings the frame back); the file leaves them out. */
   frames: Map<string, FrameLayout>;
   sketches: Sketch[];
@@ -191,14 +230,67 @@ export function parseBoardLayout(json: string | null, frames: readonly { title: 
       if (read.axes) entry.axes = read.axes;
       if (e.notation === "crow" || e.notation === "arrow") entry.notation = e.notation;
       if (e.textSize === "s" || e.textSize === "m" || e.textSize === "l") entry.textSize = e.textSize;
+      const source = readSource(e.source);
+      if (source) entry.source = source;
       out.frames.set(title, entry);
     }
   }
   out.sketches = readSketches(r.sketches);
+  if (Array.isArray(r.held)) {
+    const held: HeldSource[] = [];
+    for (const h of r.held) {
+      if (held.length >= MAX_HELD) break;
+      const frame = (h as { frame?: unknown } | null)?.frame;
+      const source = readSource((h as { source?: unknown } | null)?.source);
+      if (typeof frame === "string" && frame.length <= MAX_SOURCE_TEXT && source) held.push({ frame, source });
+    }
+    if (held.length) out.held = held;
+  }
   return out;
 }
 
-const hasSettings = (e: FrameLayout) => e.notation !== undefined || e.textSize !== undefined;
+/**
+ * Review minor 1 (Task 4b): a frame From my database drew, retitled by hand to a title another frame has, keeps its
+ * entry under its old title (the title it wants is taken), and the file is saved so. Opened again, no frame owns that
+ * title, and the source would read as gone. When the board has two or more frames sharing a title, each entry with a
+ * source that no frame's title owns is a stray: the shared titles without a source take the strays in order (an entry
+ * is made for a title that has none), and every stray left over is kept in `held`. Both are written by the next save
+ * and both hold the diagram Ask, so no stray source is ever dropped. Fail closed: which frame of a clash a source came
+ * from cannot be told. With no clash nothing is adopted (a stray entry is then a deleted frame's or a hand edit's).
+ * Returns `b` itself when nothing changes.
+ */
+export function adoptStraySources(b: BoardLayout, heads: readonly { title: string; kind: DiagramKind | null }[]): BoardLayout {
+  const titles = new Set<string>();
+  const shared: { title: string; kind: DiagramKind | null }[] = [];
+  for (const h of heads) {
+    if (titles.has(h.title)) {
+      if (!shared.some((x) => x.title === h.title)) shared.push(heads.find((x) => x.title === h.title) ?? h);
+    } else titles.add(h.title);
+  }
+  if (shared.length === 0) return b;
+  const strays: HeldSource[] = [];
+  for (const [k, e] of b.frames) if (e.source && !titles.has(k)) strays.push({ frame: k, source: e.source });
+  if (strays.length === 0) return b;
+  let frames: Map<string, FrameLayout> | null = null;
+  let next = 0;
+  for (const h of shared) {
+    if (next >= strays.length) break;
+    const e = b.frames.get(h.title);
+    if (e?.source) continue;
+    frames ??= new Map(b.frames);
+    frames.set(h.title, { ...(e ?? defaultFrame(h.kind)), source: { ...strays[next].source } });
+    next++;
+  }
+  const same = (x: HeldSource, y: HeldSource) => x.frame === y.frame && x.source.connectionId === y.source.connectionId;
+  const held = [...(b.held ?? [])];
+  for (const s of strays.slice(next)) if (!held.some((h) => same(h, s))) held.push({ frame: s.frame, source: { ...s.source } });
+  const heldChanged = held.length !== (b.held?.length ?? 0);
+  if (!frames && !heldChanged) return b;
+  return { ...b, ...(frames ? { frames } : {}), ...(heldChanged ? { held: held.slice(0, MAX_HELD) } : {}) };
+}
+
+/** A frame setting, or a source, makes even a one-frame file version 2: version 1 has no place for them. */
+const hasSettings = (e: FrameLayout) => e.notation !== undefined || e.textSize !== undefined || e.source !== undefined;
 
 /**
  * The file text. Version 1 when the board is one frame with no sketches and no frame settings (a moved frame folds
@@ -213,7 +305,7 @@ export function serializeBoardLayout(
   kinds: ReadonlyMap<string, DiagramKind | null>,
 ): string {
   const entries = [...b.frames].filter(([title]) => keepAll || live.has(title)).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
-  if (live.size === 1 && b.sketches.length === 0 && entries.every(([title, e]) => live.has(title) && !hasSettings(e))) {
+  if (live.size === 1 && b.sketches.length === 0 && !b.held?.length && entries.every(([title, e]) => live.has(title) && !hasSettings(e))) {
     const e = entries[0]?.[1] ?? defaultFrame(kinds.get([...live][0]) ?? null);
     const nodes = emptyPositions();
     for (const [k, p] of Object.entries(e.nodes)) nodes[k] = { x: p.x + e.at.x, y: p.y + e.at.y };
@@ -234,11 +326,13 @@ export function serializeBoardLayout(
     o.direction = e.direction;
     if (e.notation) o.notation = e.notation;
     if (e.textSize) o.textSize = e.textSize;
+    if (e.source) o.source = { connectionId: e.source.connectionId, database: e.source.database, schema: e.source.schema };
     frames[title] = o;
   }
   const out: Record<string, unknown> = { version: 2 };
   if (b.viewport) out.viewport = b.viewport;
   out.frames = frames;
+  if (b.held?.length) out.held = b.held.map((h) => ({ frame: h.frame, source: { connectionId: h.source.connectionId, database: h.source.database, schema: h.source.schema } }));
   out.sketches = b.sketches.map((s) => {
     const o: Record<string, unknown> = { id: s.id, kind: s.kind, x: Math.round(s.x), y: Math.round(s.y), w: Math.round(s.w), h: Math.round(s.h) };
     if (s.points) o.points = s.points.map(([x, y]) => [Math.round(x), Math.round(y)]);
