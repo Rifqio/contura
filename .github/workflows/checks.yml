@@ -93,3 +93,24 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy -j 4 --workspace --all-targets --features contura-core/test-util -- -D warnings
       - run: cargo test -j 4 -p contura-core --no-fail-fast
+
+  windows:
+    # Windows folds case and has its own paths and APIs, so a change can pass on Linux and still break the
+    # Windows build; this catches it on every push instead of at release time. A compile check, not a build.
+    name: Windows (tsc, cargo check)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -j 4 --workspace --all-targets --features contura-core/test-util
