@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="ai.css">
 <link rel="stylesheet" href="hero.css">
 <link rel="stylesheet" href="board-ask.css">
+<link rel="stylesheet" href="roadmap.css">
 <script>if (/[?&]reduce=1(&|$)/.test(location.search)) document.documentElement.classList.add('hx-rm');</script>
 <script src="site.js"></script>
 <script src="kit.js" defer></script>
@@ -34,6 +35,7 @@
       <a href="#data">Data</a>
       <a href="#ai">AI</a>
       <a href="#safety">Safety</a>
+      <a href="#roadmap">Roadmap</a>
     </nav>
     <a class="nav-dl" href="#download">Download</a>
   </div>
@@ -597,6 +599,63 @@
             <p>On a Production Connection every write waits for your yes, with the exact SQL in front of you. On a Read-only one, writes never run.</p>
           </div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec rm" id="roadmap" data-name="Roadmap" aria-labelledby="h-roadmap">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">8</span></div>
+      <div class="body">
+        <header class="rm-head">
+          <h2 class="headline" id="h-roadmap">Roadmap</h2>
+          <p>What shipped, what's next, and what comes after.</p>
+        </header>
+
+        <div class="rm-strip" aria-hidden="true">
+          <div class="rm-segs"><div class="rm-seg done"></div><div class="rm-seg next"></div><div class="rm-seg later"></div></div>
+          <div class="rm-labels"><span>1.0 shipped</span><span>1.1</span><span>Later</span></div>
+        </div>
+
+        <div class="rm-clip">
+          <div class="rm-board">
+            <div class="rm-cols">
+              <section class="rm-col" data-state="shipped" tabindex="0" aria-label="1.0, shipped">
+                <div class="rm-stage"><b>1.0</b>Shipped</div>
+                <ul>
+                  <li>SQL editor<small>Completion from your real schema</small></li>
+                  <li>AI that writes SQL<small>You read it, you press Run</small></li>
+                  <li>Diagram boards<small>ER, sequence, flow and cloud</small></li>
+                  <li>Data Transfer and Schema Compare</li>
+                </ul>
+              </section>
+              <div class="rm-track" aria-hidden="true">
+                <div class="rm-fill"></div>
+                <div class="rm-chip"><i></i>v1.0.0 · 30 Oct 2026</div>
+              </div>
+              <section class="rm-col" data-state="next" tabindex="0" aria-label="1.1, next">
+                <div class="rm-stage"><b>1.1</b>Next</div>
+                <ul>
+                  <li>Redis<small>Keys, values and Pub/Sub</small></li>
+                  <li>Local database servers<small>PostgreSQL, MySQL, MariaDB and Valkey, one switch each</small></li>
+                  <li>MCP server</li>
+                </ul>
+              </section>
+              <section class="rm-col" data-state="later" tabindex="0" aria-label="Later">
+                <div class="rm-stage"><b>Later</b>Planned</div>
+                <ul>
+                  <li>Attach a repository<small>The AI reads your code as context</small></li>
+                  <li>SSH tunnels<small>Reach databases behind a bastion</small></li>
+                  <li>SQL Server</li>
+                  <li>MongoDB</li>
+                  <li>macOS build</li>
+                </ul>
+              </section>
+            </div>
+          </div>
+        </div>
+
+        <p class="rm-foot">Want something on this list? <a href="https://github.com/Rifqio/contura/issues">Open an issue</a>.</p>
       </div>
     </div>
   </section>

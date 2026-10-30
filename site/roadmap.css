@@ -1,0 +1,98 @@
+/* Contura site: the roadmap. One tilted release track crossing three stage columns; the columns share rows
+   through subgrid, so the track always sits between the stage titles and their lists. On phones the track
+   turns into a flat three-part strip above stacked stage cards. Colors come from the site's tokens. */
+
+.rm { --rm-stripe: color-mix(in srgb, var(--accent) 55%, var(--ground)); }
+
+/* ---------- heading, tilted with the track ---------- */
+.rm-head { text-align: center; transform: rotate(-4deg); margin-bottom: clamp(32px, 6vw, 72px); }
+.rm-head .headline { margin-inline: auto; max-width: none; font-size: var(--t-mega); }
+.rm-head p { margin: 14px auto 0; color: var(--muted); max-width: 38ch; }
+
+/* ---------- the board ---------- */
+.rm-clip { overflow: clip; padding-block: clamp(48px, 8vw, 120px); margin-block: calc(-1 * clamp(24px, 4vw, 60px)); }
+.rm-board { transform: rotate(-7deg); transform-origin: 50% 30%; }
+.rm-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: auto 120px auto; }
+.rm-col {
+  grid-row: 1 / 4; display: grid; grid-template-rows: subgrid; position: relative;
+  padding: 0 clamp(14px, 2vw, 32px); outline: none; transition: opacity 0.3s var(--ease);
+}
+.rm-col:nth-of-type(1) { grid-column: 1; }
+.rm-col:nth-of-type(2) { grid-column: 2; }
+.rm-col:nth-of-type(3) { grid-column: 3; }
+.rm-col + .rm-col::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+  border-left: 2px dotted color-mix(in srgb, var(--muted) 55%, transparent);
+}
+.rm-stage { grid-row: 1; font-family: var(--f-mono); font-size: var(--t-ui); color: var(--muted); letter-spacing: 0.02em; }
+.rm-stage b {
+  display: block; font-family: var(--f-display); font-size: clamp(1.75rem, 1rem + 2vw, 2.75rem);
+  font-weight: 800; letter-spacing: -0.02em; color: var(--accent); line-height: 1.05; margin-bottom: 4px;
+}
+.rm-col[data-state="next"] .rm-stage b { color: var(--pend); }
+.rm-col[data-state="later"] .rm-stage b { color: var(--num); }
+.rm-cols:has(.rm-col:hover, .rm-col:focus-visible) .rm-col:not(:hover):not(:focus-visible) { opacity: 0.4; }
+.rm-col:focus-visible .rm-stage b { text-decoration: underline; text-underline-offset: 6px; }
+
+/* ---------- the track ---------- */
+.rm-track {
+  grid-column: 1 / -1; grid-row: 2; align-self: center; position: relative; z-index: 1; height: 84px;
+  margin: 0 -8% 0 -3%; border-radius: 28px; background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--line), 0 30px 60px -30px var(--shade);
+}
+.rm-fill {
+  position: absolute; left: 10px; top: 10px; bottom: 10px; width: calc(33% - 6px); border-radius: 20px;
+  background: repeating-linear-gradient(115deg, var(--accent) 0 26px, var(--rm-stripe) 26px 52px) 0 0 / 120px 100%;
+  animation: rm-run 2.4s linear infinite;
+}
+@keyframes rm-run { to { background-position: 120px 0; } }
+.rm-chip {
+  position: absolute; top: 50%; left: calc(33% + 36px); transform: translateY(-50%);
+  display: flex; align-items: center; gap: 10px; white-space: nowrap;
+  font-family: var(--f-mono); font-size: 0.875rem; font-weight: 600;
+  background: var(--ground); color: var(--ink); padding: 8px 14px; border-radius: 10px; box-shadow: inset 0 0 0 1px var(--line);
+}
+.rm-chip::before { content: ""; position: absolute; right: 100%; top: 50%; width: 26px; border-top: 2px solid var(--accent); }
+.rm-chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+
+/* ---------- stage lists ---------- */
+.rm-col ul { grid-row: 3; list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; align-content: start; }
+.rm-col li { line-height: 1.35; }
+.rm-col li small { display: block; color: var(--muted); font-size: 0.875rem; }
+
+.rm-strip { display: none; }
+.rm-foot { margin-top: clamp(40px, 6vw, 72px); text-align: center; color: var(--muted); font-size: 0.9375rem; }
+.rm-foot a { color: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) { .rm-fill, .rm-seg.done { animation: none; } .rm-col { transition: none; } }
+.hx-rm .rm-fill, .hx-rm .rm-seg.done { animation: none; }
+
+/* ---------- phones: flat strip, stacked cards ---------- */
+@media (max-width: 860px) {
+  .rm-head { transform: none; text-align: left; margin-bottom: 28px; }
+  .rm-head .headline { margin-inline: 0; font-size: var(--t-xl); }
+  .rm-head p { margin-left: 0; }
+  .rm-clip { overflow: visible; padding-block: 0; margin-block: 0; }
+  .rm-board { transform: none; }
+  .rm-track { display: none; }
+
+  .rm-strip { display: block; margin-bottom: 28px; }
+  .rm-segs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 6px; border-radius: 16px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+  .rm-seg { height: 30px; border-radius: 10px; }
+  .rm-seg.done { background: repeating-linear-gradient(115deg, var(--accent) 0 12px, var(--rm-stripe) 12px 24px) 0 0 / 56px 100%; animation: rm-run 2.4s linear infinite; }
+  .rm-seg.next { box-shadow: inset 0 0 0 2px var(--pend); background: color-mix(in srgb, var(--pend) 12%, transparent); }
+  .rm-seg.later { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--num) 55%, transparent); }
+  .rm-labels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; padding: 0 6px; font: 500 0.75rem var(--f-mono); color: var(--muted); }
+  .rm-labels span:first-child { color: var(--accent); }
+
+  .rm-cols { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; gap: 14px; }
+  .rm-col { grid-row: auto; grid-column: 1 !important; grid-template-rows: none; gap: 16px; padding: 22px 20px 24px; border-radius: 18px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+  .rm-col + .rm-col::before { display: none; }
+  .rm-cols:has(.rm-col:hover, .rm-col:focus-visible) .rm-col:not(:hover):not(:focus-visible) { opacity: 1; }
+  .rm-stage { grid-row: auto; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .rm-stage b { font-size: 2.5rem; margin: 0; }
+  .rm-col ul { grid-row: auto; gap: 0; }
+  .rm-col li { padding: 12px 0; border-top: 1px solid var(--line); }
+  .rm-col li:first-child { border-top: 0; padding-top: 0; }
+  .rm-col li:last-child { padding-bottom: 0; }
+}
