@@ -19,7 +19,7 @@ import { BODY_PX, PICTURE_SLICE_MS, READABLE_PX } from "./boardDetail";
 import { base64Steps, createDeflate, pngFileSteps, scanlines } from "./pngSteps";
 import { frameOf } from "../../diagram/export/svg";
 
-// The picture node's type (FramePicture.tsx) lives with the scene that makes the node, so the scene needs only types
+// The picture node's type (FramePictureView.tsx) lives with the scene that makes the node, so the scene needs only types
 // from here.
 export { FRAME_PICTURE_TYPE } from "./boardScene";
 

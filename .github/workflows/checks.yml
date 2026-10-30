@@ -19,6 +19,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+      # Windows folds case, so two paths that differ only in case (framePicture.ts and FramePicture.tsx) break
+      # the Windows build while Linux passes. Compared without the extension, since imports leave it out.
+      - name: No paths that differ only in case
+        run: |
+          dupes=$(git ls-files | sed -E 's/\.[^./]+$//' | sort -u | awk '{ k = tolower($0); if (k in seen && seen[k] != $0) print seen[k] " / " $0; seen[k] = $0 }')
+          if [ -n "$dupes" ]; then echo "::error::Paths differ only in case: $dupes"; exit 1; fi
       - uses: actions/setup-node@v7
         with:
           node-version: 22

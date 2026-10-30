@@ -129,7 +129,7 @@ import { frameHeadsOf, type FrameSelection, isDup, kindOfText, type Parsed, type
 import { airRows, boardFrameId, boardNodeBoxes, clashInFrameId, createBoardScene, duplicateFrameId, FRAME_PICTURE_TYPE, FRAME_TAB_H, type FrameBox, GROUP_ID, inFrameId, isStaticId, LIVE_ANCHOR_ID, LIVE_ANCHOR_TYPE, liveZ, type PartBox, partName, rowStates, SKETCH_PICTURE_TYPE, SKETCH_UNDER_CLASS, type SketchLayerDraw, Z_LIVE, Z_LIVE_BOX } from "./board/boardScene";
 import FrameNode, { type FrameNodeData, type FramePane } from "./board/FrameNode";
 import { byLeft, tabNeighbours, tabRoom } from "./board/tabRoom";
-import FramePicture, { SketchLayerPicture } from "./board/FramePicture";
+import FramePicture, { SketchLayerPicture } from "./board/FramePictureView";
 import { createSketchPictureStore, createSketchTiles } from "./board/sketchPicture";
 import { sketchExtent } from "./board/publish/boardPublish";
 import { perfMark, perfMeasure, perfOn, perfStep } from "../perf/perfRecorder";

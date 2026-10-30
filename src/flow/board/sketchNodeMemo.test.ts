@@ -3,7 +3,7 @@
 // layer, which stays at the board's (0, 0); the place a node is handed is in board units.
 import type { NodeProps } from "@xyflow/react";
 import { expect, test } from "vitest";
-import FramePicture from "./FramePicture";
+import FramePicture from "./FramePictureView";
 import { SketchNode } from "./SketchNode";
 
 const props = { id: "s", type: "sketch", data: { sketch: { id: "s" } }, selected: false, dragging: false, positionAbsoluteX: 0, positionAbsoluteY: 0, zIndex: 3000 } as unknown as NodeProps;

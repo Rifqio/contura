@@ -156,7 +156,7 @@ export function boardNodeBoxes(scene: Pick<BoardSceneOut, "nodes" | "boxes" | "c
   return out;
 }
 
-/** A static frame drawn as one picture of itself: its node type (FramePicture.tsx). */
+/** A static frame drawn as one picture of itself: its node type (FramePictureView.tsx). */
 export const FRAME_PICTURE_TYPE = "framePicture";
 type Rect = { x: number; y: number; w: number; h: number };
 /**
