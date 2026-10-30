@@ -633,8 +633,7 @@
 .fi span{font-size:12px;line-height:16px;color:var(--muted);white-space:nowrap}
 .mn{display:grid;gap:6px;padding:6px;min-height:0}
 .L .mn{grid-template-columns:236px minmax(0,1fr) 360px;height:616px}
-.M .mn{grid-template-columns:208px minmax(0,1fr);grid-template-rows:560px 560px}
-.M .ask{grid-column:1/-1}
+.M .mn{grid-template-columns:184px minmax(0,1fr) 288px;height:616px}
 .S .mn{grid-template-columns:minmax(0,1fr)}
 .S .ask{height:620px}
 .S .tbar .wb,.M .tbar .wb,.S .tab.other{display:none}

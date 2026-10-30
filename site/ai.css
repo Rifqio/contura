@@ -1,4 +1,4 @@
-/* Contura site, ai.html only: the access lanes, the answer log stage, the provider list and the four rules.
+/* Contura site, index.html #ai: what the AI sees at each access level, as two lanes.
    Site tokens only (site.css), no literal colours. */
 
 /* ---------- 01: what the AI sees ---------- */
@@ -67,33 +67,15 @@
 }
 @media (prefers-reduced-motion: reduce) { .lv-g label, .lv-g label::before, .lv-g label::after, .exact summary::before { transition: none; } }
 
-/* ---------- 02: the answer log stage ---------- */
-.logstage { margin-top: clamp(28px, 4vw, 48px); scroll-margin-top: calc(var(--top-h) + 16px); }
-.logstage-h { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 14px; }
-.logstage-h h3 { font-size: var(--t-m); line-height: 1.15; letter-spacing: -0.02em; outline: none; }
-.logstage-h h3:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 2px; }
-.logstage-h .meta { flex-basis: 100%; font-family: var(--f-mono); font-size: 0.75rem; color: var(--muted); }
-.logstage-h .seg button { min-height: 36px; }
-@media (pointer: coarse) { .logstage-h .seg button { min-height: 44px; } }
-.log-host { --lh: 560px; }
-@media (max-width: 760px) { .log-host { --lh: 520px; } }
-
-/* ---------- 03: providers ---------- */
-.provs { list-style: none; margin: clamp(40px, 5vw, 64px) calc(-1 * var(--rail-in)) 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
-.provs li { padding: 22px var(--rail-in) 26px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.provs li + li { border-left: 1px solid var(--rule); }
-.provs b { font-size: var(--t-m); line-height: 1.15; letter-spacing: -0.02em; }
-.provs li > span:last-child { color: var(--muted); font-size: 0.9375rem; line-height: 1.5; max-width: 40ch; }
-@media (max-width: 860px) { .provs { grid-template-columns: minmax(0, 1fr); } .provs li + li { border-left: 0; border-top: 1px solid var(--rule); } }
-
-/* ---------- 04: the rules ---------- */
-.rules { list-style: none; margin: clamp(40px, 5vw, 64px) calc(-1 * var(--rail-in)) 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
-.rules > li { padding: 24px var(--rail-in) 28px; min-width: 0; }
-.rules > li + li { border-left: 1px solid var(--rule); }
-.rules .no { font-family: var(--f-mono); font-size: 0.75rem; color: var(--accent); display: block; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
-.rules h3 { font-size: var(--t-m); line-height: 1.15; letter-spacing: -0.02em; }
-.rules ul { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px; }
-.rules ul li { position: relative; padding-left: 16px; color: var(--muted); font-size: 0.9375rem; line-height: 1.5; }
-.rules ul li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 7px; height: 1px; background: var(--accent); }
-@media (max-width: 1100px) { .rules { grid-template-columns: repeat(2, minmax(0, 1fr)); } .rules > li:nth-child(3) { border-left: 0; } .rules > li:nth-child(n+3) { border-top: 1px solid var(--rule); } }
-@media (max-width: 640px) { .rules { grid-template-columns: minmax(0, 1fr); } .rules > li + li { border-left: 0; border-top: 1px solid var(--rule); } }
+/* ---------- 02: every answer keeps its trace (kit.js createLog, the app's AnswerLog) ---------- */
+.lt-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); row-gap: 32px; align-items: center; margin-top: clamp(72px, 9vw, 128px); }
+.lt-fig { grid-column: 1 / span 7; min-width: 0; margin: 0; }
+.lt-host { --lh: 620px; min-width: 0; }
+.lt-a { grid-column: 9 / span 4; }
+.lt-a .meta { margin-top: 16px; }
+@media (max-width: 1100px) {
+  .lt-fig, .lt-a { grid-column: 1 / -1; }
+  .lt-a { order: -1; }
+  .lt-a .copy { max-width: 62ch; }
+}
+@media (max-width: 760px) { .lt-host { --lh: 560px; } }

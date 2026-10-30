@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -9,226 +9,600 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="site.css">
+<link rel="stylesheet" href="data.css">
+<link rel="stylesheet" href="ai.css">
+<link rel="stylesheet" href="hero.css">
+<link rel="stylesheet" href="board-ask.css">
+<script>if (/[?&]reduce=1(&|$)/.test(location.search)) document.documentElement.classList.add('hx-rm');</script>
 <script src="site.js"></script>
 <script src="kit.js" defer></script>
-<script src="home-play.js" defer></script>
+<script src="hero.js" defer></script>
+<script src="launch.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
 <header class="top">
   <div class="wrap">
-    <a class="brand" href="index.html" aria-label="Contura home">
+    <a class="brand" href="#top" aria-label="Contura home">
       <svg viewBox="0 0 256 256" aria-hidden="true"><path fill="var(--ink)" d="M52 40A60 12 0 0 1 172 40V80A60 12 0 0 1 52 80Z"/><path fill="var(--ink)" d="M52 172A60 12 0 0 0 172 172V212A60 12 0 0 1 52 212Z"/><path fill="var(--accent)" d="M84 104A60 12 0 0 0 204 104V148A60 12 0 0 1 84 148Z"/></svg>
-      Contura <small>v0.7.0</small>
+      Contura <small>v1.0.0</small>
     </a>
-    <nav class="nav" aria-label="Pages">
-      <a href="index.html" aria-current="page">Home</a>
-      <a href="query.html">Query</a>
-      <a href="model.html">Model</a>
-      <a href="data.html">Data</a>
-      <a href="ai.html">AI</a>
-      <a href="safety.html">Safety</a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#query">Query</a>
+      <a href="#boards">Boards</a>
+      <a href="#data">Data</a>
+      <a href="#ai">AI</a>
+      <a href="#safety">Safety</a>
     </nav>
     <a class="nav-dl" href="#download">Download</a>
   </div>
 </header>
 
 <main id="main">
-
-  <section class="stmt hero" id="top" data-name="Review, then run" aria-labelledby="h-hero">
+  <section class="stmt hero hx" id="top" data-name="Review, then run" aria-labelledby="h-hero">
     <div class="wrap">
       <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">1</span></div>
-      <div class="body">
-        <p class="eyebrow"><i aria-hidden="true">~</i>v0.7.0, a prototype pre-release for Windows and Linux</p>
-        <h1 class="display" id="h-hero">Review, <span class="tail">then run.</span></h1>
-        <div class="hero-row">
-          <p class="lede">Contura is a database client for MySQL, PostgreSQL and SQLite. Write SQL, drag tables together or ask in plain words, then read exactly what will happen before anything touches your data.</p>
-          <div class="hero-act dl-box">
-            <div class="row">
-              <div class="dl-btns">
-              <button class="btn" type="button" data-download aria-describedby="dl-meta" aria-label="Download for Windows">
-                <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M0 0h7.5v7.5H0zM8.5 0H16v7.5H8.5zM0 8.5h7.5V16H0zM8.5 8.5H16V16H8.5z"/></svg>
-                <span><span class="dl-pre">Download for </span>Windows</span>
-              </button>
-              <button class="btn" type="button" data-download aria-describedby="dl-meta" aria-label="Download for Linux">
-                <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M8 .8C6 .8 4.9 2.4 4.9 4.5c0 1-.4 1.8-1 2.7C3 8.4 2.3 9.7 2.3 11.2c0 .8.2 1.4.5 1.9h10.4c.3-.5.5-1.1.5-1.9 0-1.5-.7-2.8-1.6-4-.6-.9-1-1.7-1-2.7C11.1 2.4 10 .8 8 .8zM8 7.6c-1.4 0-2.4 1.5-2.4 3.4S6.6 13.6 8 13.6s2.4-.7 2.4-2.6S9.4 7.6 8 7.6zM6.9 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4zM9.1 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4z"/><path fill="currentColor" d="M7 5.6h2L8 6.7z"/><path fill="currentColor" d="M2.6 13.4c.5-.8 2.1-.9 2.9-.4.5.3.6 1 .2 1.4-.7.7-2.7.6-3.2 0-.2-.3-.1-.7.1-1zM13.4 13.4c-.5-.8-2.1-.9-2.9-.4-.5.3-.6 1-.2 1.4.7.7 2.7.6 3.2 0 .2-.3.1-.7-.1-1z"/></svg>
-                <span><span class="dl-pre">Download for </span>Linux</span>
-              </button>
-              </div>
-              <a class="ghost" href="#demo">Try it in the page<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v10M3.5 8.5 8 13l4.5-4.5"/></svg></a>
+      <div class="body hx-body">
+        <div class="hx-tile" aria-hidden="true">
+          <svg viewBox="0 0 256 256"><path fill="var(--ink)" d="M52 40A60 12 0 0 1 172 40V80A60 12 0 0 1 52 80Z"/><path fill="var(--ink)" d="M52 172A60 12 0 0 0 172 172V212A60 12 0 0 1 52 212Z"/><path fill="var(--accent)" d="M84 104A60 12 0 0 0 204 104V148A60 12 0 0 1 84 148Z"/></svg>
+        </div>
+        <h1 class="display hx-h" id="h-hero"><span class="w" style="--i:0"><span>Review,</span></span> <span class="tail"><span class="w" style="--i:1"><span>then</span></span> <span class="w" style="--i:2"><span>run.</span></span></span></h1>
+        <p class="lede hx-lede">Contura is a database client for MySQL, PostgreSQL and SQLite on Windows and Linux. Write SQL, drag tables together or ask in plain words, then read exactly what will happen before anything touches your data.</p>
+        <div class="hero-act dl-box hx-act" id="download">
+          <div class="row">
+            <div class="dl-btns">
+            <a class="btn acc" href="https://github.com/Rifqio/contura/releases/download/v1.0.0/Contura_1.0.0_x64_portable.exe" aria-describedby="dl-meta" aria-label="Download for Windows">
+              <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M0 0h7.5v7.5H0zM8.5 0H16v7.5H8.5zM0 8.5h7.5V16H0zM8.5 8.5H16V16H8.5z"/></svg>
+              <span><span class="dl-pre">Download for </span>Windows</span>
+            </a>
+            <a class="btn acc" href="https://github.com/Rifqio/contura/releases/download/v1.0.0/Contura_1.0.0_amd64.AppImage" aria-describedby="dl-meta" aria-label="Download for Linux, AppImage">
+              <svg class="win" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12.504 0c-.155 0-.315.008-.48.021-4.226.333-3.105 4.807-3.17 6.298-.076 1.092-.3 1.953-1.05 3.02-.885 1.051-2.127 2.75-2.716 4.521-.278.832-.41 1.684-.287 2.489a.424.424 0 00-.11.135c-.26.268-.45.6-.663.839-.199.199-.485.267-.797.4-.313.136-.658.269-.864.68-.09.189-.136.394-.132.602 0 .199.027.4.055.536.058.399.116.728.04.97-.249.68-.28 1.145-.106 1.484.174.334.535.47.94.601.81.2 1.91.135 2.774.6.926.466 1.866.67 2.616.47.526-.116.97-.464 1.208-.946.587-.003 1.23-.269 2.26-.334.699-.058 1.574.267 2.577.2.025.134.063.198.114.333l.003.003c.391.778 1.113 1.132 1.884 1.071.771-.06 1.592-.536 2.257-1.306.631-.765 1.683-1.084 2.378-1.503.348-.199.629-.469.649-.853.023-.4-.2-.811-.714-1.376v-.097l-.003-.003c-.17-.2-.25-.535-.338-.926-.085-.401-.182-.786-.492-1.046h-.003c-.059-.054-.123-.067-.188-.135a.357.357 0 00-.19-.064c.431-1.278.264-2.55-.173-3.694-.533-1.41-1.465-2.638-2.175-3.483-.796-1.005-1.576-1.957-1.56-3.368.026-2.152.236-6.133-3.544-6.139zm.529 3.405h.013c.213 0 .396.062.584.198.19.135.33.332.438.533.105.259.158.459.166.724 0-.02.006-.04.006-.06v.105a.086.086 0 01-.004-.021l-.004-.024a1.807 1.807 0 01-.15.706.953.953 0 01-.213.335.71.71 0 00-.088-.042c-.104-.045-.198-.064-.284-.133a1.312 1.312 0 00-.22-.066c.05-.06.146-.133.183-.198.053-.128.082-.264.088-.402v-.02a1.21 1.21 0 00-.061-.4c-.045-.134-.101-.2-.183-.333-.084-.066-.167-.132-.267-.132h-.016c-.093 0-.176.03-.262.132a.8.8 0 00-.205.334 1.18 1.18 0 00-.09.4v.019c.002.089.008.179.02.267-.193-.067-.438-.135-.607-.202a1.635 1.635 0 01-.018-.2v-.02a1.772 1.772 0 01.15-.768c.082-.22.232-.406.43-.533a.985.985 0 01.594-.2zm-2.962.059h.036c.142 0 .27.048.399.135.146.129.264.288.344.465.09.199.14.4.153.667v.004c.007.134.006.2-.002.266v.08c-.03.007-.056.018-.083.024-.152.055-.274.135-.393.2.012-.09.013-.18.003-.267v-.015c-.012-.133-.04-.2-.082-.333a.613.613 0 00-.166-.267.248.248 0 00-.183-.064h-.021c-.071.006-.13.04-.186.132a.552.552 0 00-.12.27.944.944 0 00-.023.33v.015c.012.135.037.2.08.334.046.134.098.2.166.268.01.009.02.018.034.024-.07.057-.117.07-.176.136a.304.304 0 01-.131.068 2.62 2.62 0 01-.275-.402 1.772 1.772 0 01-.155-.667 1.759 1.759 0 01.08-.668 1.43 1.43 0 01.283-.535c.128-.133.26-.2.418-.2zm1.37 1.706c.332 0 .733.065 1.216.399.293.2.523.269 1.052.468h.003c.255.136.405.266.478.399v-.131a.571.571 0 01.016.47c-.123.31-.516.643-1.063.842v.002c-.268.135-.501.333-.775.465-.276.135-.588.292-1.012.267a1.139 1.139 0 01-.448-.067 3.566 3.566 0 01-.322-.198c-.195-.135-.363-.332-.612-.465v-.005h-.005c-.4-.246-.616-.512-.686-.71-.07-.268-.005-.47.193-.6.224-.135.38-.271.483-.336.104-.074.143-.102.176-.131h.002v-.003c.169-.202.436-.47.839-.601.139-.036.294-.065.466-.065zm2.8 2.142c.358 1.417 1.196 3.475 1.735 4.473.286.534.855 1.659 1.102 3.024.156-.005.33.018.513.064.646-1.671-.546-3.467-1.089-3.966-.22-.2-.232-.335-.123-.335.59.534 1.365 1.572 1.646 2.757.13.535.16 1.104.021 1.67.067.028.135.06.205.067 1.032.534 1.413.938 1.23 1.537v-.043c-.06-.003-.12 0-.18 0h-.016c.151-.467-.182-.825-1.065-1.224-.915-.4-1.646-.336-1.77.465-.008.043-.013.066-.018.135-.068.023-.139.053-.209.064-.43.268-.662.669-.793 1.187-.13.533-.17 1.156-.205 1.869v.003c-.02.334-.17.838-.319 1.35-1.5 1.072-3.58 1.538-5.348.334a2.645 2.645 0 00-.402-.533 1.45 1.45 0 00-.275-.333c.182 0 .338-.03.465-.067a.615.615 0 00.314-.334c.108-.267 0-.697-.345-1.163-.345-.467-.931-.995-1.788-1.521-.63-.4-.986-.87-1.15-1.396-.165-.534-.143-1.085-.015-1.645.245-1.07.873-2.11 1.274-2.763.107-.065.037.135-.408.974-.396.751-1.14 2.497-.122 3.854a8.123 8.123 0 01.647-2.876c.564-1.278 1.743-3.504 1.836-5.268.048.036.217.135.289.202.218.133.38.333.59.465.21.201.477.335.876.335.039.003.075.006.11.006.412 0 .73-.134.997-.268.29-.134.52-.334.74-.4h.005c.467-.135.835-.402 1.044-.7zm2.185 8.958c.037.6.343 1.245.882 1.377.588.134 1.434-.333 1.791-.765l.211-.01c.315-.007.577.01.847.268l.003.003c.208.199.305.53.391.876.085.4.154.78.409 1.066.486.527.645.906.636 1.14l.003-.007v.018l-.003-.012c-.015.262-.185.396-.498.595-.63.401-1.746.712-2.457 1.57-.618.737-1.37 1.14-2.036 1.191-.664.053-1.237-.2-1.574-.898l-.005-.003c-.21-.4-.12-1.025.056-1.69.176-.668.428-1.344.463-1.897.037-.714.076-1.335.195-1.814.12-.465.308-.797.641-.984l.045-.022zm-10.814.049h.01c.053 0 .105.005.157.014.376.055.706.333 1.023.752l.91 1.664.003.003c.243.533.754 1.064 1.189 1.637.434.598.77 1.131.729 1.57v.006c-.057.744-.48 1.148-1.125 1.294-.645.135-1.52.002-2.395-.464-.968-.536-2.118-.469-2.857-.602-.369-.066-.61-.2-.723-.4-.11-.2-.113-.602.123-1.23v-.004l.002-.003c.117-.334.03-.752-.027-1.118-.055-.401-.083-.71.043-.94.16-.334.396-.4.69-.533.294-.135.64-.202.915-.47h.002v-.002c.256-.268.445-.601.668-.838.19-.201.38-.336.663-.336zm7.159-9.074c-.435.201-.945.535-1.488.535-.542 0-.97-.267-1.28-.466-.154-.134-.28-.268-.373-.335-.164-.134-.144-.333-.074-.333.109.016.129.134.199.2.096.066.215.2.36.333.292.2.68.467 1.167.467.485 0 1.053-.267 1.398-.466.195-.135.445-.334.648-.467.156-.136.149-.267.279-.267.128.016.034.134-.147.332a8.097 8.097 0 01-.69.468zm-1.082-1.583V5.64c-.006-.02.013-.042.029-.05.074-.043.18-.027.26.004.063 0 .16.067.15.135-.006.049-.085.066-.135.066-.055 0-.092-.043-.141-.068-.052-.018-.146-.008-.163-.065zm-.551 0c-.02.058-.113.049-.166.066-.047.025-.086.068-.14.068-.05 0-.13-.02-.136-.068-.01-.066.088-.133.15-.133.08-.031.184-.047.259-.005.019.009.036.03.03.05v.02h.003z"/></svg>
+              <span><span class="dl-pre">Download for </span>Linux</span>
+            </a>
             </div>
-            <p class="meta" id="dl-meta">v0.7.0 · Windows 10 and 11 · Linux, AppImage or .deb · 64-bit · about 20&nbsp;MB · no installer on Windows</p>
-            <p class="note" data-note role="status" hidden></p>
           </div>
+          <p class="hx-eng"><span class="hx-eng-l">Works with</span><span class="en-i"><span class="tile my"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.405 5.501c-.115 0-.193.014-.274.033v.013h.014c.054.104.146.18.214.273.054.107.1.214.154.32l.014-.015c.094-.066.14-.172.14-.333-.04-.047-.046-.094-.08-.14-.04-.067-.126-.1-.18-.153zM5.77 18.695h-.927a50.854 50.854 0 00-.27-4.41h-.008l-1.41 4.41H2.45l-1.4-4.41h-.01a72.892 72.892 0 00-.195 4.41H0c.055-1.966.192-3.81.41-5.53h1.15l1.335 4.064h.008l1.347-4.064h1.095c.242 2.015.384 3.86.428 5.53zm4.017-4.08c-.378 2.045-.876 3.533-1.492 4.46-.482.716-1.01 1.073-1.583 1.073-.153 0-.34-.046-.566-.138v-.494c.11.017.24.026.386.026.268 0 .483-.075.647-.222.197-.18.295-.382.295-.605 0-.155-.077-.47-.23-.944L6.23 14.615h.91l.727 2.36c.164.536.233.91.205 1.123.4-1.064.678-2.227.835-3.483zm12.325 4.08h-2.63v-5.53h.885v4.85h1.745zm-3.32.135l-1.016-.5c.09-.076.177-.158.255-.25.433-.506.648-1.258.648-2.253 0-1.83-.718-2.746-2.155-2.746-.704 0-1.254.232-1.65.697-.43.508-.646 1.256-.646 2.245 0 .972.19 1.686.574 2.14.35.41.877.615 1.583.615.264 0 .506-.033.725-.098l1.325.772.36-.622zM15.5 17.588c-.225-.36-.337-.94-.337-1.736 0-1.393.424-2.09 1.27-2.09.443 0 .77.167.977.5.224.362.336.936.336 1.723 0 1.404-.424 2.108-1.27 2.108-.445 0-.77-.167-.978-.5zm-1.658-.425c0 .47-.172.856-.516 1.156-.344.3-.803.45-1.384.45-.543 0-1.064-.172-1.573-.515l.237-.476c.438.22.833.328 1.19.328.332 0 .593-.073.783-.22a.754.754 0 00.3-.615c0-.33-.23-.61-.648-.845-.388-.213-1.163-.657-1.163-.657-.422-.307-.632-.636-.632-1.177 0-.45.157-.81.47-1.085.315-.278.72-.415 1.22-.415.512 0 .98.136 1.4.41l-.213.476a2.726 2.726 0 00-1.064-.23c-.283 0-.502.068-.654.206a.685.685 0 00-.248.524c0 .328.234.61.666.85.393.215 1.187.67 1.187.67.433.305.648.63.648 1.168zm9.382-5.852c-.535-.014-.95.04-1.297.188-.1.04-.26.04-.274.167.055.053.063.14.11.214.08.134.218.313.346.407.14.11.28.216.427.31.26.16.555.255.81.416.145.094.293.213.44.313.073.05.12.14.214.172v-.02c-.046-.06-.06-.147-.105-.214-.067-.067-.134-.127-.2-.193a3.223 3.223 0 00-.695-.675c-.214-.146-.682-.35-.77-.595l-.013-.014c.146-.013.32-.066.46-.106.227-.06.435-.047.67-.106.106-.027.213-.06.32-.094v-.06c-.12-.12-.21-.283-.334-.395a8.867 8.867 0 00-1.104-.823c-.21-.134-.476-.22-.697-.334-.08-.04-.214-.06-.26-.127-.12-.146-.19-.34-.275-.514a17.69 17.69 0 01-.547-1.163c-.12-.262-.193-.523-.34-.763-.69-1.137-1.437-1.826-2.586-2.5-.247-.14-.543-.2-.856-.274-.167-.008-.334-.02-.5-.027-.11-.047-.216-.174-.31-.235-.38-.24-1.364-.76-1.644-.072-.18.434.267.862.422 1.082.115.153.26.328.34.5.047.116.06.235.107.356.106.294.207.622.347.897.073.14.153.287.247.413.054.073.146.107.167.227-.094.136-.1.334-.154.5-.24.757-.146 1.693.194 2.25.107.166.362.534.703.393.3-.12.234-.5.32-.835.02-.08.007-.133.048-.187v.015c.094.188.188.367.274.555.206.328.566.668.867.895.16.12.287.328.487.402v-.02h-.015c-.043-.058-.1-.086-.154-.133a3.445 3.445 0 01-.35-.4 8.76 8.76 0 01-.747-1.218c-.11-.21-.202-.436-.29-.643-.04-.08-.04-.2-.107-.24-.1.146-.247.273-.32.453-.127.288-.14.642-.188 1.01-.027.007-.014 0-.027.014-.214-.052-.287-.274-.367-.46-.2-.475-.233-1.238-.06-1.785.047-.14.247-.582.167-.716-.042-.127-.174-.2-.247-.303a2.478 2.478 0 01-.24-.427c-.16-.374-.24-.788-.414-1.162-.08-.173-.22-.354-.334-.513-.127-.18-.267-.307-.368-.52-.033-.073-.08-.194-.027-.274.014-.054.042-.075.094-.09.088-.072.335.022.422.062.247.1.455.194.662.334.094.066.195.193.315.226h.14c.214.047.455.014.655.073.355.114.675.28.962.46a5.953 5.953 0 012.085 2.286c.08.154.115.295.188.455.14.33.313.663.455.982.14.315.275.636.476.897.1.14.502.213.682.286.133.06.34.115.46.188.23.14.454.3.67.454.11.076.443.243.463.378z"/></svg></span>MySQL</span><span class="en-i"><span class="tile pg"><img src="postgresql.png" alt="" width="38" height="39"></span>PostgreSQL</span><span class="en-i"><span class="tile sq"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.678.521c-1.032-.92-2.28-.55-3.513.544a8.71 8.71 0 0 0-.547.535c-2.109 2.237-4.066 6.38-4.674 9.544.237.48.422 1.093.544 1.561a13.044 13.044 0 0 1 .164.703s-.019-.071-.096-.296l-.05-.146a1.689 1.689 0 0 0-.033-.08c-.138-.32-.518-.995-.686-1.289-.143.423-.27.818-.376 1.176.484.884.778 2.4.778 2.4s-.025-.099-.147-.442c-.107-.303-.644-1.244-.772-1.464-.217.804-.304 1.346-.226 1.478.152.256.296.698.422 1.186.286 1.1.485 2.44.485 2.44l.017.224a22.41 22.41 0 0 0 .056 2.748c.095 1.146.273 2.13.5 2.657l.155-.084c-.334-1.038-.47-2.399-.41-3.967.09-2.398.642-5.29 1.661-8.304 1.723-4.55 4.113-8.201 6.3-9.945-1.993 1.8-4.692 7.63-5.5 9.788-.904 2.416-1.545 4.684-1.931 6.857.666-2.037 2.821-2.912 2.821-2.912s1.057-1.304 2.292-3.166c-.74.169-1.955.458-2.362.629-.6.251-.762.337-.762.337s1.945-1.184 3.613-1.72C21.695 7.9 24.195 2.767 21.678.521m-18.573.543A1.842 1.842 0 0 0 1.27 2.9v16.608a1.84 1.84 0 0 0 1.835 1.834h9.418a22.953 22.953 0 0 1-.052-2.707c-.006-.062-.011-.141-.016-.2a27.01 27.01 0 0 0-.473-2.378c-.121-.47-.275-.898-.369-1.057-.116-.197-.098-.31-.097-.432 0-.12.015-.245.037-.386a9.98 9.98 0 0 1 .234-1.045l.217-.028c-.017-.035-.014-.065-.031-.097l-.041-.381a32.8 32.8 0 0 1 .382-1.194l.2-.019c-.008-.016-.01-.038-.018-.053l-.043-.316c.63-3.28 2.587-7.443 4.8-9.791.066-.069.133-.128.198-.194Z"/></svg></span>SQLite</span></p>
+          <p class="meta" id="dl-meta">v1.0.0 · Windows 10 and 11 · Linux AppImage, or the <a href="https://github.com/Rifqio/contura/releases/tag/v1.0.0">.deb and checksums</a> · 64-bit</p>
         </div>
       </div>
     </div>
+
+    <!-- Pieces of the real window, drawn in HTML with the site's tokens. Every name and number in them is sample data. -->
+    <div class="hx-frags" data-frags role="img" aria-label="Pieces of the Contura window with sample data: two Pending Edits waiting for Save, a Production confirmation for an UPDATE, an Ask answer with SQL waiting to be inserted, and a Read-only Connection refusing a DELETE.">
+      <div class="fr fr-pend" style="--z:10; --r:-4deg"><div class="fr-in">
+        <div class="pe">
+          <span class="pe-dot"></span>
+          <span class="pe-t"><b>2</b> Pending Edits</span>
+          <span class="pe-sql">Show SQL</span>
+          <span class="pe-b">Discard</span>
+          <span class="pe-b pri">Save</span>
+        </div>
+        <div class="pe-cells">
+          <span class="pe-cell"><i>status</i>open <em>paid</em></span>
+          <span class="pe-cell"><i>due_on</i>2026-11-03 <em>2026-11-17</em></span>
+        </div>
+      </div></div>
+
+      <div class="fr fr-prod" style="--z:12; --r:4deg"><div class="fr-in">
+        <div class="pc">
+          <div class="pc-h"><span class="pill prod">PROD</span><b>freight-prod</b><span class="pc-x">billing</span></div>
+          <p class="pc-q">This UPDATE runs on freight-prod. Run it?</p>
+          <ol class="pc-sql">
+            <li><span><span class="k">UPDATE</span> billing.invoices</span></li>
+            <li><span><span class="k">SET</span> status = <span class="s">'paid'</span></span></li>
+            <li><span><span class="k">WHERE</span> number = <span class="s">'INV-2026-0412'</span>;</span></li>
+          </ol>
+          <div class="pc-f"><span class="pc-n">1 row</span><span class="pe-b">Cancel</span><span class="pe-b ink">Run on Production</span></div>
+        </div>
+      </div></div>
+
+      <div class="fr fr-ai" style="--z:11; --r:-3deg"><div class="fr-in">
+        <div class="ai">
+          <div class="pc-h"><b>Ask</b><span class="ai-sc">Schema and query text</span></div>
+          <p class="ai-q">Which invoices are still unpaid?</p>
+          <ol class="pc-sql">
+            <li><span><span class="k">select</span> number, total</span></li>
+            <li><span><span class="k">from</span> billing.invoices</span></li>
+            <li><span><span class="k">where</span> status = <span class="s">'open'</span>;</span></li>
+          </ol>
+          <div class="pc-f"><span class="pc-n">Written, not run</span><span class="pe-b ink">Insert</span></div>
+        </div>
+      </div></div>
+
+      <div class="fr fr-ro" style="--z:11; --r:3deg"><div class="fr-in">
+        <div class="pc">
+          <div class="pc-h"><span class="pill ro">Read-only</span><b>freight-ro</b><span class="pc-x">billing</span></div>
+          <p class="pc-q">This Connection is read-only. DELETE was not run.</p>
+          <ol class="pc-sql">
+            <li><span><span class="k">DELETE FROM</span> billing.payments;</span></li>
+          </ol>
+          <div class="pc-f"><span class="pc-n">Nothing was sent</span><span class="pe-b">Copy SQL</span></div>
+        </div>
+      </div></div>
+
+
+    </div>
   </section>
 
-  <section class="stmt sec flush" id="habit" data-name="The habit" aria-labelledby="h-habit">
+  <section class="stmt sec hx-demo" id="demo" data-name="Live demo" aria-labelledby="h-demo">
     <div class="wrap">
       <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">2</span></div>
       <div class="body">
-        <div class="split-head">
+        <div class="split-head hx-demo-head">
           <div class="sh-a" data-reveal>
-            <p class="eyebrow"><i aria-hidden="true">~</i>The habit</p>
-            <h2 class="headline" id="h-habit">One habit for everyone who opens the database.</h2>
+            <h2 class="headline" id="h-demo">Build a query. Read it. Run it here.</h2>
           </div>
           <div class="sh-b copy" data-reveal style="--d:120ms">
-            <p>Developers write the SQL. Analysts drag tables onto a canvas. Support and product people ask a question in plain words.</p>
-            <p class="muted">Contura treats all three the same way: it shows you the SQL first, then waits for you to press Run.</p>
+            <p>Drag tables onto the canvas, read the SQL Contura writes, and run it on a sample copy of billing, or ask a question in plain words. It all happens in this page, with no download.</p>
+            <p class="meta">The assistant's answers are pre-written for this demo, and nothing leaves the page.</p>
           </div>
         </div>
-        <ol class="cells three">
-          <li data-reveal><span class="no">01</span><h3>Say what you need</h3><p>Type SQL with completion, drag tables so Contura draws the joins from your Foreign Keys, or ask the assistant. All three end as SQL you can read.</p></li>
-          <li data-reveal style="--d:90ms"><span class="no">02</span><h3>Read what will happen</h3><p>Grid edits wait as Pending Edits with their SQL one click away. A statement that would change every row asks first. On a Production Connection, every write is shown in full before it runs.</p></li>
-          <li data-reveal style="--d:180ms"><span class="no">03</span><h3>Run it, or don't</h3><p>Nothing runs until you press Run or Save. The assistant writes SQL and never runs it. Pending Edits save together, in one transaction.</p></li>
-        </ol>
-      </div>
-    </div>
-  </section>
-
-  <section class="stmt sec" id="demo" data-name="Live demo" aria-labelledby="h-demo">
-    <div class="wrap">
-      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">3</span></div>
-      <div class="body">
-        <div class="split-head flip">
-          <div class="sh-a" data-reveal>
-            <p class="eyebrow live"><span class="live-dot" aria-hidden="true"></span><b>Live, in this page</b></p>
-            <h2 class="headline" id="h-demo">Drag two tables. Read the SQL. Press Run.</h2>
+        <figure class="hx-stage" data-grow>
+          <div class="hx-stage-in">
+            <div class="win-host" data-playground role="region" aria-label="Contura playground: a Visual Query tab with the Ask panel"></div>
+            <noscript><p class="meta">The live window runs in JavaScript, which is off in this browser. The sections below show each part of Contura without it.</p></noscript>
           </div>
-          <div class="sh-b copy" data-reveal style="--d:120ms">
-            <p>This is Contura's own window, working. Drag a table from the tree onto the canvas and the join appears from its Foreign Key. Tick columns and the SQL below follows. Run reads from a small sample copy of billing that lives in this page.</p>
-            <p class="muted">The assistant's answers are pre-written for this demo, and nothing leaves the page.</p>
-          </div>
-        </div>
-        <figure class="win-wrap" data-reveal>
-          <div class="win-host" data-playground role="region" aria-label="Contura playground: a Visual Query tab with the Ask panel"></div>
-          <figcaption>Visual Query 1 on freight-stg, schema billing. Drag or tap a table, tick columns, press Run, or pick a question in the Ask panel.</figcaption>
         </figure>
       </div>
     </div>
   </section>
 
-  <section class="stmt sec flush" id="pages" data-name="Features" aria-labelledby="h-pages">
+
+  <section class="stmt sec lp lp-query" id="query" data-name="Query" aria-labelledby="h-query" data-lazy="demos.js">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">3</span></div>
+      <div class="body lq-grid">
+        <div class="lq-a" data-reveal>
+          <p class="eyebrow"><i aria-hidden="true">~</i>Query</p>
+          <h2 class="headline" id="h-query">Change rows. Read the SQL. Save once.</h2>
+          <div class="copy lq-copy">
+            <p>Edits wait as Pending Edits until you press Save. Nothing is written before that.</p>
+          </div>
+          <dl class="kv">
+            <div><dt>On Production</dt><dd>Save becomes Save on PROD and asks before it writes.</dd></div>
+          </dl>
+        </div>
+        <figure class="lq-fig" data-reveal style="--d:120ms">
+          <div class="win-host" data-grid="grid-conn" role="region" aria-label="Contura data grid: billing.invoices with Pending Edits">
+            <div class="pt-frag pg lp-static">
+              <div class="pg-t">
+                <div class="pg-r hd"><span>number</span><span>status</span><span>due_on</span></div>
+                <div class="pg-r"><span>INV-2026-0409</span><span class="ed">paid</span><span>2026-11-03</span></div>
+                <div class="pg-r"><span>INV-2026-0411</span><span>open</span><span class="ed">2026-11-17</span></div>
+                <div class="pg-r"><span>INV-2026-0412</span><span>open</span><span>2026-11-20</span></div>
+              </div>
+              <div class="pg-bar"><span class="pe-dot"></span><span class="pe-t"><b>2</b> Pending Edits</span><span class="pe-b">Discard</span><span class="pe-b pri">Save</span></div>
+            </div>
+          </div>
+          <div class="win-ctl lp-js"><span id="grid-conn-l">Connection</span><div class="seg" id="grid-conn" role="group" aria-labelledby="grid-conn-l"><button type="button" data-conn="stg" aria-pressed="true">freight-stg</button><button type="button" data-conn="prod" aria-pressed="false">freight-prod <span class="pill prod">PROD</span></button></div></div>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec lp lp-boards" id="boards" data-name="Diagram boards" aria-labelledby="h-boards" data-lazy="board-ask.js">
     <div class="wrap">
       <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">4</span></div>
       <div class="body">
-        <div class="split-head">
-          <div class="sh-a" data-reveal>
-            <p class="eyebrow"><i aria-hidden="true">~</i>Five pages</p>
-            <h2 class="headline" id="h-pages">Everything else, one page each.</h2>
+        <div class="lb-head">
+          <div class="lb-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>Diagram boards</p>
+            <h2 class="headline" id="h-boards">Several diagrams. One board.</h2>
           </div>
-          <p class="sh-b muted" data-reveal style="--d:120ms">Each page shows the real window doing the job, with sample data you can change.</p>
+          <div class="lb-b" data-reveal style="--d:120ms">
+            <p class="copy">Several kinds of diagram share one canvas, each in its own frame. A name used in more than one frame lights up in all of them.</p>
+          </div>
         </div>
-        <ul class="bento">
-          <li class="b-query" data-reveal>
-            <a href="query.html">
-              <span class="no"><i aria-hidden="true">~</i>01 · Query</span>
-              <h3>Write it, edit it in the grid, or drag it together.</h3>
-              <p>The SQL editor runs the statement you are in. The data grid holds every change as a Pending Edit until you save. Visual Query joins tables by drag.</p>
-              <div class="vis code" aria-hidden="true"><ol>
-                <li><span><span class="k">SELECT</span> number, total, issued_at</span></li>
-                <li><span><span class="k">FROM</span> billing.invoices <span class="k">WHERE</span> status = <span class="s">'open'</span>;</span></li>
-                <li><span> </span></li>
-                <li class="w"><span><span class="k">UPDATE</span> billing.invoices <span class="k">SET</span> status = <span class="s">'void'</span>;</span></li>
-                <li><span class="c">-- no WHERE: Contura asks before it runs</span></li>
-              </ol></div>
-              <span class="go">Open the Query page<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></span>
-            </a>
-          </li>
-          <li class="b-model" data-reveal style="--d:90ms">
-            <a href="model.html">
-              <span class="no"><i aria-hidden="true">~</i>02 · Model</span>
-              <h3>The schema in text, the diagram for free.</h3>
-              <p>DBML models, Schema Compare with a Sync Script you tick line by line, and eight kinds of diagram typed as .flow text.</p>
-              <div class="vis chips" aria-hidden="true"><span>billing.dbml</span><span>Sync Script</span><span>checkout.flow</span></div>
-              <span class="go">Open the Model page<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></span>
-            </a>
-          </li>
-          <li class="b-data" data-reveal style="--d:180ms">
-            <a href="data.html">
-              <span class="no"><i aria-hidden="true">~</i>03 · Data</span>
-              <h3>Move data, and see the plan first.</h3>
-              <p>Import, Export, Transfer, Backup and Restore, Lineage and Explain. Each one shows what it will do before it does it.</p>
-              <div class="vis chips" aria-hidden="true"><span>CSV</span><span>JSON</span><span>Excel</span><span>SQL INSERT</span></div>
-              <span class="go">Open the Data page<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></span>
-            </a>
-          </li>
-          <li class="b-ai" data-reveal>
-            <a href="ai.html">
-              <span class="no"><i aria-hidden="true">~</i>04 · AI</span>
-              <h3>AI that shows every byte it sends.</h3>
-              <p>Bring your own provider and key. Set what the assistant sees per Connection, and read the Sends line before you ask.</p>
-              <div class="vis meter" aria-hidden="true">
-                <div><i style="--f:0%"></i><span>Nothing</span></div>
-                <div><i style="--f:33.4%"></i><span>Schema only</span></div>
-                <div><i style="--f:66.7%"></i><span>Schema and query text</span></div>
-                <div><i style="--f:100%"></i><span>Plus sample rows</span></div>
+
+        <figure class="lb-win" data-reveal data-board>
+          <div class="lb-bar">
+            <span class="lb-file">billing.flow</span>
+            <span class="lb-m">Board · 6 frames</span>
+            <span class="lb-z">100%</span>
+          </div>
+          <div class="lb-cv">
+            <svg width="0" height="0" class="bd-defs" aria-hidden="true" focusable="false"><defs><marker id="bd-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1L9 5L0 9z" class="bd-ahp"/></marker></defs></svg>
+<div class="bd-row">
+<figure class="bf bf-er" style="--vw:412; --vh:340"><figcaption class="bf-t" id="bf-er-t"><b>ER</b> billing tables</figcaption>
+<svg class="bd-svg" viewBox="0 0 412 340" role="img" aria-labelledby="bf-er-t bf-er-d"><desc id="bf-er-d">Four tables of billing. customers has id, name and plan_id; plans has id, name and price; invoices has id, customer_id, total and status; payments has id, invoice_id, amount and paid_at. invoices.customer_id points to customers.id, payments.invoice_id to invoices.id, customers.plan_id to plans.id.</desc>
+<g class="br" data-k="customers invoices"><path class="bl" d="M170 66H201V88H232"/><path class="bl" d="M176 61V71"/><path class="bl" d="M223 88L232 83M223 88L232 93"/></g>
+<g class="br" data-k="customers plans"><path class="bl" d="M170 110H187V240H170"/><path class="bl" d="M179 110L170 105M179 110L170 115"/><path class="bl" d="M176 235V245"/></g>
+<g class="br" data-k="invoices payments"><path class="bl" d="M382 66H396V262H382"/><path class="bl" d="M388 61V71"/><path class="bl" d="M391 262L382 257M391 262L382 267"/></g>
+<g class="bt" data-k="customers" transform="translate(20 16)">
+<rect class="bt-b" width="150" height="98" rx="6"/>
+<path class="bt-h" d="M0 6a6 6 0 0 1 6-6h138a6 6 0 0 1 6 6v26H0z"/>
+<text class="bt-n" x="10" y="21">customers</text>
+<text class="bt-c pk" x="10" y="50">id</text><text class="bt-t" x="140" y="50">int</text>
+<text class="bt-c" x="10" y="72">name</text><text class="bt-t" x="140" y="72">text</text>
+<text class="bt-c" x="10" y="94">plan_id</text><text class="bt-t" x="140" y="94">int</text>
+</g>
+<g class="bt" data-k="invoices" transform="translate(232 16)">
+<rect class="bt-b" width="150" height="120" rx="6"/>
+<path class="bt-h" d="M0 6a6 6 0 0 1 6-6h138a6 6 0 0 1 6 6v26H0z"/>
+<text class="bt-n" x="10" y="21">invoices</text>
+<text class="bt-c pk" x="10" y="50">id</text><text class="bt-t" x="140" y="50">int</text>
+<text class="bt-c" x="10" y="72">customer_id</text><text class="bt-t" x="140" y="72">int</text>
+<text class="bt-c" x="10" y="94">total</text><text class="bt-t" x="140" y="94">numeric</text>
+<text class="bt-c" x="10" y="116">status</text><text class="bt-t" x="140" y="116">text</text>
+</g>
+<g class="bt" data-k="plans" transform="translate(20 190)">
+<rect class="bt-b" width="150" height="98" rx="6"/>
+<path class="bt-h" d="M0 6a6 6 0 0 1 6-6h138a6 6 0 0 1 6 6v26H0z"/>
+<text class="bt-n" x="10" y="21">plans</text>
+<text class="bt-c pk" x="10" y="50">id</text><text class="bt-t" x="140" y="50">int</text>
+<text class="bt-c" x="10" y="72">name</text><text class="bt-t" x="140" y="72">text</text>
+<text class="bt-c" x="10" y="94">price</text><text class="bt-t" x="140" y="94">numeric</text>
+</g>
+<g class="bt" data-k="payments" transform="translate(232 190)">
+<rect class="bt-b" width="150" height="120" rx="6"/>
+<path class="bt-h" d="M0 6a6 6 0 0 1 6-6h138a6 6 0 0 1 6 6v26H0z"/>
+<text class="bt-n" x="10" y="21">payments</text>
+<text class="bt-c pk" x="10" y="50">id</text><text class="bt-t" x="140" y="50">int</text>
+<text class="bt-c" x="10" y="72">invoice_id</text><text class="bt-t" x="140" y="72">int</text>
+<text class="bt-c" x="10" y="94">amount</text><text class="bt-t" x="140" y="94">numeric</text>
+<text class="bt-c" x="10" y="116">paid_at</text><text class="bt-t" x="140" y="116">timestamptz</text>
+</g>
+</svg>
+</figure>
+<figure class="bf bf-cl" style="--vw:380; --vh:340"><figcaption class="bf-t" id="bf-cl-t"><b>Class</b> billing model</figcaption>
+<svg class="bd-svg" viewBox="0 0 380 340" role="img" aria-labelledby="bf-cl-t bf-cl-d"><desc id="bf-cl-d">Three classes and an enumeration. Customer has id and name and the method bill. Invoice has number, total and status, and the methods pay with a card, returning a Payment, and void. Payment has amount and paidAt and the method refund. One Customer has many Invoices, one Invoice has many Payments, and Invoice uses the Status enumeration: draft, open, paid, void.</desc>
+<g class="br" data-k="customers invoices"><path class="bl" d="M170 60H206"/><text class="bx" x="175" y="54">1</text><text class="bx" x="196" y="76">*</text></g>
+<g class="br" data-k="invoices payments"><path class="bl" d="M286 150V216"/><text class="bx" x="292" y="164">1</text><text class="bx" x="292" y="211">*</text></g>
+<g class="br"><path class="bl ret" d="M206 136H95V194" marker-end="url(#bd-ah)"/></g>
+<g class="bt bc" data-k="customers" transform="translate(20 16)">
+<rect class="bt-b" width="150" height="98" rx="6"/>
+<path class="bt-h" d="M0 6a6 6 0 0 1 6-6h138a6 6 0 0 1 6 6v22H0z"/>
+<text class="bt-n m" x="75.0" y="19">Customer</text>
+<text class="bt-c" x="10" y="44">- id: int</text>
+<text class="bt-c" x="10" y="62">- name: string</text>
+<path class="bt-sep" d="M0 74H150"/>
+<text class="bt-c" x="10" y="90">+ bill(): Invoice</text>
+</g>
+<g class="bt bc" data-k="invoices" transform="translate(206 16)">
+<rect class="bt-b" width="160" height="134" rx="6"/>
+<path class="bt-h" d="M0 6a6 6 0 0 1 6-6h148a6 6 0 0 1 6 6v22H0z"/>
+<text class="bt-n m" x="80.0" y="19">Invoice</text>
+<text class="bt-c" x="10" y="44">- number: string</text>
+<text class="bt-c" x="10" y="62">- total: Money</text>
+<text class="bt-c" x="10" y="80">- status: Status</text>
+<path class="bt-sep" d="M0 92H160"/>
+<text class="bt-c" x="10" y="108">+ pay(card): Payment</text>
+<text class="bt-c" x="10" y="126">+ void()</text>
+</g>
+<g class="bt bc" data-k="payments card" transform="translate(206 216)">
+<rect class="bt-b" width="160" height="98" rx="6"/>
+<path class="bt-h" d="M0 6a6 6 0 0 1 6-6h148a6 6 0 0 1 6 6v22H0z"/>
+<text class="bt-n m" x="80.0" y="19">Payment</text>
+<text class="bt-c" x="10" y="44">- amount: Money</text>
+<text class="bt-c" x="10" y="62">- paidAt: Date</text>
+<path class="bt-sep" d="M0 74H160"/>
+<text class="bt-c" x="10" y="90">+ refund()</text>
+</g>
+<g class="bt bc" transform="translate(20 196)">
+<rect class="bt-b" width="150" height="120" rx="6"/>
+<path class="bt-h" d="M0 6a6 6 0 0 1 6-6h138a6 6 0 0 1 6 6v34H0z"/>
+<text class="bx m" x="75.0" y="15">«enum»</text>
+<text class="bt-n m" x="75.0" y="31">Status</text>
+<text class="bt-c" x="10" y="56">draft</text>
+<text class="bt-c" x="10" y="74">open</text>
+<text class="bt-c" x="10" y="92">paid</text>
+<text class="bt-c" x="10" y="110">void</text>
+</g>
+</svg>
+</figure>
+<figure class="bf bf-fl" style="--vw:300; --vh:340"><figcaption class="bf-t" id="bf-fl-t"><b>Flowchart</b> checkout</figcaption>
+<svg class="bd-svg" viewBox="0 0 300 340" role="img" aria-labelledby="bf-fl-t bf-fl-d"><desc id="bf-fl-d">Checkout, top to bottom: start, Total the cart, then the decision Card ok. Yes leads to Record payment, then Mark invoice paid, then Paid. No leads to Card error, which goes back to Total the cart.</desc>
+<g class="ba"><path class="bl" d="M88 42V60" marker-end="url(#bd-ah)"/>
+</g>
+<g class="ba"><path class="bl" d="M88 94V108" marker-end="url(#bd-ah)"/>
+</g>
+<g class="ba" data-k="payments"><path class="bl" d="M88 172V190" marker-end="url(#bd-ah)"/>
+<text class="bx" x="96" y="185">yes</text>
+</g>
+<g class="ba" data-k="invoices"><path class="bl" d="M88 224V240" marker-end="url(#bd-ah)"/>
+</g>
+<g class="ba"><path class="bl" d="M88 274V290" marker-end="url(#bd-ah)"/>
+</g>
+<g class="ba" data-k="card"><path class="bl" d="M126 140H180" marker-end="url(#bd-ah)"/>
+<text class="bx" x="144" y="133">no</text>
+</g>
+<g class="ba" data-k="card"><path class="bl" d="M232 123V77H160" marker-end="url(#bd-ah)"/>
+<text class="bx" x="198" y="70">retry</text>
+</g>
+<g class="bn b-ext" data-k=""><rect x="38" y="14" width="100" height="28" rx="14"/><text x="88" y="32.5">Checkout</text></g>
+<g class="bn b-step" data-k=""><rect x="18" y="60" width="140" height="34" rx="6"/><text x="88" y="81.5">Total the cart</text></g>
+<g class="bn b-dec" data-k="card"><path d="M88 108L124 140L88 172L52 140Z"/><text x="88" y="144.5">Card ok?</text></g>
+<g class="bn b-step" data-k="payments"><rect x="18" y="190" width="140" height="34" rx="6"/><text x="88" y="211.5">Record payment</text></g>
+<g class="bn b-step" data-k="invoices"><rect x="18" y="240" width="140" height="34" rx="6"/><text x="88" y="261.5">Mark invoice paid</text></g>
+<g class="bn b-ext" data-k=""><rect x="48" y="290" width="80" height="28" rx="14"/><text x="88" y="308.5">Paid</text></g>
+<g class="bn b-step" data-k="card"><rect x="182" y="123" width="100" height="34" rx="6"/><text x="232" y="144.5">Card error</text></g>
+</svg>
+</figure>
+</div>
+<div class="bd-row">
+<figure class="bf bf-sq" style="--vw:560; --vh:300"><figcaption class="bf-t" id="bf-sq-t"><b>Sequence</b> card payment</figcaption>
+<svg class="bd-svg" viewBox="0 0 560 300" role="img" aria-labelledby="bf-sq-t bf-sq-d"><desc id="bf-sq-d">Card payment, numbered: 1 Customer to Billing API, Pay INV-0412. 2 Billing API to Card gateway, Charge card. 3 Card gateway answers Approved. 4 Billing API to billing DB, INSERT payments. 5 Billing API to billing DB, UPDATE invoices. 6 Billing API answers the Customer with a receipt.</desc>
+<g class="bn b-ext" data-k="customers"><path class="life" d="M80 50V286"/><rect x="26" y="16" width="108" height="34" rx="6"/><text x="80" y="37.5">Customer</text></g>
+<g class="bn b-step"><path class="life" d="M210 50V286"/><rect x="156" y="16" width="108" height="34" rx="6"/><text x="210" y="37.5">Billing API</text></g>
+<g class="bn b-step" data-k="card"><path class="life" d="M340 50V286"/><rect x="286" y="16" width="108" height="34" rx="6"/><text x="340" y="37.5">Card gateway</text></g>
+<g class="bn b-store"><path class="life" d="M470 50V286"/><rect x="416" y="16" width="108" height="34" rx="6"/><text x="470" y="37.5">billing DB</text></g>
+<g class="bm" data-k="invoices"><path class="bl" d="M82 92H206" marker-end="url(#bd-ah)"/>
+<rect class="chip" x="99.6" y="71" width="90.8" height="17" rx="4"/><text class="bx m" x="145.0" y="83.5">Pay INV-0412</text>
+<circle class="no" cx="92" cy="92" r="7.5"/><text class="no-t" x="92" y="95.5">1</text></g>
+<g class="bm" data-k="card"><path class="bl" d="M212 128H336" marker-end="url(#bd-ah)"/>
+<rect class="chip" x="232.8" y="107" width="84.4" height="17" rx="4"/><text class="bx m" x="275.0" y="119.5">Charge card</text>
+<circle class="no" cx="222" cy="128" r="7.5"/><text class="no-t" x="222" y="131.5">2</text></g>
+<g class="bm" data-k="card"><path class="bl ret" d="M338 164H214" marker-end="url(#bd-ah)"/>
+<rect class="chip" x="242.4" y="143" width="65.2" height="17" rx="4"/><text class="bx m" x="275.0" y="155.5">Approved</text>
+<circle class="no" cx="328" cy="164" r="7.5"/><text class="no-t" x="328" y="167.5">3</text></g>
+<g class="bm" data-k="payments"><path class="bl" d="M212 200H466" marker-end="url(#bd-ah)"/>
+<rect class="chip" x="285.0" y="179" width="110.0" height="17" rx="4"/><text class="bx m" x="340.0" y="191.5">INSERT payments</text>
+<circle class="no" cx="222" cy="200" r="7.5"/><text class="no-t" x="222" y="203.5">4</text></g>
+<g class="bm" data-k="invoices"><path class="bl" d="M212 236H466" marker-end="url(#bd-ah)"/>
+<rect class="chip" x="285.0" y="215" width="110.0" height="17" rx="4"/><text class="bx m" x="340.0" y="227.5">UPDATE invoices</text>
+<circle class="no" cx="222" cy="236" r="7.5"/><text class="no-t" x="222" y="239.5">5</text></g>
+<g class="bm" data-k="customers"><path class="bl ret" d="M208 272H84" marker-end="url(#bd-ah)"/>
+<rect class="chip" x="115.6" y="251" width="58.8" height="17" rx="4"/><text class="bx m" x="145.0" y="263.5">Receipt</text>
+<circle class="no" cx="198" cy="272" r="7.5"/><text class="no-t" x="198" y="275.5">6</text></g>
+</svg>
+</figure>
+<figure class="bf bf-st" style="--vw:548; --vh:300"><figcaption class="bf-t" id="bf-st-t"><b>State</b> invoice</figcaption>
+<svg class="bd-svg" viewBox="-31 10 548 300" role="img" aria-labelledby="bf-st-t bf-st-d"><desc id="bf-st-d">An invoice's lifecycle. It starts as draft; finalize makes it open. From open, pay makes it paid and void makes it void; card declined keeps it open. paid and void are final.</desc>
+<g class="ba"><path class="bl" d="M38 140H70" marker-end="url(#bd-ah)"/>
+</g>
+<g class="ba" data-k="invoices"><path class="bl" d="M160 140H222" marker-end="url(#bd-ah)"/>
+<text class="bx" x="172" y="132">finalize</text>
+</g>
+<g class="ba" data-k="payments invoices"><path class="bl" d="M312 140H374" marker-end="url(#bd-ah)"/>
+<text class="bx" x="330" y="132">pay</text>
+</g>
+<g class="ba" data-k="invoices"><path class="bl" d="M267 158V214" marker-end="url(#bd-ah)"/>
+<text class="bx" x="275" y="192">void</text>
+</g>
+<g class="ba" data-k="card"><path class="bl" d="M246 122C246 84 288 84 288 122" marker-end="url(#bd-ah)"/>
+<text class="bx" x="213" y="78">card declined</text>
+</g>
+<g class="ba"><path class="bl" d="M419 158V206" marker-end="url(#bd-ah)"/>
+</g>
+<g class="ba"><path class="bl" d="M312 232H400" marker-end="url(#bd-ah)"/>
+</g>
+<g class="bn b-ini"><circle cx="30" cy="140" r="8"/></g>
+<g class="bn b-state"><rect x="70" y="122" width="90" height="36" rx="18"/><text x="115.0" y="144.5">draft</text></g>
+<g class="bn b-state" data-k="invoices"><rect x="222" y="122" width="90" height="36" rx="18"/><text x="267.0" y="144.5">open</text></g>
+<g class="bn b-state" data-k="invoices"><rect x="374" y="122" width="90" height="36" rx="18"/><text x="419.0" y="144.5">paid</text></g>
+<g class="bn b-state"><rect x="222" y="214" width="90" height="36" rx="18"/><text x="267.0" y="236.5">void</text></g>
+<g class="bn b-fin"><circle class="ring" cx="419" cy="232" r="11"/><circle cx="419" cy="232" r="6"/></g>
+</svg>
+</figure>
+</div>
+<div class="bd-row">
+<figure class="bf bf-cd" style="--vw:1080; --vh:300"><figcaption class="bf-t" id="bf-cd-t"><b>Cloud</b> billing stack</figcaption>
+<svg class="bd-svg" viewBox="0 0 1080 300" role="img" aria-labelledby="bf-cd-t bf-cd-d"><desc id="bf-cd-d">The billing stack. Customers call the API over HTTPS. Inside AWS, the API (Amazon API Gateway) calls Billing API (AWS Lambda), which reads and writes billing DB (Amazon RDS), stores receipts as PDF in Receipts (Amazon S3) and sends Invoice mail (Amazon SES). Billing API charges the card through Card gateway (Stripe), outside AWS.</desc>
+<g class="bg-a"><rect class="bg-r" x="200" y="12" width="800" height="276" rx="10"/><image href="icons/aws-group-cloud.svg" x="212" y="22" width="16" height="16"/><text class="bg-t" x="234" y="35">AWS</text></g>
+<g class="ba"><path class="bl" d="M114 142H306" marker-end="url(#bd-ah)"/><text class="bx" x="134" y="134">HTTPS</text></g>
+<g class="ba"><path class="bl" d="M354 142H566" marker-end="url(#bd-ah)"/></g>
+<g class="ba" data-k="card"><path class="bl" d="M590 192V246H114" marker-end="url(#bd-ah)"/><text class="bx" x="380" y="238">charge card</text></g>
+<g class="ba" data-k="payments invoices"><path class="bl" d="M614 132H720V64H856" marker-start="url(#bd-ah)" marker-end="url(#bd-ah)"/></g>
+<g class="ba"><path class="bl" d="M614 142H856" marker-end="url(#bd-ah)"/><text class="bx" x="776" y="134">PDF</text></g>
+<g class="ba"><path class="bl" d="M614 152H740V220H856" marker-end="url(#bd-ah)"/></g>
+<g class="bs"><rect class="bs-r" x="63" y="115" width="54" height="54" rx="8"/><!-- Lucide users, @license lucide-static v1.61.0 - ISC: Copyright (c) 2026 Lucide Icons and Contributors. Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies. THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. --><svg class="bs-ink" x="66" y="118" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><path d="M16 3.128a4 4 0 0 1 0 7.744" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><circle cx="9" cy="7" r="4" /></svg><text class="bs-n" x="90" y="182">Customers</text></g><g class="bs"><rect class="bs-r" x="303" y="115" width="54" height="54" rx="8"/><image href="icons/aws-api-gateway.svg" x="306" y="118" width="48" height="48"/><text class="bs-n" x="330" y="182">API</text></g><g class="bs"><rect class="bs-r" x="563" y="115" width="54" height="54" rx="8"/><image href="icons/aws-lambda.svg" x="566" y="118" width="48" height="48"/><text class="bs-n" x="590" y="182">Billing API</text></g><g class="bs" data-k="payments invoices"><rect class="bs-r" x="853" y="37" width="54" height="54" rx="8"/><image href="icons/aws-rds.svg" x="856" y="40" width="48" height="48"/><text class="bs-n" x="880" y="104">billing DB</text></g><g class="bs"><rect class="bs-r" x="853" y="115" width="54" height="54" rx="8"/><image href="icons/aws-simple-storage-service.svg" x="856" y="118" width="48" height="48"/><text class="bs-n" x="880" y="182">Receipts</text></g><g class="bs"><rect class="bs-r" x="853" y="193" width="54" height="54" rx="8"/><image href="icons/aws-simple-email-service.svg" x="856" y="196" width="48" height="48"/><text class="bs-n" x="880" y="260">Invoice mail</text></g><g class="bs" data-k="card"><rect class="bs-r" x="63" y="219" width="54" height="54" rx="8"/><svg x="66" y="222" width="48" height="48" viewBox="0 0 24 24" fill="#635bff" aria-hidden="true"><path d="M13.976 9.15c-2.172-.806-3.356-1.426-3.356-2.409 0-.831.683-1.305 1.901-1.305 2.227 0 4.515.858 6.09 1.631l.89-5.494C18.252.975 15.697 0 12.165 0 9.667 0 7.589.654 6.104 1.872 4.56 3.147 3.757 4.992 3.757 7.218c0 4.039 2.467 5.76 6.476 7.219 2.585.92 3.445 1.574 3.445 2.583 0 .98-.84 1.545-2.354 1.545-1.875 0-4.965-.921-6.99-2.109l-.9 5.555C5.175 22.99 8.385 24 11.714 24c2.641 0 4.843-.624 6.328-1.813 1.664-1.305 2.525-3.236 2.525-5.732 0-4.128-2.524-5.851-6.594-7.305h.003z"/></svg><text class="bs-n" x="90" y="286">Card gateway</text></g>
+</svg>
+</figure>
+</div>
+          </div>
+          <div class="lb-foot">
+            <span class="lb-fl" id="lb-follow-l">Follow</span>
+            <div class="seg lb-seg" role="group" aria-labelledby="lb-follow-l">
+              <button type="button" data-follow="payments" aria-pressed="false">payments</button>
+              <button type="button" data-follow="invoices" aria-pressed="false">invoices</button>
+              <button type="button" data-follow="card" aria-pressed="false">the card</button>
+            </div>
+          </div>
+        </figure>
+
+        <div class="lb-help">
+          <figure class="la-fig" data-reveal data-ask-fig>
+            <div class="lb-win la-win" data-ask role="group" aria-label="The diagram tab's side panel on billing.flow, with pre-written sample answers">
+              <div class="lb-bar"><span class="lb-file">billing.flow</span><span class="lb-m" data-ask-count>Board · 6 frames</span><span class="lb-z">100%</span></div>
+              <div class="la-body">
+              <section class="la-side" aria-label="Side panel" data-ask-side>
+                <div class="la-shead"><div class="la-switch right"><span class="la-thumb" aria-hidden="true"></span><span class="la-tab"><svg class="la-i" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg><span>Editor</span></span><span class="la-tab on"><svg class="la-i" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>Assistant</span><span class="la-pcount">4<span class="sr"> changes waiting</span></span></span></div><span class="la-ib" aria-hidden="true"><svg class="la-i" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M5.5 4.5h13a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2zM9.5 4.5v15"/></svg></span></div>
+                <div class="la-pane">
+                  <div class="la-ahead"><span class="la-sp"></span><span class="la-ib" aria-hidden="true"><svg class="la-i" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg></span><span class="la-ib" aria-hidden="true"><svg class="la-i" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M3.8 12a8.2 8.2 0 1 0 2.4-5.8M3.8 3.8v3.8h3.8M12 7.5V12l3 2"/></svg></span></div>
+                  <div class="la-chat" aria-label="Assistant conversation" role="region" tabindex="0">
+                    <div class="la-umsg">Where does a card payment write?</div>
+                    <div class="la-amsg"><p class="la-p">In checkout, Record payment inserts a row into <code>payments</code>, which points at <code>invoices</code> in billing tables. In card payment that is message 4, and message 5 marks the invoice paid. In invoice, pay moves it from open to paid.</p></div>
+                    <div class="la-umsg">Add a state diagram for a refund.</div>
+                    <div class="la-amsg"><p class="la-p">Here is refund as a new state diagram, beside invoice. Nothing changes until you accept it.</p>
+                      <div class="la-card" role="group" aria-label="Changes to review"><div class="la-card-head"><span class="la-card-title">4 changes</span><span class="la-lnk">Show in the text</span></div>
+                        <div class="la-group"><div class="la-group-head"><span class="la-group-title">refund, 4 changes</span><span class="la-group-acts"><span class="la-lnk">Reject frame</span><span class="la-lnk">Accept frame</span></span></div><div class="la-row"><span class="la-mk" aria-hidden="true">+</span><span class="la-tx">diagram state &quot;refund&quot;</span><span class="la-racts" aria-hidden="true"><span class="la-ib2"><svg class="la-i" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" style="stroke-width:1.75"><path d="M20 6 9 17l-5-5"/></svg></span><span class="la-ib2"><svg class="la-i" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" style="stroke-width:1.75"><path d="M6 6l12 12M18 6 6 18"/></svg></span></span></div><div class="la-row"><span class="la-mk" aria-hidden="true">+</span><span class="la-tx">Requested &gt; Approved: review ok</span><span class="la-racts" aria-hidden="true"><span class="la-ib2"><svg class="la-i" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" style="stroke-width:1.75"><path d="M20 6 9 17l-5-5"/></svg></span><span class="la-ib2"><svg class="la-i" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" style="stroke-width:1.75"><path d="M6 6l12 12M18 6 6 18"/></svg></span></span></div><div class="la-row"><span class="la-mk" aria-hidden="true">+</span><span class="la-tx">Requested &gt; Rejected: review failed</span><span class="la-racts" aria-hidden="true"><span class="la-ib2"><svg class="la-i" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" style="stroke-width:1.75"><path d="M20 6 9 17l-5-5"/></svg></span><span class="la-ib2"><svg class="la-i" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" style="stroke-width:1.75"><path d="M6 6l12 12M18 6 6 18"/></svg></span></span></div><div class="la-row"><span class="la-mk" aria-hidden="true">+</span><span class="la-tx">Approved &gt; Refunded: refund sent</span><span class="la-racts" aria-hidden="true"><span class="la-ib2"><svg class="la-i" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" style="stroke-width:1.75"><path d="M20 6 9 17l-5-5"/></svg></span><span class="la-ib2"><svg class="la-i" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" style="stroke-width:1.75"><path d="M6 6l12 12M18 6 6 18"/></svg></span></span></div></div>
+                        <div class="la-card-foot"><span class="la-note">Lands as one undo step</span><span class="la-acts"><span class="la-b">Reject all</span><span class="la-b pri">Accept all<span class="la-kbd" aria-hidden="true">Ctrl+Enter</span></span></span></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="la-composer" aria-hidden="true">
+                    <div class="la-crow"><div class="la-seg"><span class="on">Review first</span><span>Auto-apply</span></div></div>
+                    <div class="la-sends"><b>Sends</b><span>7.9 KB</span><span class="la-sp"></span><span class="la-x">Show exactly</span></div>
+                    <div class="la-cbox"><div class="la-chips"><span class="la-chip">State invoice<svg class="la-i" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" focusable="false" style="stroke-width:1.75"><path d="M6 6l12 12M18 6 6 18"/></svg></span></div><div class="la-cin">Describe a change</div><div class="la-cbar"><span class="la-kbd">Shift+Enter</span><span>new line</span><span class="la-sp"></span><span class="la-pill">Sonnet 5.5</span><span class="la-send"><svg class="la-i" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" style="stroke-width:1.75"><path d="M12 19V5M6 11l6-6 6 6"/></svg></span></div></div>
+                  </div>
+                </div>
+              </section>
+              <div class="la-cv" data-ask-cv>
+<div class="la-frames">
+<svg width="0" height="0" class="bd-defs" aria-hidden="true" focusable="false"><defs><marker id="la-ah0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1L9 5L0 9z" class="bd-ahp"/></marker></defs></svg>
+<figure class="bf bf-st la-sel" style="--vw:548; --vh:300"><figcaption class="bf-t" id="la-inv-t"><b>State</b> invoice</figcaption>
+<svg class="bd-svg" viewBox="-31 10 548 300" role="img" aria-labelledby="la-inv-t la-inv-d"><desc id="la-inv-d">An invoice's lifecycle. It starts as draft; finalize makes it open. From open, pay makes it paid and void makes it void; card declined keeps it open. paid and void are final.</desc>
+<g class="ba"><path class="bl" d="M38 140H70" marker-end="url(#la-ah0)"/>
+</g>
+<g class="ba"><path class="bl" d="M160 140H222" marker-end="url(#la-ah0)"/>
+<text class="bx" x="172" y="132">finalize</text>
+</g>
+<g class="ba"><path class="bl" d="M312 140H374" marker-end="url(#la-ah0)"/>
+<text class="bx" x="330" y="132">pay</text>
+</g>
+<g class="ba"><path class="bl" d="M267 158V214" marker-end="url(#la-ah0)"/>
+<text class="bx" x="275" y="192">void</text>
+</g>
+<g class="ba"><path class="bl" d="M246 122C246 84 288 84 288 122" marker-end="url(#la-ah0)"/>
+<text class="bx" x="213" y="78">card declined</text>
+</g>
+<g class="ba"><path class="bl" d="M419 158V206" marker-end="url(#la-ah0)"/>
+</g>
+<g class="ba"><path class="bl" d="M312 232H400" marker-end="url(#la-ah0)"/>
+</g>
+<g class="bn b-ini"><circle cx="30" cy="140" r="8"/></g>
+<g class="bn b-state"><rect x="70" y="122" width="90" height="36" rx="18"/><text x="115.0" y="144.5">draft</text></g>
+<g class="bn b-state"><rect x="222" y="122" width="90" height="36" rx="18"/><text x="267.0" y="144.5">open</text></g>
+<g class="bn b-state"><rect x="374" y="122" width="90" height="36" rx="18"/><text x="419.0" y="144.5">paid</text></g>
+<g class="bn b-state"><rect x="222" y="214" width="90" height="36" rx="18"/><text x="267.0" y="236.5">void</text></g>
+<g class="bn b-fin"><circle class="ring" cx="419" cy="232" r="11"/><circle cx="419" cy="232" r="6"/></g>
+</svg>
+</figure>
+<div class="la-slot" data-ask-slot><div class="la-new is-new"><div class="la-rbar"><span class="la-rtext">4 changes in refund</span><span class="la-b">Reject</span><span class="la-b pri">Accept all<span class="la-kbd" aria-hidden="true">Ctrl+Enter</span></span></div>
+<figure class="bf la-bf" style="--vw:550; --vh:180"><figcaption class="bf-t" id="la-rf-t"><b>State</b> refund<span class="la-newtag">New</span></figcaption>
+<svg class="bd-svg" viewBox="0 10 550 180" role="img" aria-labelledby="la-rf-t la-rf-d"><desc id="la-rf-d">Proposed, not on the board yet. A refund's lifecycle. Requested goes to Approved on review ok and to Rejected on review failed; Approved goes to Refunded on refund sent.</desc><defs><marker id="la-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1L9 5L0 9z" class="bd-ahp la-ahn"/></marker></defs>
+<g class="ba"><path class="bl" d="M130 58H220" marker-end="url(#la-ah)"/><text class="bx" x="148" y="50">review ok</text></g>
+<g class="ba"><path class="bl" d="M75 76V150H220" marker-end="url(#la-ah)"/><text class="bx" x="90" y="142">review failed</text></g>
+<g class="ba"><path class="bl" d="M330 58H420" marker-end="url(#la-ah)"/><text class="bx" x="338" y="50">refund sent</text></g>
+<g class="bn b-state"><rect x="20" y="40" width="110" height="36" rx="18"/><text x="75" y="62.5">Requested</text></g>
+<g class="bn b-state"><rect x="220" y="40" width="110" height="36" rx="18"/><text x="275" y="62.5">Approved</text></g>
+<g class="bn b-state"><rect x="420" y="40" width="110" height="36" rx="18"/><text x="475" y="62.5">Refunded</text></g>
+<g class="bn b-state"><rect x="220" y="132" width="110" height="36" rx="18"/><text x="275" y="154.5">Rejected</text></g>
+</svg></figure></div></div>
+</div>
               </div>
-              <span class="go">Open the AI page<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></span>
-            </a>
-          </li>
-          <li class="b-safe" data-reveal style="--d:90ms">
-            <a href="safety.html">
-              <span class="no"><i aria-hidden="true">~</i>05 · Safety</span>
-              <h3>Production asks. Read-only refuses.</h3>
-              <p>Mark a Connection Production and every write waits for your yes. Mark it Read-only and the app blocks writes, with the server session opened read-only as a backstop. Passwords sit in the system keyring: Windows Credential Manager, or the Secret Service on Linux.</p>
-              <div class="vis chips" aria-hidden="true"><span class="pill prod">PROD</span><span class="pill ro">Read-only</span></div>
-              <span class="go">Open the Safety page<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></span>
-            </a>
-          </li>
-        </ul>
+              </div>
+            </div>
+            <p class="sr" role="status" aria-live="polite" data-ask-live></p>
+          </figure>
+          <div class="lb-help-a" data-reveal style="--d:120ms">
+            <h3 class="lb-h3" id="h-boards-ask">Stuck on a diagram? Ask.</h3>
+            <div class="copy">
+              <p>Ask in plain words where something happens, or what a frame is missing. The answer names the frames it read from.</p>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
 
-  <section class="stmt finale" id="download" data-name="Download" aria-labelledby="h-dl">
+  <section class="stmt sec lp lp-data" id="data" data-name="Data" aria-labelledby="h-data" data-lazy="data.js">
     <div class="wrap">
       <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">5</span></div>
       <div class="body">
-        <p class="word" aria-hidden="true" data-reveal>Cont<span class="o">u</span>ra</p>
-        <div class="dl-row">
-          <div data-reveal>
-            <p class="eyebrow"><i aria-hidden="true">~</i>Download</p>
-            <h2 id="h-dl">For Windows and Linux. Run it from any folder you like.</h2>
-          </div>
-          <div class="dl-box" data-reveal style="--d:120ms">
-            <p class="copy">On Windows, Contura is one exe with no installer. On Linux it is one AppImage, or a .deb if you prefer a package. Settings, Connections, Query History and Saved Queries live in a <code>data</code> folder beside the exe or the AppImage, so copying the folder takes your setup along.</p>
-            <div class="dl-btns">
-              <button class="btn" type="button" data-download aria-label="Download for Windows">
-              <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M0 0h7.5v7.5H0zM8.5 0H16v7.5H8.5zM0 8.5h7.5V16H0zM8.5 8.5H16V16H8.5z"/></svg>
-                <span><span class="dl-pre">Download for </span>Windows</span>
-            </button>
-              <button class="btn" type="button" data-download aria-label="Download for Linux">
-                <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M8 .8C6 .8 4.9 2.4 4.9 4.5c0 1-.4 1.8-1 2.7C3 8.4 2.3 9.7 2.3 11.2c0 .8.2 1.4.5 1.9h10.4c.3-.5.5-1.1.5-1.9 0-1.5-.7-2.8-1.6-4-.6-.9-1-1.7-1-2.7C11.1 2.4 10 .8 8 .8zM8 7.6c-1.4 0-2.4 1.5-2.4 3.4S6.6 13.6 8 13.6s2.4-.7 2.4-2.6S9.4 7.6 8 7.6zM6.9 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4zM9.1 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4z"/><path fill="currentColor" d="M7 5.6h2L8 6.7z"/><path fill="currentColor" d="M2.6 13.4c.5-.8 2.1-.9 2.9-.4.5.3.6 1 .2 1.4-.7.7-2.7.6-3.2 0-.2-.3-.1-.7.1-1zM13.4 13.4c-.5-.8-2.1-.9-2.9-.4-.5.3-.6 1-.2 1.4.7.7 2.7.6 3.2 0 .2-.3.1-.7-.1-1z"/></svg>
-                <span><span class="dl-pre">Download for </span>Linux</span>
-              </button>
+        <div class="ld-head" data-reveal>
+          <p class="eyebrow"><i aria-hidden="true">~</i>Data</p>
+          <h2 class="headline" id="h-data">Every type reviewed, then one transaction.</h2>
+        </div>
+        <div class="ld-grid">
+          <figure class="win-wrap dj-fig ld-fig" data-reveal id="fig-transfer">
+            <div class="xf lp-js" id="xfer" role="region" aria-label="Contura's Data Transfer tab with sample data">
+              <header class="xf-head">
+                <span class="xf-title">Data Transfer</span>
+                <span class="xf-vline" aria-hidden="true"></span>
+                <ol class="xf-steps" id="xf-steps" aria-label="Steps"></ol>
+                <span class="xf-sp"></span>
+                <span class="xf-pair"><svg class="xf-db my" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.405 5.501c-.115 0-.193.014-.274.033v.013h.014c.054.104.146.18.214.273.054.107.1.214.154.32l.014-.015c.094-.066.14-.172.14-.333-.04-.047-.046-.094-.08-.14-.04-.067-.126-.1-.18-.153zM5.77 18.695h-.927a50.854 50.854 0 00-.27-4.41h-.008l-1.41 4.41H2.45l-1.4-4.41h-.01a72.892 72.892 0 00-.195 4.41H0c.055-1.966.192-3.81.41-5.53h1.15l1.335 4.064h.008l1.347-4.064h1.095c.242 2.015.384 3.86.428 5.53zm4.017-4.08c-.378 2.045-.876 3.533-1.492 4.46-.482.716-1.01 1.073-1.583 1.073-.153 0-.34-.046-.566-.138v-.494c.11.017.24.026.386.026.268 0 .483-.075.647-.222.197-.18.295-.382.295-.605 0-.155-.077-.47-.23-.944L6.23 14.615h.91l.727 2.36c.164.536.233.91.205 1.123.4-1.064.678-2.227.835-3.483zm12.325 4.08h-2.63v-5.53h.885v4.85h1.745zm-3.32.135l-1.016-.5c.09-.076.177-.158.255-.25.433-.506.648-1.258.648-2.253 0-1.83-.718-2.746-2.155-2.746-.704 0-1.254.232-1.65.697-.43.508-.646 1.256-.646 2.245 0 .972.19 1.686.574 2.14.35.41.877.615 1.583.615.264 0 .506-.033.725-.098l1.325.772.36-.622zM15.5 17.588c-.225-.36-.337-.94-.337-1.736 0-1.393.424-2.09 1.27-2.09.443 0 .77.167.977.5.224.362.336.936.336 1.723 0 1.404-.424 2.108-1.27 2.108-.445 0-.77-.167-.978-.5zm-1.658-.425c0 .47-.172.856-.516 1.156-.344.3-.803.45-1.384.45-.543 0-1.064-.172-1.573-.515l.237-.476c.438.22.833.328 1.19.328.332 0 .593-.073.783-.22a.754.754 0 00.3-.615c0-.33-.23-.61-.648-.845-.388-.213-1.163-.657-1.163-.657-.422-.307-.632-.636-.632-1.177 0-.45.157-.81.47-1.085.315-.278.72-.415 1.22-.415.512 0 .98.136 1.4.41l-.213.476a2.726 2.726 0 00-1.064-.23c-.283 0-.502.068-.654.206a.685.685 0 00-.248.524c0 .328.234.61.666.85.393.215 1.187.67 1.187.67.433.305.648.63.648 1.168zm9.382-5.852c-.535-.014-.95.04-1.297.188-.1.04-.26.04-.274.167.055.053.063.14.11.214.08.134.218.313.346.407.14.11.28.216.427.31.26.16.555.255.81.416.145.094.293.213.44.313.073.05.12.14.214.172v-.02c-.046-.06-.06-.147-.105-.214-.067-.067-.134-.127-.2-.193a3.223 3.223 0 00-.695-.675c-.214-.146-.682-.35-.77-.595l-.013-.014c.146-.013.32-.066.46-.106.227-.06.435-.047.67-.106.106-.027.213-.06.32-.094v-.06c-.12-.12-.21-.283-.334-.395a8.867 8.867 0 00-1.104-.823c-.21-.134-.476-.22-.697-.334-.08-.04-.214-.06-.26-.127-.12-.146-.19-.34-.275-.514a17.69 17.69 0 01-.547-1.163c-.12-.262-.193-.523-.34-.763-.69-1.137-1.437-1.826-2.586-2.5-.247-.14-.543-.2-.856-.274-.167-.008-.334-.02-.5-.027-.11-.047-.216-.174-.31-.235-.38-.24-1.364-.76-1.644-.072-.18.434.267.862.422 1.082.115.153.26.328.34.5.047.116.06.235.107.356.106.294.207.622.347.897.073.14.153.287.247.413.054.073.146.107.167.227-.094.136-.1.334-.154.5-.24.757-.146 1.693.194 2.25.107.166.362.534.703.393.3-.12.234-.5.32-.835.02-.08.007-.133.048-.187v.015c.094.188.188.367.274.555.206.328.566.668.867.895.16.12.287.328.487.402v-.02h-.015c-.043-.058-.1-.086-.154-.133a3.445 3.445 0 01-.35-.4 8.76 8.76 0 01-.747-1.218c-.11-.21-.202-.436-.29-.643-.04-.08-.04-.2-.107-.24-.1.146-.247.273-.32.453-.127.288-.14.642-.188 1.01-.027.007-.014 0-.027.014-.214-.052-.287-.274-.367-.46-.2-.475-.233-1.238-.06-1.785.047-.14.247-.582.167-.716-.042-.127-.174-.2-.247-.303a2.478 2.478 0 01-.24-.427c-.16-.374-.24-.788-.414-1.162-.08-.173-.22-.354-.334-.513-.127-.18-.267-.307-.368-.52-.033-.073-.08-.194-.027-.274.014-.054.042-.075.094-.09.088-.072.335.022.422.062.247.1.455.194.662.334.094.066.195.193.315.226h.14c.214.047.455.014.655.073.355.114.675.28.962.46a5.953 5.953 0 012.085 2.286c.08.154.115.295.188.455.14.33.313.663.455.982.14.315.275.636.476.897.1.14.502.213.682.286.133.06.34.115.46.188.23.14.454.3.67.454.11.076.443.243.463.378z"/></svg>shop-local<svg class="xf-ic" viewBox="0 0 16 16" aria-label="to" role="img" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9.5 4.5 13 8l-3.5 3.5"/></svg><img class="xf-db" src="postgresql.png" alt="" width="14" height="14">freight-stg</span>
+              </header>
+              <div class="xf-body" id="xf-body"></div>
+              <footer class="xf-foot" id="xf-foot"></footer>
             </div>
-            <p class="meta">v0.7.0 prototype · portable · Windows 10 and 11 · Linux, AppImage or .deb · 64-bit</p>
-            <p class="note" data-note role="status" hidden></p>
-            <div class="facts">
-              <div><b>1</b><span>file: an exe or an AppImage</span></div>
-              <div><b>3</b><span>engines: MySQL, PostgreSQL, SQLite</span></div>
-              <div><b>20&nbsp;MB</b><span>about, on disk</span></div>
+            <div class="win-ctl lp-js"><label class="xf-try"><input type="checkbox" id="xf-fail"> Try a row that does not fit</label></div>
+            <noscript>
+              <div class="pt-frag ex lp-static">
+                <div class="ex-h"><b>Data Transfer, Type mapping for orders</b><span>MySQL to PostgreSQL</span></div>
+                <ol class="ex-l">
+                  <li>is_paid  tinyint(1)  Pick a type: boolean or smallint</li>
+                  <li>id  int unsigned  bigint</li>
+                  <li>created_at  datetime  timestamp</li>
+                </ol>
+                <p class="ex-f">Next: Review SQL opens once every column has its type.</p>
+              </div>
+            </noscript>
+          </figure>
+          <div class="ld-side" data-reveal style="--d:120ms">
+            <p class="copy">Data Transfer copies structure, rows or both between Connections, also across Dialects. Each column's source type sits beside the type it will become, and a column with no safe match waits for your choice. If one row does not fit, the run stops there and rolls back.</p>
+            <dl class="kv">
+              <div><dt>Also in Data</dt><dd>Import and Export with the first lines shown before the file is written, Backup and Restore that checks the target first, Lineage and Explain.</dd></div>
+              <div><dt>Across Dialects</dt><dd>MySQL, PostgreSQL and SQLite, in any direction the types allow.</dd></div>
+            </dl>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec lp lp-ai" id="ai" data-name="AI" aria-labelledby="h-ai" data-lazy="ai.js">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">6</span></div>
+      <div class="body">
+        <div class="la-head">
+          <div data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>AI</p>
+            <h2 class="headline la-h" id="h-ai">Each Connection decides what leaves the PC.</h2>
+          </div>
+          <div class="la-copy copy" data-reveal style="--d:120ms">
+            <p>Use Anthropic, OpenAI-compatible, Groq, DeepSeek or a local model, with your own key in the system keyring. Each Connection sets what the assistant may see.</p>
+            <p class="muted">It writes SQL and never runs it.</p>
+          </div>
+        </div>
+        <div class="lt-grid">
+          <figure class="lt-fig" data-reveal>
+            <div class="lt-host lp-js" data-trace-log></div>
+            <noscript>
+              <div class="pt-frag ex lp-static">
+                <div class="ex-h"><b>Answer log</b><span>Log · Steps · Diagram</span></div>
+                <ol class="ex-l">
+                  <li>0.000 INFO question 32 chars, tab Visual Query 1</li>
+                  <li>0.002 INFO access schema+query_text rows=blocked</li>
+                  <li>0.011 INFO tables picked=3/6 invoices,customers,payments</li>
+                  <li>0.014 INFO clean literals_masked=3 secrets=0</li>
+                  <li>0.214 INFO request tools=none host=api.anthropic.com</li>
+                  <li>1.852 INFO sql_check reads=1 writes=0 flags=0</li>
+                  <li>1.852 INFO database ran=nothing</li>
+                </ol>
+                <p class="ex-f">Steps gives each line its rule and evidence; Diagram shows what stayed on this PC and what left.</p>
+              </div>
+            </noscript>
+            <div class="win-ctl lp-js"><button type="button" class="ghost sm" data-trace-replay>Replay</button><span>Log, Steps and Diagram are three views of one record.</span></div>
+          </figure>
+          <div class="lt-a" data-reveal style="--d:120ms">
+            <h3 class="lb-h3" id="h-ai-trace">Every answer keeps its trace.</h3>
+            <div class="copy">
+              <p>Open any answer's log to see what was sent, what came back and every step between, as Log, Steps or Diagram.</p>
             </div>
           </div>
         </div>
       </div>
     </div>
   </section>
+
+  <section class="stmt sec lp lp-safety" id="safety" data-name="Safety" aria-labelledby="h-safety">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">7</span></div>
+      <div class="body ls-grid">
+        <figure class="ls-fig" data-reveal>
+          <div class="hold" data-hold="hold-mode" role="region" aria-label="One write on freight-prod, held for review">
+            <div class="hold-h"><p class="t">Query 1</p><span class="meta">freight-prod</span><span class="pill prod">PROD</span></div>
+            <div class="sql"><ol><li><span class="c">-- Query 1 on freight-prod</span></li><li class="w"><span><span class="k">UPDATE</span> billing.invoices <span class="k">SET</span> status = <span class="s">'void'</span></span></li><li class="w"><span><span class="k">WHERE</span> number = <span class="s">'INV-2026-0042'</span>;</span></li></ol></div>
+            <div class="hold-st held"><span class="tag">Waiting for your review</span><p>freight-prod is a Production Connection. This UPDATE writes to billing.invoices, shown above exactly as it will run. Run it?</p></div>
+          </div>
+          <div class="win-ctl lp-js"><span id="hold-mode-l">freight-prod is</span><div class="seg" id="hold-mode" role="group" aria-labelledby="hold-mode-l"><button type="button" data-v="prod" aria-pressed="true">Production</button><button type="button" data-v="ro" aria-pressed="false">Read-only</button></div></div>
+        </figure>
+        <div class="ls-a" data-reveal style="--d:120ms">
+          <p class="eyebrow"><i aria-hidden="true">~</i>Safety</p>
+          <h2 class="headline" id="h-safety">Production asks. Read&#8209;only refuses.</h2>
+          <div class="copy ls-copy">
+            <p>On a Production Connection every write waits for your yes, with the exact SQL in front of you. On a Read-only one, writes never run.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
 </main>
 
-<footer class="foot">
-  <div class="wrap">
-    <nav class="foot-nav" aria-label="All pages">
-      <a href="index.html">Home</a><a href="query.html">Query</a><a href="model.html">Model</a><a href="data.html">Data</a><a href="ai.html">AI</a><a href="safety.html">Safety</a>
-    </nav>
-    <p>Core in Rust, the window in Tauri 2 with React. Nothing leaves the PC except what you send to an AI provider you set up yourself.</p>
-    <p>The windows on these pages are the app's own screens, drawn live. Every name and number in them is sample data.</p>
-  </div>
-</footer>
 
 <div class="status" role="contentinfo" aria-label="Page status">
   <div class="in">

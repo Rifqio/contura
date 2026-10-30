@@ -1,5 +1,5 @@
 /* Contura site: shared shell. Theme (system or the status-bar switch), the gutter and status bar, scroll reveals,
-   and the prototype download notice. Loaded in <head> so the saved theme applies before the first paint. */
+   and the download notice. Loaded in <head> so the saved theme applies before the first paint. */
 (function () {
   'use strict';
   const root = document.documentElement;
@@ -58,15 +58,6 @@
       rev.forEach((el) => { if (el.getBoundingClientRect().top > innerHeight * 0.92) { el.classList.add('pre'); io.observe(el); } });
     }
 
-    /* the download is a prototype: say so where it was pressed */
-    document.querySelectorAll('[data-download]').forEach((b) => b.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      document.querySelectorAll('[data-note]').forEach((n) => { n.hidden = true; n.textContent = ''; });
-      const box = b.closest('.dl-box'), n = box && box.querySelector('[data-note]');
-      if (n) { n.hidden = false; n.textContent = 'Prototype build. Downloads open with the public release.'; }
-      saved = true;
-      if (pendingEl) { pendingEl.textContent = 'Nothing saved, prototype'; pendingEl.classList.add('done'); }
-    }));
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready); else ready();
 })();

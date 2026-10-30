@@ -1,6 +1,7 @@
-/* Contura site: the Data page. The Transfer planner (ported from the Route Map journey planner, restyled and reworded),
+/* Contura site, index.html #data (loaded by launch.js when the section comes near). The Data Transfer tab (drawn after the app's TransferTab),
    the data job slices (ported from the single-page site: importer, exporter, backup, lineage, explain), and phone
-   playback for each demo through ConturaPlay, driven by the same functions the controls call.
+   playback for each demo through ConturaPlay, driven by the same functions the controls call. The launch page uses
+   only the Transfer tab and loads no ConturaPlay; the slices and playback stay idle without their hosts.
    Export lines are the shared sample invoices from ConturaKit.DATA. PostgreSQL types and plans are scripted. */
 (function () {
   'use strict';
@@ -46,214 +47,190 @@
     return true;
   }
 
-  /* ======================= 01 the Transfer planner ======================= */
-  const planner = (function () {
-    const box = $('#planner');
+  /* ======================= 01 the Data Transfer tab ======================= */
+  /* Drawn after the app's TransferTab (steps 3 to 5 of five: Type mapping, Review SQL, Run), with sample data.
+     Source and target are set already, so the tab opens on Type mapping. The plan and the run are scripted. */
+  const transfer = (function () {
+    const box = $('#xfer');
     if (!box) return null;
-    const PLAN = {
-      mysql: {
-        label: 'MySQL', from: 'MySQL · shop.orders', cols: 5, rows: 1204,
-        review: { title: 'Review is_paid', sub: 'tinyint(1), your choice', items: 1, unit: 'choice' },
-        ask: '<b>is_paid</b> is <code>tinyint(1)</code> in MySQL and has no single PostgreSQL match. Choose its type before Run.',
-        picks: [['boolean', 'boolean'], ['smallint', 'smallint']],
-        done: (v) => '<b>is_paid</b> becomes <code>' + v + '</code>. The other 4 columns map on their own.',
-        fail: () => 'Row 812: created_at holds 0000-00-00 00:00:00, which does not fit timestamp.',
-      },
-      sqlite: {
-        label: 'SQLite', from: 'SQLite · shop.db, orders', cols: 5, rows: 1204,
-        review: { title: 'Review 5 notes', sub: 'is_paid, your choice', items: 5, unit: 'notes' },
-        ask: 'SQLite INTEGER columns copy by their affinity as <code>bigint</code>. <b>is_paid</b> can become <code>boolean</code> instead.',
-        picks: [['bigint', 'Keep bigint'], ['boolean', 'boolean']],
-        done: (v) => '<b>is_paid</b> becomes <code>' + v + '</code>. All 5 notes reviewed.',
-        fail: (v) => (v === 'boolean' ? 'Row 812: is_paid holds 2, which does not fit boolean.' : "Row 812: customer_id holds 'n/a', which does not fit bigint."),
-      },
+    const STEPS = ['Source and target', 'Tables', 'Type mapping', 'Review SQL', 'Run'];
+    const SRC = 'shop-local', TGT = 'freight-stg', ROWS = 1204, BATCH = 500, FAIL_ROW = 812;
+    const TYPES = ['boolean', 'smallint', 'integer', 'bigint', 'numeric', 'text'];
+    const COLS = [
+      { c: 'id', s: 'int unsigned', t: 'bigint', note: { k: 'info', text: 'int unsigned can pass the range of integer. Copied as bigint.' } },
+      { c: 'customer_id', s: 'int', t: 'integer' },
+      { c: 'total', s: 'decimal(10,2)', t: 'numeric(10,2)' },
+      { c: 'is_paid', s: 'tinyint(1)', t: null, note: { k: 'choice', text: 'tinyint(1) is often a flag. Pick boolean or smallint.' } },
+      { c: 'status', s: 'varchar(16)', t: 'varchar(16)' },
+      { c: 'created_at', s: 'datetime', t: 'timestamp' },
+    ];
+    const S = { step: 2, type: null, notesOnly: false, run: null };
+    const stepsEl = $('#xf-steps'), body = $('#xf-body'), foot = $('#xf-foot'), failT = $('#xf-fail');
+    const P2 = {
+      chev: '<path d="m6 3.5 4.5 4.5L6 12.5"/>', table: '<rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M2 6.2h12M6.5 6.2v7.3"/>',
+      copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1"/><path d="M10.5 5.5v-3h-8v8h3"/>', query: '<path d="M4 1.8h5l3 3v9.4H4z"/><path d="M6 8.5h4M6 11h3"/>',
+      run: '<path d="M8 2.5a5.5 5.5 0 1 1-5.2 3.7"/><path d="M2.6 2.6v3.6h3.6"/>', undo: '<path d="M4 6h6a3.5 3.5 0 0 1 0 7H7"/><path d="M6.5 3.5 4 6l2.5 2.5"/>',
+      wait: '<circle cx="8" cy="8" r="5.6"/><path d="M8 5v3.2l2 1.3"/>', err: '<circle cx="8" cy="8" r="5.6"/><path d="M8 5v3.6M8 10.8v.2"/>',
     };
-    const S = { src: 'mysql', pick: null, state: 'review', busy: false, result: null };
-    const routeEl = $('#plan-route'), decide = $('#plan-decide'), runBtn = $('#plan-run'), runSt = $('#plan-st'), failT = $('#plan-failt'), routeText = $('#plan-text'), fromEl = $('#plan-from');
-    let geo = null;
-    const gap = (n) => 1 + Math.log10(1 + n);
-    function stopsOf() {
-      const d = PLAN[S.src];
-      return [
-        { key: 'src', t: 'orders, ' + fmt(d.rows) + ' rows', s: d.label + ' source', w: 0 },
-        { key: 'map', t: 'Map ' + d.cols + ' column types', s: d.cols + ' columns', w: gap(d.cols) },
-        { key: 'rev', t: d.review.title, s: S.state === 'review' ? d.review.sub : 'reviewed: ' + S.pick, w: gap(d.review.items), rev: true },
-        { key: 'chk', t: 'Check rows fit', s: fmt(d.rows) + ' rows', w: gap(d.rows) },
-        { key: 'run', t: 'Run, one transaction', s: fmt(d.rows) + ' rows', w: gap(d.rows) },
-      ];
-    }
-    function polyD(pts, r) {
-      let d = 'M' + pts[0][0] + ' ' + pts[0][1];
-      for (let i = 1; i < pts.length - 1; i++) {
-        const [x0, y0] = pts[i - 1], [x1, y1] = pts[i], [x2, y2] = pts[i + 1];
-        const l1 = Math.hypot(x1 - x0, y1 - y0), l2 = Math.hypot(x2 - x1, y2 - y1), rr = Math.min(r, l1 / 2, l2 / 2);
-        const ax = x1 - ((x1 - x0) / l1) * rr, ay = y1 - ((y1 - y0) / l1) * rr, bx = x1 + ((x2 - x1) / l2) * rr, by = y1 + ((y2 - y1) / l2) * rr;
-        d += ' L' + ax + ' ' + ay + ' Q' + x1 + ' ' + y1 + ' ' + bx + ' ' + by;
-      }
-      const e = pts[pts.length - 1];
-      return d + ' L' + e[0] + ' ' + e[1];
-    }
-    function drawRoute() {
-      const W = routeEl.clientWidth || 700, vert = W < 560;
-      const st = stopsOf();
-      let vb, main, spur;
-      const Y = 104;
-      if (!vert) {
-        vb = [760, 290];
-        main = [[34, Y], [722, Y]];
-        spur = [[722, Y], [722, Y + 46], [676, Y + 92], [566, Y + 92]];
-      } else {
-        vb = [340, 500];
-        main = [[30, 22], [30, 388]];
-        spur = [[30, 388], [30, 414], [60, 444], [60, 478]];
-      }
-      const svg = doc.createElementNS(SVGNS, 'svg');
-      svg.setAttribute('viewBox', '0 0 ' + vb[0] + ' ' + vb[1]);
-      routeEl.innerHTML = ''; routeEl.appendChild(svg);
-      const mk = (tag, a, p) => { const e = doc.createElementNS(SVGNS, tag); Object.keys(a).forEach((k) => e.setAttribute(k, a[k])); (p || svg).appendChild(e); return e; };
-      const spurP = mk('path', { d: polyD(spur, 26), class: 'rl rl-spur', 'stroke-width': 4 });
-      const mainP = mk('path', { d: polyD(main, 40), class: 'rl rl-main', 'stroke-width': 6 });
-      const L = mainP.getTotalLength();
-      const total = st.reduce((a, s) => a + s.w, 0);
-      let acc = 0;
-      st.forEach((s) => { acc += s.w; s.at = (acc / total) * L; const p = mainP.getPointAtLength(s.at); s.x = p.x; s.y = p.y; });
-      /* the ruler: each gap is drawn to its work, 1 + log10(1 + items), and says what that work is */
-      const d = PLAN[S.src];
-      const units = ['', d.cols + ' columns', d.review.items + ' ' + d.review.unit, fmt(d.rows) + ' rows', fmt(d.rows) + ' rows'];
-      if (!vert) {
-        const ry = 270;
-        mk('line', { x1: st[0].x, y1: ry, x2: st[st.length - 1].x, y2: ry, class: 'ruler' });
-        st.forEach((s, i) => {
-          mk('line', { x1: s.x, y1: ry - 4, x2: s.x, y2: ry + 4, class: 'ruler' });
-          if (i) { const tx = mk('text', { x: (s.x + st[i - 1].x) / 2, y: ry + 16, class: 'rtx', 'text-anchor': 'middle' }); tx.textContent = units[i]; }
-        });
-        const cap = mk('text', { x: st[0].x, y: ry - 10, class: 'rtx' }); cap.textContent = 'Spacing follows the work in each step';
-      }
-      st.forEach((s, i) => {
-        const gg = mk('g', { class: s.rev && S.state === 'review' ? 'rev' : '' });
-        const big = i === 0 || i === st.length - 1;
-        s.disc = mk('circle', { cx: s.x, cy: s.y, r: s.rev ? 12 : big ? 11 : 9, class: 'disc' + (s.rev && S.state === 'review' ? ' rv' : ''), 'stroke-width': s.rev ? 3 : 2.5 }, gg);
-        let lx, ly, anchor = 'start';
-        if (vert) { lx = s.x + 26; ly = s.y + 1; }
-        else {
-          const up = i % 2 === 0;
-          ly = up ? s.y - 44 : s.y + 36;
-          lx = s.x; anchor = i === st.length - 1 ? 'end' : 'middle';
-          if (i === 0 || i === 2) { lx = s.x - 12; anchor = 'start'; }
-          if (i === st.length - 1) lx = s.x + 12;
-        }
-        const t1 = mk('text', { x: lx, y: ly, class: 'lbl1', 'text-anchor': anchor }, gg); t1.textContent = s.t;
-        const t2 = mk('text', { x: lx, y: ly + 18, class: 'lbl2', 'text-anchor': anchor }, gg); t2.textContent = s.s;
-      });
-      const fp = spurP.getPointAtLength(spurP.getTotalLength());
-      const fd = mk('circle', { cx: fp.x, cy: fp.y, r: 9, class: 'disc fd', 'stroke-width': 2.5 });
-      const ft = vert ? [fp.x + 24, fp.y - 4, 'start'] : [fp.x - 20, fp.y + 5, 'end'];
-      const f1 = mk('text', { x: ft[0], y: ft[1], class: 'lbl1', 'text-anchor': ft[2] }); f1.textContent = vert ? 'If a row fails,' : 'If a row fails, nothing is written';
-      const f2 = mk('text', { x: ft[0], y: ft[1] + 18, class: 'lbl2', 'text-anchor': ft[2] }); f2.textContent = vert ? 'nothing is written' : 'the transaction rolls back';
-      const mark = mk('g', { class: 'mark', opacity: 0 });
-      mk('rect', { x: -13, y: -8, width: 26, height: 16, rx: 6 }, mark);
-      mk('circle', { cx: -5, cy: 0, r: 2.6 }, mark); mk('circle', { cx: 5, cy: 0, r: 2.6 }, mark);
-      geo = { svg, mainP, spurP, st, mark, fd, L };
-      /* a redraw (resize, fonts) keeps the outcome of the last run */
-      if (S.result === 'ok') st.forEach((s) => s.disc.classList.add('done'));
-      if (S.result === 'fail') { st.slice(0, -1).forEach((s) => s.disc.classList.add('done')); spurP.classList.add('hit'); fd.classList.add('done'); }
-      routeText.textContent = 'Plan: ' + st.map((s) => s.t + ' (' + s.s + ')').join(', then ') + '. If a row fails, nothing is written.';
-    }
-    function paintDecide() {
-      const d = PLAN[S.src];
-      if (S.state === 'review') {
-        decide.className = 'plan-decide';
-        decide.innerHTML = '<p>' + d.ask + '</p><div class="plan-picks" role="group" aria-label="Type for is_paid">' + d.picks.map(([v, l]) => '<button type="button" class="plan-chip" data-pick="' + v + '">' + l + '</button>').join('') + '</div>';
-        runBtn.disabled = true;
-        runSt.innerHTML = 'Waiting for your choice at the <b>review step</b>.';
-      } else {
-        decide.className = 'plan-decide ok';
-        decide.innerHTML = '<p>' + d.done(S.pick) + '</p><button type="button" class="plan-chip" data-change>Change</button>';
-        runBtn.disabled = S.busy;
-      }
-    }
-    function setSrc(v) {
-      if (S.busy || !PLAN[v]) return;
-      if (v !== S.src || S.state !== 'review') { S.src = v; S.state = 'review'; S.pick = null; }
-      S.result = null;
-      $$('[data-src]', box).forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.src === v)));
-      fromEl.textContent = PLAN[v].from;
-      drawRoute(); paintDecide();
-    }
-    function pick(v) {
-      if (S.busy) return;
-      S.pick = v; S.state = 'ready'; S.result = null; drawRoute(); paintDecide();
-      runSt.innerHTML = 'Reviewed. Every step is planned, so <b>Run</b> is open.';
-    }
-    function change() { if (S.busy) return; S.result = null; S.state = 'review'; S.pick = null; drawRoute(); paintDecide(); }
-    decide.addEventListener('click', (e) => {
-      const b = e.target.closest('[data-pick]');
-      if (b) { pick(b.dataset.pick); runBtn.focus({ preventScroll: true }); return; }
-      if (e.target.closest('[data-change]')) change();
-    });
-    $$('[data-src]', box).forEach((b) => b.addEventListener('click', () => { if (b.dataset.src !== S.src) setSrc(b.dataset.src); }));
-    function moveMark(path, a, b, dur) {
-      return new Promise((res) => {
-        const t0 = performance.now();
-        geo.mark.setAttribute('opacity', 1);
-        const step = (now) => {
-          const k = reduced() ? 1 : Math.min(1, (now - t0) / dur);
-          const e = 1 - Math.pow(1 - k, 3);
-          const p = path.getPointAtLength(a + (b - a) * e);
-          geo.mark.setAttribute('transform', 'translate(' + p.x + ' ' + p.y + ')');
-          if (k < 1) requestAnimationFrame(step); else res();
-        };
-        requestAnimationFrame(step);
-      });
-    }
-    async function run() {
-      if (S.busy || S.state === 'review') return;
-      S.busy = true; runBtn.disabled = true; failT.disabled = true;
-      $$('[data-src]', box).forEach((x) => { x.disabled = true; });
-      $$('[data-change]', box).forEach((x) => { x.disabled = true; });
-      S.result = null; drawRoute();
-      const fail = failT.checked, d = PLAN[S.src], st = geo.st;
-      runSt.innerHTML = '<span class="plan-spin" aria-hidden="true"></span>Mapping ' + d.cols + ' columns...';
-      for (let i = 1; i < st.length; i++) {
-        await moveMark(geo.mainP, st[i - 1].at, st[i].at, 260 + (st[i].at - st[i - 1].at) * 1.6);
-        st[i - 1].disc.classList.add('done');
-        if (st[i].key === 'chk') { runSt.innerHTML = '<span class="plan-spin" aria-hidden="true"></span>Checking ' + fmt(d.rows) + ' rows against their new types...'; await sleep(450); }
-        if (st[i].key === 'run') runSt.innerHTML = '<span class="plan-spin" aria-hidden="true"></span>Copying rows in one transaction...';
-      }
-      await sleep(350);
-      if (fail) {
-        geo.spurP.classList.add('hit');
-        await moveMark(geo.spurP, 0, geo.spurP.getTotalLength(), 700);
-        geo.fd.classList.add('done'); S.result = 'fail';
-        runSt.innerHTML = '<span class="plan-out bad">0 rows written</span><b>' + esc(d.fail(S.pick)) + '</b> The transaction rolled back, so freight.orders is as it was. Fix the row or its type, then run again.';
-      } else {
-        st[st.length - 1].disc.classList.add('done'); S.result = 'ok';
-        runSt.innerHTML = '<span class="plan-out ok">' + fmt(d.rows) + ' rows written</span><b>Copied ' + fmt(d.rows) + ' rows into freight.orders</b> in one transaction. A sample run in this page.';
-      }
-      S.busy = false; runBtn.disabled = false; failT.disabled = false;
-      $$('[data-src]', box).forEach((x) => { x.disabled = false; });
-      $$('[data-change]', box).forEach((x) => { x.disabled = false; });
-    }
-    runBtn.addEventListener('click', run);
-    async function reset() {
-      while (S.busy) await new Promise((r) => setTimeout(r, 60));
-      failT.checked = false; S.state = 'review'; S.pick = null; S.src = 'mysql';
-      setSrc('mysql');
-    }
-    drawRoute(); paintDecide();
-    let rw = routeEl.clientWidth;
-    if ('ResizeObserver' in window) new ResizeObserver(() => { if (Math.abs(routeEl.clientWidth - rw) > 4 && !S.busy) { rw = routeEl.clientWidth; drawRoute(); } }).observe(routeEl);
-    if (doc.fonts && doc.fonts.ready) doc.fonts.ready.then(() => { if (!S.busy) drawRoute(); });
-    return { setSrc, pick, run, reset, setFail: (b) => { failT.checked = !!b; }, get busy() { return S.busy; } };
-  })();
+    const ic2 = (n) => '<svg class="xf-ic" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' + (P2[n] || P[n]) + '</svg>';
+    const kbd = (k) => '<kbd class="xf-kbd">' + k + '</kbd>';
+    const isPaid = () => S.type || 'boolean';
+    const blocked = () => !S.type;
 
-  if (planner) withPlay($('#fig-transfer'), [
-    { caption: 'From MySQL, the plan stops at the review step: tinyint(1) has no single PostgreSQL match.', run: async () => { planner.setSrc('mysql'); }, ms: 2600 },
-    { caption: 'From SQLite, INTEGER columns copy as bigint, and is_paid can become boolean instead.', run: async () => { planner.setSrc('sqlite'); }, ms: 2600 },
-    { caption: 'Back on MySQL, choose boolean for is_paid. Run opens once every step is planned.', run: async (c) => { planner.setSrc('mysql'); await c.wait(900); planner.pick('boolean'); }, ms: 2000 },
-    { caption: 'Run. Each row is checked against its new type, then copied in one transaction.', run: async () => { await planner.run(); }, ms: 2600 },
-    { caption: 'Now a row that does not fit. Row 812 stops the run, the transaction rolls back, and 0 rows are written.', run: async (c) => { planner.setFail(true); await c.wait(700); await planner.run(); }, ms: 3400 },
-  ], { reset: () => planner.reset(), done: 'That is the whole plan. Pick a source and try it yourself.' });
+    function paintSteps() {
+      stepsEl.innerHTML = STEPS.map((s, i) => {
+        const cls = i === S.step ? 'on' : i < S.step ? 'done' : '';
+        return '<li class="' + cls + '"' + (i === S.step ? ' aria-current="step"' : '') + '>' + (i > 0 ? ic2('chev') : '') +
+          '<span class="xf-n">' + (i < S.step ? ic2('check') : i + 1) + '</span>' + s + '</li>';
+      }).join('');
+    }
+
+    /* step 3, Type mapping */
+    function mapping() {
+      const notes = COLS.filter((x) => x.note).length;
+      const shown = S.notesOnly ? COLS.filter((x) => x.note) : COLS;
+      let h = '<div class="xf-map"><nav class="xf-side" aria-label="Ticked tables"><span class="xf-flab">Tables</span>' +
+        '<button type="button" class="xf-tb on" aria-current="true">' + ic2('table') + '<span class="m">orders</span><span class="xf-chip" aria-label="' + notes + ' notes">' + notes + '</span></button></nav>' +
+        '<section class="xf-main" aria-label="Columns of orders"><header class="xf-pane"><span class="xf-sect m">orders</span><span class="xf-count">' + COLS.length + ' columns, ' + notes + ' notes' + (blocked() ? ', 1 needs a choice' : '') + '</span><span class="xf-sp"></span>' +
+        '<div class="seg" role="group" aria-label="Show columns"><button type="button" data-notes="0" aria-pressed="' + !S.notesOnly + '">All ' + COLS.length + ' columns</button><button type="button" data-notes="1" aria-pressed="' + S.notesOnly + '">Notes only ' + notes + '</button></div></header>';
+      if (blocked()) h += '<div class="xf-ban warn" role="status">' + ic2('alert') + '<span>1 column needs a choice before Review SQL. Every type here can be changed; the SQL in the next step uses what you set.</span></div>';
+      h += '<div class="xf-grid"><div class="xf-box"><table class="xf-lt"><thead><tr><th>Column</th><th>MySQL type</th><th class="w0"><span class="sr">becomes</span></th><th>PostgreSQL type</th><th class="xf-ncol">Note</th></tr></thead><tbody>';
+      shown.forEach((x) => {
+        const pick = x.note && x.note.k === 'choice';
+        const att = pick && !S.type;
+        h += '<tr' + (att ? ' class="att"' : '') + '><td class="m">' + x.c + '</td><td class="m xf-src">' + esc(x.s) + '</td><td>' + ic2('arrow') + '</td><td>' +
+          (pick ? '<input class="xf-type' + (att ? ' warn' : '') + '" list="xf-types" aria-label="Target type of orders.' + x.c + '" placeholder="Pick a type" value="' + (S.type || '') + '" autocomplete="off" spellcheck="false">'
+                : '<span class="xf-type ro">' + esc(x.t) + '</span>') +
+          '</td><td class="xf-ncol">' + (x.note ? '<span class="xf-note' + (x.note.k === 'choice' && !S.type ? ' warn' : '') + '">' + ic2(x.note.k === 'choice' ? 'alert' : 'info') + '<span>' + esc(x.note.text) + '</span></span>' : '') + '</td></tr>';
+      });
+      h += '</tbody></table></div></div></section></div><datalist id="xf-types">' + TYPES.map((t) => '<option value="' + t + '">').join('') + '</datalist>';
+      body.innerHTML = h;
+      foot.innerHTML = '<span class="xf-hint">' + notes + ' notes. Rows that do not fit their new type stop the run with the row number.</span><span class="xf-sp"></span>' +
+        '<button type="button" class="xf-btn" disabled title="Source, target and tables are set in this sample">Back ' + kbd('Alt+Left') + '</button>' +
+        '<button type="button" class="xf-btn pri" data-next' + (blocked() ? ' disabled title="Pick a type for orders.is_paid first"' : '') + '>Next: Review SQL ' + kbd('Ctrl+Enter') + '</button>';
+      const inp = $('.xf-type[list]', body);
+      if (inp) {
+        const set = (commit) => {
+          const v = inp.value.trim().toLowerCase();
+          if (TYPES.includes(v)) { if (v !== S.type) { S.type = v; paint(); $('.xf-type[list]', body).focus(); } }
+          else if (commit) inp.value = S.type || '';
+        };
+        inp.addEventListener('input', () => set(false));
+        inp.addEventListener('change', () => set(true));
+        inp.addEventListener('blur', () => set(true));
+        inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.ctrlKey) { e.preventDefault(); set(true); } else if (e.key === 'Escape') inp.value = S.type || ''; });
+      }
+    }
+
+    /* step 4, Review SQL */
+    const SQL = [
+      ['c', '-- Tables'],
+      ['', '<span class="k">CREATE TABLE</span> freight.orders ('],
+      ['', '  id <span class="t">bigint</span> <span class="k">NOT NULL</span>,'],
+      ['', '  customer_id <span class="t">integer</span> <span class="k">NOT NULL</span>,'],
+      ['', '  total <span class="t">numeric</span>(<span class="n">10</span>,<span class="n">2</span>) <span class="k">NOT NULL</span>,'],
+      ['', '  is_paid <span class="t">TYPE</span> <span class="k">NOT NULL</span>,'],
+      ['', '  status <span class="t">varchar</span>(<span class="n">16</span>) <span class="k">NOT NULL</span>,'],
+      ['', '  created_at <span class="t">timestamp</span> <span class="k">NOT NULL</span>,'],
+      ['', '  <span class="k">PRIMARY KEY</span> (id)'],
+      ['', ');'],
+      ['', ''],
+      ['c', '-- The rows are copied here'],
+      ['', ''],
+      ['c', '-- Indexes, after the rows'],
+      ['', '<span class="k">CREATE INDEX</span> orders_customer_id_idx <span class="k">ON</span> freight.orders (customer_id);'],
+    ];
+    const sqlText = () => SQL.map((l) => l[1].replace('TYPE', isPaid()).replace(/<[^>]+>/g, '')).join('\n');
+    function review() {
+      let h = '<div class="xf-review"><section class="xf-box" aria-label="Structure SQL"><header class="xf-pane"><span class="xf-sect">Structure</span><span class="xf-count">The exact statements, in the order they run.</span><span class="xf-sp"></span>' +
+        '<button type="button" class="xf-btn sm" data-copy>' + ic2('copy') + '<span>Copy</span></button><span class="xf-btn sm off" title="Opens a query tab on freight-stg in the app">' + ic2('query') + 'Open in editor</span></header>' +
+        '<ol class="xf-code" tabindex="0" aria-label="Structure SQL, read-only">' + SQL.map((l) => '<li' + (l[0] ? ' class="' + l[0] + '"' : '') + '><span>' + (l[1].replace('TYPE', isPaid()) || ' ') + '</span></li>').join('') + '</ol></section>' +
+        '<section class="xf-box" aria-label="Row copies"><header class="xf-pane"><span class="xf-sect">Rows</span><span class="xf-count">The rows are those in the source when the run starts.</span></header>' +
+        '<ul class="xf-copies"><li><span class="m">orders: INSERT INTO freight.orders (id, customer_id, total, is_paid, status, created_at) VALUES ... ' + fmt(ROWS) + ' rows in batches of ' + fmt(BATCH) + '</span><span class="xf-btn sm off" title="Shows the first INSERT, from 4 rows, in the app">Show sample</span></li></ul></section>' +
+        '<p class="xf-hint">PostgreSQL target: everything runs in one transaction. Cancel rolls it all back.</p></div>';
+      body.innerHTML = h;
+      foot.innerHTML = '<span class="xf-sp"></span><button type="button" class="xf-btn" data-back>Back ' + kbd('Alt+Left') + '</button><button type="button" class="xf-btn pri" data-run>Run ' + kbd('Ctrl+Enter') + '</button>';
+    }
+
+    /* step 5, Run */
+    const time = (ms) => (Math.max(0, ms) / 1000).toFixed(1) + 's';
+    function runView() {
+      const r = S.run, ok = r.outcome === 'finished', failed = r.outcome === 'failed', cancelled = r.outcome === 'cancelled', running = !r.outcome;
+      const stopped = failed || cancelled;
+      const title = ok ? 'Copied 1 table, ' + fmt(ROWS) + ' rows in ' + time(r.ms) + '.' : failed ? 'Transfer stopped, nothing was written' : cancelled ? 'Transfer cancelled' : 'Copying 1 table to ' + TGT;
+      const pct = ok ? 100 : Math.round((r.done / ROWS) * 100);
+      const st = ok ? ['check', 'Done', 'ok'] : failed ? ['err', 'Failed', 'bad'] : cancelled ? ['undo', 'Rolled back', 'back'] : ['run', 'Copying', 'run'];
+      let h = '<div class="xf-run"><section class="xf-box xf-run-head" aria-label="Run"><div class="xf-line"><span class="xf-sect">' + title + '</span><span class="xf-sp"></span>' +
+        (running ? '<span class="xf-time">' + Math.floor(r.ms / 1000) + 's elapsed</span>' : stopped ? '<span class="xf-time">' + Math.floor(r.ms / 1000) + 's</span>' : '') +
+        (ok ? '<span class="xf-btn pri off" title="Opens freight.orders in the tree in the app">Open in the target tree</span>' : '') + '</div>' +
+        '<div class="xf-pb big' + (failed ? ' bad' : '') + '" role="progressbar" aria-label="Transfer progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><b style="width:' + pct + '%"></b></div>' +
+        '<div class="xf-line xf-sub"><span>' + fmt(ok ? ROWS : r.done) + ' of ' + fmt(ROWS) + ' rows</span><span class="xf-sp"></span><span>Structure: 1 table, 1 index created' + (stopped ? ', then rolled back' : '') + '. Foreign Keys are added after the rows.</span></div></section>';
+      if (failed) h += '<div class="xf-ban bad" role="alert">' + ic2('alert') + '<span><b>orders, row ' + fmt(FAIL_ROW) + ', id ' + FAIL_ROW + ':</b> the value 0000-00-00 00:00:00 is not valid for timestamp in created_at. The transaction rolled back, so ' + TGT + ' is as it was.</span><button type="button" class="xf-btn sm" data-copyerr>' + ic2('copy') + '<span>Copy error</span></button></div>';
+      h += '<div class="xf-box"><table class="xf-lt"><thead><tr><th class="w0"><span class="sr">State icon</span></th><th>Table</th><th class="xf-pcol">Progress</th><th class="r">Rows</th><th class="r">Time</th><th>State</th></tr></thead><tbody>' +
+        '<tr' + (failed ? ' class="err"' : '') + '><td class="xf-st ' + st[2] + '">' + ic2(st[0]) + '</td><td class="m">orders</td><td><div class="xf-pb' + (failed ? ' bad' : '') + '"><b style="width:' + pct + '%"></b></div></td>' +
+        '<td class="r">' + fmt(ok ? ROWS : r.done) + ' of ' + fmt(ROWS) + '</td><td class="r">' + time(r.ms) + '</td><td class="xf-st ' + st[2] + '">' + st[1] + '</td></tr></tbody></table></div>';
+      if (running) h += '<p class="xf-hint">PostgreSQL target: everything runs in one transaction. Cancel rolls it all back. Reading ' + SRC + ' takes no locks beyond one consistent snapshot.</p>';
+      if (failed) h += '<p class="xf-hint">Fix the value in ' + SRC + ', or set created_at to text on Type mapping, then run again.</p>';
+      h += '</div>';
+      body.innerHTML = h;
+      foot.innerHTML = (running ? '<span class="xf-hint">You can keep working in other tabs.</span><span class="xf-sp"></span><button type="button" class="xf-btn" data-cancel>Cancel and roll back</button>'
+        : '<span class="xf-hint">Recorded in Query History for ' + TGT + '.</span><span class="xf-sp"></span>' +
+          (stopped ? '<button type="button" class="xf-btn" data-tomap>Back to Type mapping</button><button type="button" class="xf-btn pri" data-run>' + ic2('run') + 'Run again ' + kbd('Ctrl+Enter') + '</button>' : '<button type="button" class="xf-btn" data-tomap>Start over</button>'));
+    }
+
+    function paint() {
+      paintSteps();
+      if (S.step === 2) mapping(); else if (S.step === 3) review(); else runView();
+    }
+    function go(step) { if (S.run && !S.run.outcome) return; S.step = step; if (step < 4) S.run = null; paint(); const f = $('.xf-btn.pri:not([disabled]), [data-run], .xf-type[list]', box); if (f && step !== 2) f.focus({ preventScroll: true }); }
+
+    async function run() {
+      if (S.run && !S.run.outcome) return;
+      const fail = failT.checked;
+      const r = (S.run = { done: 0, ms: 0, outcome: null, cancel: false });
+      S.step = 4; paint();
+      const t0 = performance.now();
+      for (let done = 0; ;) {
+        await sleep(260);
+        if (S.run !== r) return;
+        r.ms = performance.now() - t0;
+        if (r.cancel) { r.outcome = 'cancelled'; break; }
+        const next = Math.min(ROWS, done + BATCH);
+        if (fail && next >= FAIL_ROW) { r.done = done; r.outcome = 'failed'; break; }
+        done = r.done = next;
+        if (done >= ROWS) { r.outcome = 'finished'; break; }
+        runView();
+      }
+      r.ms = Math.max(r.ms, 1);
+      runView();
+      const f = $('.xf-btn.pri[data-run], [data-tomap]', box); if (f) f.focus({ preventScroll: true });
+    }
+
+    box.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b || b.disabled) return;
+      if (b.dataset.notes) { S.notesOnly = b.dataset.notes === '1'; paint(); }
+      else if ('next' in b.dataset) go(3);
+      else if ('back' in b.dataset) go(2);
+      else if ('tomap' in b.dataset) go(2);
+      else if ('run' in b.dataset) run();
+      else if ('cancel' in b.dataset) { if (S.run) S.run.cancel = true; }
+      else if ('copy' in b.dataset || 'copyerr' in b.dataset) {
+        const text = 'copy' in b.dataset ? sqlText() : $('.xf-ban.bad > span', box).textContent;
+        const lab = $('span', b);
+        const done = () => { lab.textContent = 'Copied'; };
+        if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => undefined);
+      }
+    });
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        if (S.step === 2 && !blocked()) go(3); else if (S.step === 3 || (S.step === 4 && S.run && S.run.outcome && S.run.outcome !== 'finished')) run();
+      } else if (e.key === 'ArrowLeft' && e.altKey && S.step === 3) { e.preventDefault(); go(2); }
+    });
+    paint();
+    return { pick: (v) => { S.type = v; paint(); }, go, run };
+  })();
 
   /* ======================= the job slices ======================= */
   const DATA = K.DATA || null, T = K.T || null;
@@ -355,7 +332,7 @@
     let h;
     if (v === 'backup') {
       h = '<div class="dj-head"><b>freight-2026-10-16.sql</b><span class="dj-sp"></span><span>Contura SQL script, from freight-prod</span></div><div class="dj-bd"><div class="dj-cols"><pre class="dj-lines" tabindex="0" aria-label="Header of the backup file">';
-      ['-- Contura backup, format 1', '-- made-by: Contura 0.7.0', '-- dialect: PostgreSQL', '-- server-version: 16.4', '-- database: freight', '-- schemas: billing', '-- taken-at: 2026-10-16T22:00:00Z', '-- not-included: extension pgcrypto, large objects,', '--   grants, roles']
+      ['-- Contura backup, format 1', '-- made-by: Contura 1.0.0', '-- dialect: PostgreSQL', '-- server-version: 16.4', '-- database: freight', '-- schemas: billing', '-- taken-at: 2026-10-16T22:00:00Z', '-- not-included: extension pgcrypto, large objects,', '--   grants, roles']
         .forEach((l) => { h += '<span class="c"' + A + '>' + esc(l) + '</span>'; });
       h += '<span' + A + '><span class="k">CREATE SCHEMA</span> billing;</span></pre><div class="dj-bd" style="padding:0">';
       h += '<p class="dj-cap"' + A + '>Not included</p><ul class="dj-list"' + A + '><li>The pgcrypto extension</li><li>Large objects</li><li>Grants and roles</li></ul>';

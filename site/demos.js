@@ -82,6 +82,19 @@ div.ed:focus-within{box-shadow:inset 0 0 0 1px var(--accent)}
 .dg .def{color:var(--subtle);font-style:italic}
 .dg .gr.d > span.editing{padding:0}
 .dg input.ce{all:unset;box-sizing:border-box;width:100%;height:100%;padding:0 8px;background:var(--surface);color:var(--text);font:inherit;box-shadow:inset 0 0 0 2px var(--accent);border-radius:4px}
+/* date picker under an editing date cell: the app's cell-picker (month calendar, Alt+Down to enter, click picks) */
+.cp{position:absolute;z-index:20;width:264px;box-sizing:border-box;padding:8px;display:flex;flex-direction:column;gap:8px;background:var(--raised);border:1px solid var(--border);border-radius:8px;box-shadow:var(--sh2);animation:rin .2s cubic-bezier(.16,1,.3,1)}
+.cp .ch{display:flex;align-items:center;justify-content:space-between}
+.cp .ch b{font-weight:600}
+.cp .cs{width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;border-radius:4px;color:var(--muted);cursor:pointer}
+.cp .cs:hover{background:var(--hover)}
+.cp table{width:100%;border-collapse:separate;border-spacing:2px}
+.cp th{height:24px;font-size:12px;font-weight:400;color:var(--subtle);text-align:center}
+.cp td.d{height:28px;border-radius:4px;text-align:center;font-variant-numeric:tabular-nums;cursor:pointer;outline:none}
+.cp td.d:hover{background:var(--hover)}
+.cp td.d:focus-visible{box-shadow:inset 0 0 0 2px var(--accent)}
+.cp td.now{box-shadow:inset 0 0 0 1px var(--bstrong)}
+.cp td.on,.cp td.on:hover{background:var(--accent);color:var(--ink);font-weight:600}
 .ebar{min-height:40px;flex-shrink:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 8px 6px 10px;border-top:1px solid var(--bsub);background:var(--panel);animation:rin .45s cubic-bezier(.16,1,.3,1)}
 .ebar .es{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1 1 140px}
 .b-prod{height:24px;padding:0 6px 0 10px;display:inline-flex;align-items:center;gap:6px;background:var(--prod);color:var(--ink);font-weight:600;border-radius:4px;white-space:nowrap}
@@ -608,6 +621,7 @@ WHERE status = 'open' AND issued_at < '2026-09-01';
     }
     const tpl = '44px 72px 108px 132px 112px 112px minmax(84px,1fr)';
     function render() {
+      const oldCp = pane.querySelector('.cp'); if (oldCp) oldCp.remove();
       const head = '<div class="gr h" role="row" style="grid-template-columns:' + tpl + '"><span></span>' + COLS.map((c) => '<span class="' + (c.num ? 'num' : '') + '" role="columnheader"><span class="hc"><span class="hn">' + c.n + '</span><span class="ht">' + c.t + '</span></span></span>').join('') + '</div>';
       dg.innerHTML = head + rows.map((r, ri) => '<div class="gr d' + (r.add ? ' add' : '') + (r.del ? ' del' : '') + '" role="row" style="grid-template-columns:' + tpl + '" data-r="' + ri + '"><span class="rn">' + (r.add ? '+' : r.del ? '-' : ri + 1) + '</span>' +
         r.v.map((v, ci) => {
@@ -637,13 +651,82 @@ WHERE status = 'open' AND issued_at < '2026-09-01';
         cell.classList.add('editing');
         cell.innerHTML = '<input class="ce" aria-label="' + COLS[editing.c].n + '" value="' + esc(editing.val) + '">';
         const inp = cell.firstChild; inp.focus(); inp.select();
+        const isDate = COLS[editing.c].t === 'date';
+        if (isDate) { inp.setAttribute('aria-haspopup', 'dialog'); inp.setAttribute('aria-expanded', 'true'); datePicker(inp, cell); }
         inp.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); commit(inp.value); }
+          if (isDate && e.altKey && e.key === 'ArrowDown') { e.preventDefault(); const d = pane.querySelector('.cp td[tabindex="0"]'); d && d.focus(); }
+          else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); commit(inp.value); }
           else if (e.key === 'Escape') { e.preventDefault(); editing = null; render(); dg.focus(); }
           e.stopPropagation();
         });
-        inp.addEventListener('blur', () => { if (editing) commit(inp.value, true); });
+        inp.addEventListener('blur', (e) => { const cp = pane.querySelector('.cp'); if (cp && cp.contains(e.relatedTarget)) return; if (editing) commit(inp.value, true); });
       }
+    }
+    // The app's date picker (cellPickers/DatePicker): the text box leads, arrows move a day or a week, PageUp and
+    // PageDown a month, Home and End the week's ends, Enter picks and moves down, a click picks, Esc goes back.
+    const pad = (n) => String(n).padStart(2, '0');
+    const iso = (d) => d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate());
+    const parseDay = (t) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t.trim()); if (!m) return null; const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); return iso(d) === t.trim() ? d : null; };
+    const todayUTC = () => { const n = new Date(); return new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate())); };
+    const addD = (d, n) => new Date(d.getTime() + n * 864e5);
+    const addM = (d, n) => { const y = d.getUTCFullYear(), m = d.getUTCMonth() + n, last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate(); return new Date(Date.UTC(y, m, Math.min(d.getUTCDate(), last))); };
+    const WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    function datePicker(inp, cell) {
+      const cp = doc.createElement('div');
+      cp.className = 'cp'; cp.setAttribute('role', 'dialog'); cp.setAttribute('aria-label', 'Pick a date for ' + COLS[editing.c].n);
+      pane.appendChild(cp);
+      let active = parseDay(inp.value) || todayUTC();
+      function paintCal(focus) {
+        const value = parseDay(inp.value), now = todayUTC();
+        const title = active.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+        const first = new Date(Date.UTC(active.getUTCFullYear(), active.getUTCMonth(), 1)), days = new Date(Date.UTC(active.getUTCFullYear(), active.getUTCMonth() + 1, 0)).getUTCDate();
+        let h = '<div class="ch"><span class="cs" data-step="-1" role="button" aria-label="Previous month" title="Previous month (PageUp)">' + ic('u-chev', 16, 'ui', 'transform:rotate(90deg)') + '</span><b aria-live="polite">' + title + '</b><span class="cs" data-step="1" role="button" aria-label="Next month" title="Next month (PageDown)">' + ic('u-chev', 16, 'ui', 'transform:rotate(-90deg)') + '</span></div>';
+        h += '<table role="grid" aria-label="' + title + '"><thead><tr>' + WD.map((w) => '<th scope="col" abbr="' + w + '">' + w.slice(0, 2) + '</th>').join('') + '</tr></thead><tbody><tr>';
+        const lead = first.getUTCDay();
+        for (let i = 0; i < lead; i++) h += '<td></td>';
+        for (let n = 1; n <= days; n++) {
+          const d = new Date(Date.UTC(active.getUTCFullYear(), active.getUTCMonth(), n)), k = iso(d);
+          const on = value && iso(value) === k, isNow = iso(now) === k, act = n === active.getUTCDate();
+          h += '<td class="d' + (on ? ' on' : '') + (isNow ? ' now' : '') + '" role="gridcell" data-day="' + k + '" tabindex="' + (act ? 0 : -1) + '" aria-selected="' + !!on + '"' + (isNow ? ' aria-current="date"' : '') + ' aria-label="' + d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) + '">' + n + '</td>';
+          if ((lead + n) % 7 === 0 && n < days) h += '</tr><tr>';
+        }
+        h += '</tr></tbody></table>';
+        cp.innerHTML = h;
+        if (focus) { const d = cp.querySelector('td[tabindex="0"]'); d && d.focus(); }
+        place();
+      }
+      function place() {
+        const pr = pane.getBoundingClientRect(), cr = cell.getBoundingClientRect(), H = cp.offsetHeight, Wd = cp.offsetWidth;
+        let top = cr.bottom - pr.top + 4;
+        if (top + H > pr.height - 4) top = Math.max(4, cr.top - pr.top - H - 4);
+        cp.style.top = top + 'px';
+        cp.style.left = Math.max(4, Math.min(cr.left - pr.left, pr.width - Wd - 4)) + 'px';
+      }
+      const pick = (k, down) => { inp.value = k; const r = editing && editing.r; commit(k); if (down && r !== null && r + 1 < rows.length) { sel = { r: r + 1, c: sel.c }; markSel(); } };
+      cp.addEventListener('mousedown', (e) => e.preventDefault());
+      cp.addEventListener('click', (e) => {
+        const st = e.target.closest('[data-step]');
+        if (st) { active = addM(active, +st.dataset.step); paintCal(cp.contains(sr.activeElement)); return; }
+        const d = e.target.closest('td[data-day]'); if (d) pick(d.dataset.day, false);
+      });
+      cp.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        const moves = { ArrowLeft: () => addD(active, -1), ArrowRight: () => addD(active, 1), ArrowUp: () => addD(active, -7), ArrowDown: () => addD(active, 7), PageUp: () => addM(active, e.shiftKey ? -12 : -1), PageDown: () => addM(active, e.shiftKey ? 12 : 1), Home: () => addD(active, -active.getUTCDay()), End: () => addD(active, 6 - active.getUTCDay()) };
+        if (moves[e.key] && !e.altKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); active = moves[e.key](); paintCal(true); }
+        else if (e.key === 'Enter') { e.preventDefault(); pick(iso(active), true); }
+        else if (e.key === ' ') { e.preventDefault(); inp.value = iso(active); paintCal(true); }
+        else if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); inp.focus(); }
+      });
+      const leave = () => { if (editing && cp.isConnected) commit(inp.value, true); };
+      cp.addEventListener('focusout', (e) => {
+        const to = e.relatedTarget;
+        if (to) { if (!cp.contains(to) && to !== inp) leave(); return; }
+        // A re-painted day drops focus for a moment; leave only when it did not come back.
+        setTimeout(() => { const now = sr.activeElement; if (!now || (!cp.contains(now) && now !== inp)) leave(); }, 0);
+      });
+      cp.place = place;
+      inp.addEventListener('input', () => { const d = parseDay(inp.value); if (d) { active = d; paintCal(false); } });
+      paintCal(false);
     }
     function markSel() {
       dg.querySelectorAll('.sel').forEach((x) => x.classList.remove('sel'));
@@ -739,6 +822,7 @@ WHERE status = 'open' AND issued_at < '2026-09-01';
       if (!cell || !rowEl || editing) return;
       sel = { r: +rowEl.dataset.r, c: +cell.dataset.c }; markSel(); dg.focus({ preventScroll: true });
     });
+    dg.addEventListener('scroll', () => { const cp = pane.querySelector('.cp'); if (cp && cp.place) cp.place(); });
     dg.addEventListener('dblclick', (e) => { if (e.target.closest('[data-c]')) edit(); });
     dg.addEventListener('keydown', (e) => {
       if (editing) return;

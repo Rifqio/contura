@@ -1,4 +1,4 @@
-/* Contura site: shared shell. The Annotated Margin: a cream editor page on hairline rails, Harbor Teal
+/* Contura site: shared shell. The Annotated Margin (DESIGN.md): a cream editor page on hairline rails, Harbor Teal
    for action, Pending Rust for waiting, Bricolage beside JetBrains Mono, one easing. */
 
 /* ---------- tokens ---------- */
@@ -236,30 +236,8 @@ figcaption, .cap { font-family: var(--f-mono); font-size: 0.75rem; color: var(--
 /* ---------- app windows ---------- */
 .frame { position: relative; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--panel); box-shadow: var(--shadow-frame); max-width: 100%; }
 
-/* ---------- code block with line numbers ---------- */
-.code { background: var(--panel); border-radius: 10px; overflow-x: auto; font-family: var(--f-mono); font-size: 0.875rem; line-height: 1.75; padding: 14px 0; }
-.code ol { list-style: none; margin: 0; padding: 0; counter-reset: l; }
-.code li { counter-increment: l; display: grid; grid-template-columns: 44px 1fr; white-space: pre; padding-right: 18px; }
-.code li::before { content: counter(l); color: var(--muted); text-align: right; padding-right: 16px; }
-.code li.w { background: color-mix(in srgb, var(--pend) 14%, transparent); box-shadow: inset 3px 0 0 var(--pend); }
-.code .k { color: var(--kw); } .code .s { color: var(--str); } .code .c { color: var(--muted); font-style: italic; } .code .n { color: var(--num); } .code .t { color: var(--type); font-style: italic; }
-
-/* ---------- hairline cells (lists of peers), pulled out to the rails ---------- */
-.cells { list-style: none; margin: 0 calc(-1 * var(--rail-in)); padding: 0; display: grid; border-top: 1px solid var(--rule); }
-.cells > li { padding: 26px var(--rail-in) 30px; border-bottom: 1px solid var(--rule); min-width: 0; }
-.cells > li + li { border-left: 1px solid var(--rule); }
-.cells h3 { font-size: var(--t-m); line-height: 1.15; letter-spacing: -0.02em; }
-.cells p { margin-top: 10px; color: var(--muted); font-size: 0.9375rem; line-height: 1.5; max-width: 46ch; }
-.cells .no { font-family: var(--f-mono); font-size: 0.75rem; color: var(--muted); display: block; margin-bottom: 14px; font-variant-numeric: tabular-nums; }
-
 /* ---------- notes ---------- */
 .dl-box .note { font-family: var(--f-mono); font-size: 0.8125rem; color: var(--pend); border-left: 2px solid var(--pend); padding: 4px 0 4px 10px; max-width: 44ch; }
-
-/* ---------- live dot ---------- */
-.live { display: inline-flex; align-items: center; gap: 10px; }
-.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: livedot 2.4s var(--ease) infinite; flex: none; }
-@keyframes livedot { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent); } 70%, 100% { box-shadow: 0 0 0 8px transparent; } }
-@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 
 /* ---------- download block ---------- */
 .finale { padding-block: var(--section) clamp(48px, 6vw, 80px); }
@@ -311,58 +289,10 @@ figcaption, .cap { font-family: var(--f-mono); font-size: 0.75rem; color: var(--
 .hero-act .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 @media (max-width: 860px) { .hero-row .lede, .hero-row .hero-act { grid-column: 1 / -1; } }
 
-/* ---------- step cells (three across) ---------- */
-.cells.three { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: clamp(48px, 6vw, 80px); }
-@media (max-width: 860px) { .cells.three { grid-template-columns: minmax(0, 1fr); } .cells.three > li + li { border-left: 0; } }
-.cells a.cell-link { text-decoration: none; display: block; }
-.cells.jump > li { padding: 0; }
-.cells.jump a { text-decoration: none; display: grid; gap: 8px; padding: 22px var(--rail-in) 26px; height: 100%; box-sizing: border-box; transition: background-color 0.45s var(--ease); }
-.cells.jump a > * { transition: transform 0.45s var(--ease); }
-.cells.jump b { font-family: var(--f-display); font-size: 1.125rem; font-weight: 700; letter-spacing: -0.01em; }
-.cells.jump span { color: var(--muted); font-size: 0.9375rem; line-height: 1.45; }
-.cells.jump .no { margin: 0; }
-@media (hover: hover) { .cells.jump a:hover { background: var(--panel); } .cells.jump a:hover > * { transform: translateX(6px); } }
-@media (prefers-reduced-motion: reduce) { .cells.jump a, .cells.jump a > * { transition: none; } }
-
-/* ---------- bento: an asymmetric grid of hairline cells, 1px gaps drawn in --rule, flat ---------- */
-.bento { list-style: none; margin: clamp(48px, 6vw, 80px) calc(-1 * var(--rail-in)) 0; padding: 0; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 1px; background: var(--rule); border-block: 1px solid var(--rule); }
-.bento > li { background: var(--ground); min-width: 0; display: flex; }
-.bento .b-query { grid-column: 1 / span 7; grid-row: 1 / span 2; }
-.bento .b-model { grid-column: 8 / span 5; }
-.bento .b-data { grid-column: 8 / span 5; }
-.bento .b-ai { grid-column: 1 / span 5; }
-.bento .b-safe { grid-column: 6 / span 7; }
-.bento a { color: inherit; flex: 1; display: flex; flex-direction: column; gap: 12px; padding: clamp(24px, 3vw, 40px) var(--rail-in) clamp(28px, 3vw, 40px); text-decoration: none; transition: background-color 0.45s var(--ease); min-width: 0; }
-.bento .no { font-family: var(--f-mono); font-size: 0.75rem; letter-spacing: 0.06em; color: var(--muted); display: flex; gap: 8px; font-variant-numeric: tabular-nums; }
-.bento .no i { font-style: normal; color: var(--pend); }
-.bento h3 { font-size: var(--t-m); line-height: 1.12; letter-spacing: -0.02em; max-width: 22ch; }
-.bento .b-query h3 { font-size: var(--t-l); line-height: 1.05; letter-spacing: -0.03em; }
-.bento p { color: var(--muted); font-size: 0.9375rem; line-height: 1.5; max-width: 48ch; }
-.bento .vis { margin-top: auto; padding-top: 12px; min-width: 0; }
-.bento .go { font-family: var(--f-mono); font-size: var(--t-ui); color: var(--ink); display: inline-flex; align-items: center; gap: 8px; padding-top: 6px; }
-.bento .go svg { width: 14px; height: 14px; color: var(--accent); transition: transform 0.45s var(--ease); }
-.bento .chips { display: flex; flex-wrap: wrap; gap: 6px; font-family: var(--f-mono); font-size: 0.75rem; }
-.bento .chips span:not(.pill) { border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; color: var(--ink); background: var(--ground); }
-.bento .meter { display: grid; gap: 6px; font-family: var(--f-mono); font-size: 0.75rem; color: var(--muted); }
-.bento .meter div { display: grid; grid-template-columns: 34px 1fr; gap: 12px; align-items: center; }
-.bento .meter i { height: 6px; border-radius: 1px; background: linear-gradient(90deg, var(--accent) 0 var(--f), color-mix(in srgb, var(--muted) 30%, transparent) var(--f) 100%); -webkit-mask: repeating-linear-gradient(90deg, #000 0 10px, transparent 10px 12px); mask: repeating-linear-gradient(90deg, #000 0 10px, transparent 10px 12px); }
-@media (hover: hover) { .bento a:hover { background: var(--panel); } .bento a:hover .go svg { transform: translateX(4px); } }
-@media (prefers-reduced-motion: reduce) { .bento a, .bento .go svg { transition: none; } }
-@media (max-width: 1000px) {
-  .bento .b-query, .bento .b-model, .bento .b-data, .bento .b-ai, .bento .b-safe { grid-column: 1 / -1; grid-row: auto; }
-  .bento .b-model, .bento .b-data { grid-column: span 6; }
-}
-@media (max-width: 640px) { .bento .b-model, .bento .b-data { grid-column: 1 / -1; } }
-
 /* ======================================================================================================
-   Added 2026-10-21 for safety.html, shared by every page: .cells.four, .sql, .duo, the held write, the
-   folder tree, design frames (frames.js) and the playback bar (playback.js). Tokens only.
+   Added 2026-10-21 for safety.html, now on the single launch page: .sql and the held write.
+   Tokens only.
    ====================================================================================================== */
-
-/* ---------- four jump cells ---------- */
-.cells.four { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: clamp(48px, 6vw, 80px); }
-@media (max-width: 1100px) { .cells.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cells.four > li:nth-child(3) { border-left: 0; } }
-@media (max-width: 860px) { .cells.four { grid-template-columns: minmax(0, 1fr); } .cells.four > li + li { border-left: 0; } }
 
 /* ---------- a SQL block with line numbers (writes carry the Pending Rust band) ---------- */
 .sql { background: var(--panel); border-radius: 10px; overflow-x: auto; font-family: var(--f-mono); font-size: 0.875rem; line-height: 1.75; padding: 14px 0; }
@@ -372,15 +302,6 @@ figcaption, .cap { font-family: var(--f-mono); font-size: 0.75rem; color: var(--
 .sql li.w { background: color-mix(in srgb, var(--pend) 12%, transparent); box-shadow: inset 3px 0 0 var(--pend); }
 .sql .k { color: var(--kw); } .sql .s { color: var(--str); } .sql .c { color: var(--muted); font-style: italic; } .sql .n { color: var(--num); }
 .sql:focus-visible { outline-offset: -2px; }
-
-/* ---------- two plaques side by side (Production, Read-only) ---------- */
-.duo { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: clamp(40px, 5vw, 64px) calc(-1 * var(--rail-in)) 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
-.duo > div { padding: clamp(24px, 3vw, 40px) var(--rail-in); min-width: 0; }
-.duo > div + div { border-left: 1px solid var(--rule); }
-.duo h3 { font-size: var(--t-m); line-height: 1.15; letter-spacing: -0.02em; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-.duo p { margin-top: 10px; max-width: 46ch; color: var(--muted); font-size: 0.9375rem; line-height: 1.5; }
-.duo p b { color: var(--ink); font-weight: 600; }
-@media (max-width: 860px) { .duo { grid-template-columns: minmax(0, 1fr); } .duo > div + div { border-left: 0; border-top: 1px solid var(--rule); } }
 
 /* ---------- the held write: Production holds (rust wash), Read-only blocks (neutral) ---------- */
 .hold-fig { margin-top: clamp(40px, 5vw, 64px); max-width: 820px; }
@@ -402,65 +323,8 @@ figcaption, .cap { font-family: var(--f-mono); font-size: 0.75rem; color: var(--
 .btn.sm { min-height: 44px; padding: 8px 18px; font-size: 0.9375rem; }
 @media (prefers-reduced-motion: reduce) { .hold-st { transition: none; } }
 
-/* ---------- the portable folder and the vault outside it ---------- */
-.move { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); align-items: start; }
-.move .ctl { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
-.move .ctl .ghost { min-height: 44px; }
-.move [data-move-status] { font-family: var(--f-mono); font-size: 0.75rem; color: var(--muted); max-width: 60ch; }
-.tree { font-family: var(--f-mono); font-size: 0.875rem; background: var(--panel); border-radius: 10px; padding: 18px 20px 20px; overflow-x: auto; min-width: 0; }
-.tree .tt { display: flex; justify-content: space-between; gap: 12px; font-size: 0.75rem; color: var(--muted); padding-bottom: 12px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
-.tree .tt b { color: var(--ink); font-weight: 600; }
-.tree ul { list-style: none; margin: 0; padding: 0; }
-.tree ul ul { margin-left: 9px; padding-left: 18px; border-left: 1px solid var(--line); }
-.tree li { padding: 4px 0; }
-.tree .row { display: flex; justify-content: space-between; gap: 16px; white-space: nowrap; border-radius: 4px; padding: 0 6px; margin: 0 -6px; transition: background-color 0.45s var(--ease); }
-.tree .row span:last-child { color: var(--muted); font-size: 0.8125rem; }
-.tree .dir { color: var(--accent); font-weight: 700; }
-.tree .vault { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); }
-.tree .vault .dir { color: var(--pend); }
-.tree.dest { border: 1px dashed var(--line); background: var(--ground); }
-.tree.dest .body { transition: opacity 0.6s var(--ease), transform 0.8s var(--ease); }
-.tree.dest .empty { color: var(--muted); font-size: 0.8125rem; padding: 6px 0; }
-.move:not(.is-copied) .tree.dest .body { opacity: 0; transform: translateY(8px); visibility: hidden; height: 0; overflow: hidden; }
-.move.is-copied .tree.dest .empty { display: none; }
-.move.is-copied .tree.dest { border-style: solid; background: var(--panel); }
-.move.hl-conn [data-k="conn"] .row, .move.hl-vault [data-k="vault"] .row { background: color-mix(in srgb, var(--accent) 14%, transparent); }
-@media (max-width: 860px) { .move { grid-template-columns: minmax(0, 1fr); } }
-@media (max-width: 480px) {
-  .tree { font-size: 0.8125rem; padding: 14px 14px 16px; }
-  .tree ul ul { padding-left: 14px; }
-  .tree .row { flex-wrap: wrap; column-gap: 10px; }
-  .tree .row span:last-child { margin-left: auto; font-size: 0.75rem; }
-}
-@media (prefers-reduced-motion: reduce) { .tree .row, .tree.dest .body { transition: none; } }
-
-/* ---------- design frames (frames.js): the host keeps a 16:10 place until its picture loads ---------- */
-.fr-host { display: block; }
-.fr-host:not(.is-mounted) { aspect-ratio: 16 / 10; background: var(--panel); border-radius: 10px; }
-.fr-tabs .seg button { min-height: 36px; }
-@media (pointer: coarse) { .fr-tabs .seg button, .win-ctl .seg button { min-height: 44px; } }
-
-/* ---------- playback bar (playback.js) ---------- */
-.pb { margin-top: 14px; font-family: var(--f-mono); font-size: 0.75rem; color: var(--muted); }
-.pb [hidden] { display: none !important; }
-.pb-watch { appearance: none; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 14px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 6px; background: var(--ground); color: var(--ink); font: 500 var(--t-ui)/1.2 var(--f-mono); cursor: pointer; transition: border-color 0.3s var(--ease); }
-.pb-watch svg { width: 12px; height: 12px; color: var(--accent); flex: none; }
-@media (hover: hover) { .pb-watch:hover { border-color: var(--accent); } }
-.pb-full { display: flex; align-items: center; gap: 12px; padding: 6px 14px 6px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-.pb-btns { display: flex; gap: 4px; flex: none; }
-.pb-b { appearance: none; width: 44px; height: 44px; display: inline-grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--ground); color: var(--ink); cursor: pointer; transition: border-color 0.3s var(--ease), background-color 0.3s var(--ease); }
-.pb-b svg { width: 14px; height: 14px; }
-.pb-b[data-pb="toggle"], .pb-b[data-pb="next"] { background: var(--ink); border-color: var(--ink); color: var(--ground); }
-@media (hover: hover) { .pb-b:hover { border-color: var(--accent); } }
-.pb-text { flex: 1; min-width: 0; display: grid; gap: 8px; }
-.pb-cap { color: var(--ink); font-size: 0.8125rem; line-height: 1.45; min-height: 2.9em; display: flex; align-items: center; }
-.pb[data-state="stopped"] .pb-cap, .pb[data-state="done"] .pb-cap { color: var(--muted); }
-.pb-prog { list-style: none; margin: 0; padding: 0; display: flex; gap: 4px; }
-.pb-prog li { flex: 1; height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--muted) 28%, transparent); transition: background-color 0.4s var(--ease); }
-.pb-prog li.on { background: var(--accent); }
-.pb-prog li.cur { background: var(--pend); }
-@media (max-width: 480px) { .pb-full { flex-wrap: wrap; padding: 6px; } .pb-text { flex-basis: 100%; padding: 0 6px 4px; } }
-@media (prefers-reduced-motion: reduce) { .pb-watch, .pb-b, .pb-prog li { transition: none; } }
+/* controls under a window: 44 px targets on touch screens */
+@media (pointer: coarse) { .win-ctl .seg button { min-height: 44px; } }
 
 /* Added 2026-10-21 (AI page build): on phones under 400px the hero headline steps down a little, so two-word lines
    such as "Production asks. Read-only refuses." stay within three lines at 390. */
@@ -468,9 +332,6 @@ figcaption, .cap { font-family: var(--f-mono); font-size: 0.75rem; color: var(--
 
 /* two download buttons side by side, wrapping on narrow screens */
 .dl-btns { display: flex; flex-wrap: wrap; gap: 12px; }
-
-/* the playback bar has no buttons now (Next only under reduced motion): the caption sits flush */
-.pb-full { padding-left: 14px; }
 
 /* download buttons: no arrow, centred label; on phones Windows and Linux sit side by side and the demo link drops under them */
 .btn[data-download] { padding: 10px 22px; justify-content: center; }

@@ -1,0 +1,196 @@
+/* Contura site, index.html #boards, "Stuck on a diagram? Ask.": the diagram tab's side panel (Editor and Assistant on
+   a sliding switch) docked beside a small piece of billing.flow, as the app draws them. Mirrors the app's
+   flow/SidePanel.tsx, flow/ai/DiagramAssistant.tsx, ProposalCard.tsx and board/ReviewBar.tsx, styled after
+   styles/flow-tab.css and flow-board.css in the app replica's tokens (kit.js APP_CSS). Everything is under .la-win,
+   and no class here uses the site's .btn, .seg or .chip. Without JS the panel shows the proposal waiting, as written. */
+
+.la-win {
+  --a-panel: #efeddc; --a-surface: #fffbeb; --a-hover: #e2deca; --a-active: #dedccf; --a-bsub: #e2deca; --a-border: #cecbc0; --a-bstrong: #8f8a73;
+  --a-text: #1f1f1f; --a-muted: #48432f; --a-subtle: #6c664b; --a-faint: #857f66; --a-accent: #644ac9; --a-asub: #cfcfde; --a-atext: #5a41bf;
+  --a-ink: #fffbeb; --a-ok: #14710a; --a-oksub: #e1ecc9;
+  --a-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  margin: 0; font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif; font-size: 13px; line-height: 18px; color: var(--a-text); text-align: left;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .la-win {
+    --a-panel: #21222c; --a-surface: #282a36; --a-hover: #343746; --a-active: #3c3f52; --a-bsub: #191a21; --a-border: #3b3d4f; --a-bstrong: #6272a4;
+    --a-text: #f8f8f2; --a-muted: #c7c8d3; --a-subtle: #a0a3ba; --a-faint: #6272a4; --a-accent: #bd93f9; --a-asub: #44475a; --a-atext: #c9a6ff;
+    --a-ink: #191a21; --a-ok: #50fa7b; --a-oksub: #233b2c;
+  }
+}
+:root[data-theme="dark"] .la-win {
+  --a-panel: #21222c; --a-surface: #282a36; --a-hover: #343746; --a-active: #3c3f52; --a-bsub: #191a21; --a-border: #3b3d4f; --a-bstrong: #6272a4;
+  --a-text: #f8f8f2; --a-muted: #c7c8d3; --a-subtle: #a0a3ba; --a-faint: #6272a4; --a-accent: #bd93f9; --a-asub: #44475a; --a-atext: #c9a6ff;
+  --a-ink: #191a21; --a-ok: #50fa7b; --a-oksub: #233b2c;
+}
+.la-fig { grid-column: 1 / -1; min-width: 0; margin: 0; }
+/* the words sit above the window, the heading left and the copy right, as the section's head does */
+.lb-help .lb-help-a { grid-column: 1 / -1; order: -1; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); align-items: start; }
+.lb-help .lb-help-a .lb-h3 { grid-column: 1 / span 6; }
+.lb-help .lb-help-a .copy, .lb-help .lb-help-a .meta { grid-column: 8 / span 5; }
+.lb-help .lb-help-a .meta { margin-top: 16px; }
+.la-fig .lb-bar { font-family: var(--f-mono); }
+.la-fig > figcaption { margin-top: 12px; }
+.la-win :focus-visible { outline: 2px solid var(--a-accent); outline-offset: 1px; border-radius: 4px; }
+.la-i { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.la-sp { flex: 1; }
+.la-kbd { display: inline-flex; align-items: center; height: 18px; padding: 0 5px; box-sizing: border-box; border: 1px solid var(--a-border); border-radius: 4px; background: var(--a-surface); color: var(--a-muted); font: 11px/16px var(--a-mono); white-space: nowrap; flex: none; }
+
+/* the tab: the side panel on the left of the drawing, as flow-tab lays them out */
+.la-body { display: grid; grid-template-columns: 448px minmax(0, 1fr); height: 700px; background: var(--bc-canvas); }
+.la-side { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--a-surface); border-right: 1px solid var(--a-border); }
+
+/* SidePanel: Editor and Assistant on a sliding switch, the hide button */
+.la-shead { display: flex; flex: none; align-items: center; gap: 2px; padding-right: 6px; background: var(--a-panel); border-bottom: 1px solid var(--a-bsub); }
+.la-switch { position: relative; display: grid; flex: 1; grid-template-columns: 1fr 1fr; min-width: 0; height: 44px; box-sizing: border-box; padding: 6px; }
+.la-thumb { position: absolute; top: 6px; bottom: 6px; left: 6px; width: calc(50% - 6px); background: var(--a-surface); border-radius: 6px; box-shadow: 0 0 0 1px var(--a-border), 0 1px 2px rgb(0 0 0 / 0.25); transition: transform 180ms cubic-bezier(.2, 0, 0, 1); }
+.la-switch.right .la-thumb { transform: translateX(100%); }
+.la-switch::after { content: ""; position: absolute; top: 14px; bottom: 14px; left: 50%; width: 1px; background: var(--a-border); }
+.la-tab { all: unset; position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; padding: 0 10px; box-sizing: border-box; border-radius: 6px; color: var(--a-subtle); cursor: pointer; white-space: nowrap; }
+.la-tab:hover { color: var(--a-text); }
+.la-tab.on { color: var(--a-text); font-weight: 600; }
+.la-tab.on .la-i { color: var(--a-accent); }
+.la-win .la-tab:focus-visible { outline-offset: -2px; border-radius: 6px; }
+.la-pcount { height: 18px; box-sizing: border-box; padding: 0 5px; border-radius: 4px; background: var(--a-active); color: var(--a-muted); font-size: 11px; font-weight: 600; line-height: 18px; font-variant-numeric: tabular-nums; }
+.la-pdot { width: 6px; height: 6px; border-radius: 3px; background: var(--a-accent); animation: la-live 1200ms cubic-bezier(.4, 0, .6, 1) infinite alternate; }
+@keyframes la-live { from { opacity: 1; } to { opacity: 0.35; } }
+.la-ib { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; color: var(--a-subtle); flex: none; }
+.la-pane { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.la-pane[hidden] { display: none; }
+
+/* DiagramAssistant: head, conversation, composer */
+.la-ahead { display: flex; flex: none; align-items: center; gap: 4px; height: 32px; padding: 0 4px; border-bottom: 1px solid var(--a-bsub); }
+.la-ahead .la-ib { width: 24px; height: 24px; }
+.la-chat { display: flex; flex: 1; flex-direction: column; gap: 12px; min-height: 0; padding: 14px 14px 8px; overflow-y: auto; scrollbar-width: thin; overscroll-behavior: contain; }
+.la-chat > * { flex: none; }
+.la-umsg { align-self: flex-end; max-width: 86%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px; background: var(--a-active); white-space: pre-wrap; }
+.la-amsg { display: flex; flex-direction: column; gap: 8px; line-height: 19px; }
+.la-p { margin: 0; white-space: pre-wrap; }
+.la-p code { padding: 0 3px; border-radius: 2px; background: var(--a-hover); font: 12px/1 var(--a-mono); }
+
+/* the app's flat buttons: pbtn2, pri, the link button and the 22 px icon button */
+.la-b { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border: 1px solid var(--a-border); border-radius: 4px; color: var(--a-text); font-size: 12px; white-space: nowrap; cursor: pointer; }
+button.la-b:hover { background: var(--a-hover); }
+button.la-b:active { transform: translateY(1px); }
+.la-b.pri { background: var(--a-accent); border-color: var(--a-accent); color: var(--a-ink); font-weight: 600; }
+button.la-b.pri:hover { background: var(--a-atext); border-color: var(--a-atext); }
+.la-b .la-kbd { background: transparent; border-color: currentColor; color: inherit; }
+.la-b[disabled] { cursor: default; opacity: 0.5; }
+.la-lnk { all: unset; padding: 2px 4px; border-radius: 4px; color: var(--a-atext); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+button.la-lnk:hover { text-decoration: underline; }
+.la-ib2 { all: unset; display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 4px; color: var(--a-subtle); cursor: pointer; }
+.la-ib2:hover { background: var(--a-hover); color: var(--a-text); }
+.la-ib2[aria-pressed="true"] { color: var(--a-text); }
+
+/* ProposalCard: the changes grouped by frame, a + per new line, Accept and Reject on each, the footer */
+.la-card { overflow: hidden; background: var(--a-panel); border: 1px solid var(--a-border); border-radius: 6px; }
+.la-card-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 6px 12px; }
+.la-card-title { flex: 1; font-weight: 600; }
+.la-group { border-top: 1px solid var(--a-bsub); }
+.la-group-head { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 2px 6px 2px 12px; background: var(--a-hover); font-size: 12px; }
+.la-group-title { flex: 1; min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.la-group-acts { display: flex; flex: none; gap: 2px; }
+.la-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 6px; align-items: center; min-height: 28px; padding: 2px 6px 2px 12px; font-size: 12px; line-height: 16px; }
+.la-mk { font: 600 12px/16px var(--a-mono); text-align: center; color: var(--a-ok); }
+.la-tx { overflow: hidden; color: var(--a-muted); font: 12px/16px var(--a-mono); text-overflow: ellipsis; white-space: nowrap; }
+.la-row.off .la-tx { opacity: 0.45; text-decoration: line-through; }
+.la-racts { display: flex; gap: 2px; }
+.la-card-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; padding: 8px; border-top: 1px solid var(--a-bsub); }
+.la-card-foot .la-acts { display: flex; gap: 6px; }
+.la-note { flex: 1 0 auto; padding-left: 4px; color: var(--a-subtle); font-size: 12px; white-space: nowrap; }
+.la-outcome { padding: 8px 12px 10px; border-top: 1px solid var(--a-bsub); color: var(--a-muted); font-size: 12px; line-height: 18px; }
+
+/* what landed: the summary, Undo and Show in the text */
+.la-landed { display: flex; flex-direction: column; gap: 6px; }
+.la-landed .la-p { display: flex; gap: 6px; align-items: baseline; }
+.la-landed .la-p .la-i { color: var(--a-ok); position: relative; top: 2px; }
+.la-landed-acts { display: flex; gap: 6px; }
+
+/* the composer, while the Ask works and while it waits */
+.la-composer { display: flex; flex: none; flex-direction: column; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--a-bsub); }
+.la-working { display: flex; align-items: center; gap: 8px; height: 30px; color: var(--a-subtle); font-size: 12px; }
+.la-working > span:first-child { flex: 1; }
+.la-crow { display: flex; align-items: center; gap: 6px; }
+.la-seg { display: inline-flex; gap: 2px; padding: 2px; background: var(--a-panel); border: 1px solid var(--a-border); border-radius: 6px; }
+.la-seg span { height: 18px; padding: 0 8px; border-radius: 4px; color: var(--a-muted); font-size: 12px; line-height: 18px; }
+.la-seg span.on { background: var(--a-asub); box-shadow: inset 0 0 0 1px var(--a-accent); color: var(--a-text); font-weight: 600; }
+.la-sends { display: flex; align-items: center; gap: 8px; min-height: 20px; color: var(--a-subtle); font-size: 12px; }
+.la-sends b { color: var(--a-muted); font-weight: 600; }
+.la-sends .la-x { color: var(--a-text); text-decoration: underline; }
+.la-cbox { display: flex; flex-direction: column; background: var(--a-panel); border: 1px solid var(--a-border); border-radius: 8px; }
+.la-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 8px 0; }
+.la-chip { display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 2px 0 8px; border-radius: 4px; background: var(--a-asub); font-size: 12px; }
+.la-chip .la-i { margin: 0 3px; color: var(--a-subtle); }
+.la-cin { height: 58px; box-sizing: border-box; padding: 9px 10px 2px; color: var(--a-faint); }
+.la-cbar { display: flex; align-items: center; gap: 6px; padding: 4px 6px 6px 10px; color: var(--a-faint); font-size: 11px; }
+.la-pill { display: inline-flex; align-items: center; height: 26px; padding: 0 9px; box-sizing: border-box; border: 1px solid var(--a-border); border-radius: 13px; background: var(--a-panel); color: var(--a-muted); font-size: 12px; white-space: nowrap; }
+.la-send { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; background: var(--a-active); color: var(--a-faint); }
+
+/* the Editor tab: the board's text from the invoice frame on, the new lines as the review shows them */
+.la-code { flex: 1; min-height: 0; overflow: auto; padding: 8px 0; font: 12px/20px var(--a-mono); }
+.la-ln { display: grid; grid-template-columns: 44px 18px minmax(0, 1fr); white-space: pre; }
+.la-ln .n { padding-right: 6px; color: var(--a-faint); text-align: right; font-variant-numeric: tabular-nums; }
+.la-ln .m { color: var(--a-ok); text-align: center; }
+.la-ln.add { background: color-mix(in srgb, var(--a-ok) 13%, transparent); }
+.la-ln.band { background: color-mix(in srgb, var(--a-accent) 16%, transparent); }
+.la-ln .k { color: var(--kw); }
+.la-ln .s { color: var(--str); }
+.la-efoot { display: flex; align-items: center; gap: 6px; flex: none; height: 30px; padding: 0 12px; border-top: 1px solid var(--a-bsub); color: var(--a-subtle); font-size: 12px; }
+.la-efoot .la-i { color: var(--a-ok); }
+
+/* the drawing: the invoice frame (selected, as the frame chip says), then the slot the refund frame lands in */
+.la-cv { position: relative; min-width: 0; min-height: 0; overflow: auto; padding: 20px; }
+.la-cv.is-working::after { content: ""; position: absolute; inset: 6px; border-radius: 10px; outline: 1.5px dashed var(--a-accent); pointer-events: none; }
+.la-frames { display: flex; flex-direction: column; gap: 52px; }
+.la-frames .bf { flex: none; }
+.la-frames .bf .bd-svg { max-width: calc(var(--vw) * 1px); margin: 4px 0 6px; }
+.la-frames { max-width: 600px; }
+.la-sel .bf-t { border-color: var(--a-accent); background: var(--a-asub); color: var(--bc-text); }
+.la-slot { position: relative; min-height: 1px; }
+.la-new { position: relative; }
+.la-new.is-new .bf, .la-new.is-new .bf-t { border-style: dashed; border-color: var(--a-accent); }
+.la-newtag { margin-left: 8px; padding: 0 6px; border-radius: 999px; background: var(--a-accent); color: var(--a-ink); font-size: 11px; font-weight: 600; line-height: 16px; }
+.la-new .bn rect { transition: stroke 0.4s var(--ease), fill 0.4s var(--ease); }
+.la-new.is-new .bn rect { stroke: var(--a-ok); stroke-dasharray: 5 4; fill: color-mix(in srgb, var(--a-ok) 10%, var(--bc-canvas)); }
+.la-new.is-new .bl { stroke: var(--a-ok); stroke-dasharray: 5 4; }
+.la-new.is-new .la-ahn { fill: var(--a-ok); }
+.la-new [data-gone] { display: none; }
+/* ReviewBar: above the top right of the frame it changes */
+.la-rbar { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 2; display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 12px; border: 1px solid var(--a-bstrong); border-radius: 8px; background: var(--a-surface); box-shadow: 0 4px 12px rgb(0 0 0 / 0.12), 0 1px 2px rgb(0 0 0 / 0.08); font-size: 12px; white-space: nowrap; }
+.la-rtext { margin-right: 6px; }
+/* just landed: ringed for a moment (the app's .fnode-airing) */
+.la-bf.la-airing { outline: 2px solid var(--a-accent); outline-offset: 4px; animation: la-fade 1800ms cubic-bezier(.4, 0, 1, 1) 600ms both; }
+@keyframes la-fade { from { outline-color: var(--a-accent); } to { outline-color: transparent; } }
+
+/* motion: what comes in rises a little and fades in once; what goes fades out */
+.la-in { animation: la-in 0.6s var(--ease) both; }
+@keyframes la-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.la-out { opacity: 0; transform: translateY(4px); transition: opacity 0.3s var(--ease), transform 0.3s var(--ease); }
+@media (prefers-reduced-motion: reduce) {
+  .la-in, .la-pdot, .la-bf.la-airing { animation: none; }
+  .la-out, .la-thumb, .la-new .bn rect { transition: none; }
+}
+.hx-rm .la-in, .hx-rm .la-pdot, .hx-rm .la-bf.la-airing { animation: none; }
+.hx-rm .la-out, .hx-rm .la-thumb, .hx-rm .la-new .bn rect { transition: none; }
+
+/* without JS the panel shows the whole proposal: nothing scrolls */
+html:not(.js) .la-body { height: auto; }
+html:not(.js) .la-chat { overflow: visible; height: auto; }
+
+/* the part's layout: the window and the words beside it, stacked below 1280 px */
+@media (max-width: 1100px) {
+  .lb-help .lb-help-a { display: block; }
+  .lb-help .lb-help-a .copy { max-width: 62ch; }
+  .la-body { grid-template-columns: 360px minmax(0, 1fr); }
+}
+@media (max-width: 900px) {
+  .la-body { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .la-cv { order: -1; padding: 12px; overflow: visible; border-bottom: 1px solid var(--a-border); }
+  .la-side { border-right: 0; }
+  .la-chat { height: 420px; flex: none; }
+  .la-code { height: 420px; flex: none; }
+  .la-frames { gap: 48px; }
+  .la-rbar { right: auto; left: 0; max-width: 100%; box-sizing: border-box; }
+  .la-rbar .la-kbd { display: none; }
+  .la-fig .lb-z { display: none; }
+}
