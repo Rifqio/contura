@@ -21,7 +21,7 @@ interface Props {
   busy: boolean;
   /** The Connections, for each row's tag: its name and its DbMark. */
   connections: readonly ConnectionConfig[];
-  /** The panel's width in px; the popover is 360 px or this when smaller. */
+  /** The panel's width in px; the popover is 360 px or this when smaller (or the room left of the button, when measured). */
   width?: number;
   onOpen(id: string): void;
   /** The Core's row once the title is kept, or the refusal note. */
@@ -175,6 +175,14 @@ export default function ThreadHistory({
   const [focusId, setFocusId] = useState<string | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const root = useRef<HTMLDivElement>(null);
+  /** The px from the panel's left edge to the button's right edge, less a gutter: buttons right of this one take the rest. */
+  const [room, setRoom] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const pane = root.current?.closest<HTMLElement>("[data-pane]")?.getBoundingClientRect();
+    const at = root.current?.getBoundingClientRect();
+    setRoom(pane && at && pane.width > 0 ? Math.floor(at.right - pane.left) - 8 : null);
+  }, [open, width]);
   const button = useRef<HTMLButtonElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -614,7 +622,10 @@ export default function ThreadHistory({
           className="menu menu-end history-menu"
           role="dialog"
           aria-label="Chat history"
-          style={{ ...(width !== undefined ? { width: Math.min(360, width) } : null), animationDuration: `${motionMs("menu")}ms` }}
+          style={{
+            ...(room !== null ? { width: Math.min(360, room), minWidth: 0 } : width !== undefined ? { width: Math.min(360, width) } : null),
+            animationDuration: `${motionMs("menu")}ms`,
+          }}
         >
           <input
             ref={field}

@@ -810,7 +810,8 @@ test("the_landing_glide_fits_the_frame_after_it_grows", async () => {
   expect(fit).toHaveBeenCalledTimes(1);
   const landed = boundsOf(fit);
   const after = frameBoxOf("Refund");
-  expect(after.y + after.h).toBeGreaterThan(before.y + before.h);
+  // The new state goes one rank from the state it links to: the frame grows that way, across or down.
+  expect(after.x + after.w > before.x + before.w || after.y + after.h > before.y + before.h).toBe(true);
   expect(covers(landed, after)).toBe(true);
   expect(holds(landed, nodeBox(inFrameId("Refund", "Refunded")))).toBe(true);
   expect(fit.mock.calls[0][1]).toMatchObject({ duration: 240 });

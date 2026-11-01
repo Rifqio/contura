@@ -186,7 +186,8 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
             className="sends-fold"
             aria-expanded={open}
             aria-controls={open && preview ? listId : undefined}
-            title={open ? "Hide what this Ask sends" : "Show what this Ask sends"}
+            // The diagram tab's side panel draws no hover text; the button's name says the same.
+            title={diagram ? undefined : open ? "Hide what this Ask sends" : "Show what this Ask sends"}
             onClick={() => setOpen(!open)}
           >
             <Icon name={open ? "chevronDown" : "chevronRight"} size={14} />

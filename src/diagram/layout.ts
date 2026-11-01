@@ -1,6 +1,8 @@
 // Diagram positions: the layout file helpers and the placement of new nodes with dagre.
 // `layoutMissing` runs inside the language worker (ruling D14); callers without a client call it in-process.
 
+import { type Box, placeNext } from "../flow/addNext";
+
 export type Positions = Record<string, { x: number; y: number }>;
 export type Viewport = { x: number; y: number; zoom: number };
 export type LayoutFile = { version: 1; nodes: Positions; viewport?: Viewport };
@@ -95,10 +97,40 @@ export async function layoutMissing(req: LayoutRequest): Promise<Positions> {
   const out = Object.create(null) as Positions;
   for (const k of Object.keys(req.existing)) out[k] = req.existing[k];
   const placed = Object.values(req.existing);
-  const offsetY = placed.length ? Math.max(...placed.map((p) => p.y)) + BELOW_PLACED : 0;
   const size = new Map(req.nodes.map((n) => [n.id, n]));
+  const centre = (id: string) => g.node(key.get(id)!);
+  // Every box on the canvas so far: a new node is placed clear of all of them.
+  const boxOf = (id: string): Box => ({ ...out[id], w: size.get(id)?.w ?? 0, h: size.get(id)?.h ?? 0 });
+  const boxes: Box[] = Object.keys(out).map(boxOf);
+  const own = (id: string) => Object.prototype.hasOwnProperty.call(out, id);
+  // A new node linked to a placed one goes one rank from it, on the side dagre ranks it (owner's report, 1 Nov 2026:
+  // a table the assistant added landed hundreds of px away from the table it relates to). Nodes placed this way
+  // anchor the next ones, so a new chain grows from the placed node.
+  const left = new Set(missing.map((n) => n.id));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const n of missing) {
+      if (!left.has(n.id)) continue;
+      const link = req.edges.find((e) => (e.from === n.id && own(e.to)) || (e.to === n.id && own(e.from)));
+      if (!link) continue;
+      const anchor = link.from === n.id ? link.to : link.from;
+      const lr = req.rankdir === "LR";
+      // An anchor known only by its saved place (not in this request) has no rank: the new node follows it.
+      const a = key.has(anchor) ? centre(anchor) : null;
+      const after = !a || (lr ? centre(n.id).x >= a.x : centre(n.id).y >= a.y);
+      const at = placeNext({ src: boxOf(anchor), dir: lr ? (after ? "r" : "l") : after ? "b" : "t", size: n, gap: RANK_SEP, boxes });
+      if (!at) continue;
+      out[n.id] = { x: at.x, y: at.y };
+      boxes.push(boxOf(n.id));
+      left.delete(n.id);
+      grew = true;
+    }
+  }
+  // The rest keep dagre's arrangement, below the placed nodes.
+  const offsetY = placed.length ? Math.max(...placed.map((p) => p.y)) + BELOW_PLACED : 0;
   for (const n of missing) {
-    const d = g.node(key.get(n.id)!);
+    if (!left.has(n.id)) continue;
+    const d = centre(n.id);
     out[n.id] = { x: Math.round(d.x - n.w / 2), y: Math.round(d.y - n.h / 2 + offsetY) };
   }
 

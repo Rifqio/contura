@@ -965,6 +965,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
                 header={header}
                 onToggle={() => {}}
                 withTip={false}
+                foldable
               />
               <div className="flow-slash-anchor">
                 {refs && (

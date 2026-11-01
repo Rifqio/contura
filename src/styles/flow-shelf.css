@@ -101,11 +101,28 @@
 .flow-shelf.is-new .flow-shelf-pick {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--spacing-md);
+  grid-template-rows: auto minmax(0, 1fr);
+  column-gap: var(--spacing-md);
+}
+/* Three children (title, list, templates): the title and its list share the left column. */
+.flow-shelf.is-new .flow-shelf-title {
+  grid-area: 1 / 1;
+}
+.flow-shelf.is-new .flow-shelf-pick > .flow-shelf-list {
+  grid-area: 2 / 1;
+}
+.flow-shelf.is-new .flow-shelf-pick > .flow-shelf-templates {
+  grid-area: 1 / 2 / 3 / 3;
 }
 @media (max-width: 720px) {
   .flow-shelf.is-new .flow-shelf-pick {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+  }
+  .flow-shelf.is-new .flow-shelf-title,
+  .flow-shelf.is-new .flow-shelf-pick > .flow-shelf-list,
+  .flow-shelf.is-new .flow-shelf-pick > .flow-shelf-templates {
+    grid-area: auto;
   }
 }
 .dialog.new-diagram-catalog {
@@ -216,6 +233,8 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
+  /* A card stretched by a taller neighbour must not show a third, half-cut line. */
+  align-self: start;
 }
 
 .flow-shelf-rows [role="group"] + [role="group"] {

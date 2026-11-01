@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { aiDiagramPreview } from "../../api/client";
 import { textStore } from "../../assistant/answerStream";
+import { SENDS_OPEN_KEY } from "../../assistant/sendsFold";
 import type { DiagramAskRequest, Preview } from "../../api/types";
 import { callsTo, routeInvoke } from "../../test/invoke";
 import { GROQ } from "../../test/settingsRoutes";
@@ -33,6 +34,8 @@ let previewError: unknown = null;
 let noOutline = false;
 
 beforeEach(() => {
+  // The Sends list folds; these tests read its rows, so it opens as a remembered choice would open it.
+  localStorage.setItem(SENDS_OPEN_KEY, "1");
   previewError = null;
   noOutline = false;
   routeInvoke({

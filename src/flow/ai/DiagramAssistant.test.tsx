@@ -20,6 +20,7 @@ import FlowTab from "../FlowTab";
 import { flowEntry } from "../flowRegistry";
 import type { FlowDocApi } from "../useFlowDoc";
 import { DIAGRAM_CHATS, threadsCleared } from "../../assistant/threadsCleared";
+import { SENDS_OPEN_KEY } from "../../assistant/sendsFold";
 import { type BoardAsk, THREAD_LIMIT } from "./useBoardAsk";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -62,6 +63,8 @@ beforeAll(() => {
 });
 beforeEach(() => {
   localStorage.clear();
+  // The Sends list folds; these tests read its rows, so it opens as a remembered choice would open it.
+  localStorage.setItem(SENDS_OPEN_KEY, "1");
   vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("reduce"), media: q, addEventListener() {}, removeEventListener() {} }));
 });
 afterEach(() => {
@@ -1338,6 +1341,23 @@ test("diagram_sends_rows_locked_on", async () => {
   await waitFor(async () => expect(await rows()).toEqual(["Question", "checkout.flow", "Selection, 3 shapes"]));
   const panel = s.container.querySelector('section[aria-label="Side panel"]') as HTMLElement;
   expect(panel.querySelectorAll("[title]")).toHaveLength(0);
+});
+
+test("diagram_sends_list_folds_and_opens", async () => {
+  localStorage.setItem(SENDS_OPEN_KEY, "0");
+  const s = setup();
+  await drawn(s);
+  fireEvent.click(assistantTab());
+  fireEvent.change(box(), { target: { value: "Add a fraud check" } });
+  await waitFor(() => expect(previews().some((r) => r.question === "Add a fraud check")).toBe(true));
+  // Folded, the line keeps its size and the rows stay out of the way of the conversation.
+  const fold = within(sendsBox()).getByRole("button", { name: "Sends" });
+  expect(fold.getAttribute("aria-expanded")).toBe("false");
+  expect(within(sendsBox()).queryAllByRole("listitem")).toHaveLength(0);
+  fireEvent.click(fold);
+  await waitFor(() => expect(within(sendsBox()).getAllByRole("listitem").length).toBeGreaterThan(1));
+  fireEvent.click(fold);
+  expect(within(sendsBox()).queryAllByRole("listitem")).toHaveLength(0);
 });
 
 test("show_exactly_is_the_turn", async () => {

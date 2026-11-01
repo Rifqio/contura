@@ -1203,10 +1203,13 @@
   line-height: 19px;
 }
 .flow-assist .answer-p {
+  margin: 0;
+}
+/* Only a line that starts with an icon lays out as a row; answer prose stays one flowing paragraph. */
+.flow-landed .answer-p {
   display: flex;
   gap: 6px;
   align-items: baseline;
-  margin: 0;
 }
 /* A name in an answer that is on the canvas: code that acts as a link (GitHub's and Cursor's code references). */
 .flow-assist .answer-part {

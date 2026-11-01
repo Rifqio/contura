@@ -535,3 +535,36 @@ test("the_popover_opens_without_motion_under_reduced_motion", async () => {
     setReducedMotionPref(false);
   }
 });
+
+test("popover_fits_inside_the_panel_when_buttons_sit_right_of_it", async () => {
+  // The Ask panel spans x 100..400; the close button sits right of the history button, whose right edge is at 360.
+  const rect = (left: number, right: number) =>
+    ({ left, right, width: right - left, top: 0, bottom: 32, height: 32, x: left, y: 0, toJSON: () => ({}) }) as DOMRect;
+  const pane = document.createElement("aside");
+  pane.setAttribute("data-pane", "");
+  document.body.appendChild(pane);
+  pane.getBoundingClientRect = () => rect(100, 400);
+  const user = userEvent.setup();
+  render(
+    <ThreadHistory
+      place="ungrouped"
+      placeName="Ungrouped"
+      threads={[summary("a", "Older chat", 3_600_000)]}
+      currentId={null}
+      busy={false}
+      connections={[]}
+      width={300}
+      onOpen={vi.fn()}
+      onRename={vi.fn()}
+      onDelete={vi.fn()}
+      onClearAll={vi.fn()}
+    />,
+    { container: pane.appendChild(document.createElement("div")) },
+  );
+  document.querySelector<HTMLElement>(".menu-root")!.getBoundingClientRect = () => rect(332, 360);
+  await open(user);
+  const pop = screen.getByRole("dialog", { name: "Chat history" });
+  // 260 px from the panel's left edge to the button's right edge, less an 8 px gutter.
+  expect(pop.style.width).toBe("252px");
+  pane.remove();
+});
